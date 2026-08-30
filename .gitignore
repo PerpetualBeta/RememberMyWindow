@@ -1,0 +1,42 @@
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Xcode build artifacts
+build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.moved-aside
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Compiled app bundle and disk image
+*.app/
+*.dmg
+*.ipa
+*.dSYM/
+
+# Archives and packages
+*.zip
+*.tar.gz
+
+# Temporary and scratch files
+*.orig
+*.log
+*~
+
+# Old clone subfolder (to be deleted)
+RememberMyWindowGitClone/
+
+# Test files folder (local only)
+Test Files/
