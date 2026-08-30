@@ -1,11 +1,14 @@
+//this file is in charge of the window manager plus the live records of the windows 
 import AppKit
+import Carbon
 import Combine
 import Foundation
 import CoreLocation
 import ServiceManagement
+import UserNotifications
 
 @MainActor
-final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate {
+final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate, UNUserNotificationCenterDelegate {
 
     static let shared = WindowManager()
 
@@ -20,8 +23,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     @Published var statusMessage: String = "Ready"
     @Published var selectedSnapshotKey: String? = nil
-    /// Live-updating window list (never persisted). Updated by polling every 5 s.
+    /// The app selected in the main window from the most recently opened menu bar list.
+    @Published var selectedAppBundleID: String? = nil
+    /// Live-updating window list (never persisted). Updated only after a window event,
+    /// or by the legacy poller when it detects a change.
     @Published private(set) var liveRecords: [WindowRecord] = []
+    @Published var hasAccessibilityPermission: Bool = AXIsProcessTrusted()
     @Published var launchAtLogin: Bool = false {
         didSet {
             if launchAtLogin != (ServiceManagement.SMAppService.mainApp.status == .enabled) {
@@ -34,6 +41,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     static let liveKey = "__live__"
 
     // MARK: - Private
+    private var permissionCheckTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     private var windowObservers: [AnyObject] = []
     private var debounceTask: Task<Void, Never>?
@@ -44,6 +52,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var flushTask: Task<Void, Never>?
     private var trackingTask: Task<Void, Never>?
     private var lastKnownWindows: [WindowID: (frame: CGRect, id: UUID)] = [:]
+    /// AX observers for event-driven window tracking. Keyed by PID.
+    /// Each entry holds the AXObserver and its run-loop source so we can tear it down cleanly.
+    private var axObservers: [pid_t: (observer: AXObserver, source: CFRunLoopSource)] = [:]
+    private var axEventDebounceTask: Task<Void, Never>?
+    /// Coalesces noisy AX notifications. Some apps emit move/resize notifications continuously
+    /// even when their window is not changing, so never turn every notification into a full scan.
+    private var isAXFlushScheduled = false
+    private var lastAXCaptureDate: Date?
+    private var axIdleCaptureInterval: TimeInterval = 2
     /// Persists AX window info across captures. When an app loses AX visibility (not frontmost,
     /// or in its own full-screen Space), AX returns virtual-space coordinates that are useless.
     /// We cache the last-known accurate frames and reuse them in those cases.
@@ -51,6 +68,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var lastCGWindowsByPID: [Int32: [CGWindowBriefInfo]] = [:]
     private let locationManager = CLLocationManager()
     @Published private(set) var currentLocation: CLLocation? = nil
+    @Published var locationAuthorizationStatus: CLAuthorizationStatus = .notDetermined
     private var pendingSaveName: String? = nil
     private var pendingSaveUpdate = false
     private var pendingCapturedWindows: [WindowRecord]? = nil
@@ -61,6 +79,30 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// Tracks window count across consecutive captures to detect sudden anomalous drops.
     private var lastWindowCount: Int = 0
 
+    // MARK: - Screen Lock Tracking
+    private var _isScreenLockedState: Bool = false
+
+    /// Returns true if the macOS user session or screen is currently locked.
+    var isScreenLocked: Bool {
+        if let dict = CGSessionCopyCurrentDictionary() as? [String: Any] {
+            if (dict["CGSSessionScreenIsLocked"] as? Bool) == true ||
+               (dict["CGSSessionScreenIsLocked"] as? Int) == 1 ||
+               (dict["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue == true {
+                return true
+            }
+        }
+        return _isScreenLockedState
+    }
+
+    struct PendingUnlockRestoreAction {
+        let snapshot: LayoutSnapshot
+        let restoredCount: Int
+        let totalCount: Int
+        let connectedDisplayNames: [String]
+        let shouldSendShortcut: Bool
+    }
+    private var pendingUnlockAction: PendingUnlockRestoreAction?
+
     override private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent("RememberMyWindows", isDirectory: true)
@@ -70,10 +112,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        locationAuthorizationStatus = locationManager.authorizationStatus
         
         launchAtLogin = ServiceManagement.SMAppService.mainApp.status == .enabled
+        UNUserNotificationCenter.current().delegate = self
         
         load()
+        startPermissionMonitoring()
     }
 
     // MARK: - Public API
@@ -90,6 +135,44 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             object: nil
         )
 
+        // Observe screen lock and unlock state
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(screenLockedReceived),
+            name: NSNotification.Name("com.apple.screenIsLocked"),
+            object: nil
+        )
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(screenUnlockedReceived),
+            name: NSNotification.Name("com.apple.screenIsUnlocked"),
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(sessionDidResignActive),
+            name: NSWorkspace.sessionDidResignActiveNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(sessionDidBecomeActive),
+            name: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(screensDidSleep),
+            name: NSWorkspace.screensDidSleepNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(screensDidWake),
+            name: NSWorkspace.screensDidWakeNotification,
+            object: nil
+        )
+
         // Location updates removed per user request
 
         // Observe ALL existing and new windows via accessibility / polling
@@ -103,6 +186,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             object: nil
         )
 
+        // Watch for apps terminating so we can remove their AX observers
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(appTerminated(_:)),
+            name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil
+        )
+
         // Track which app is frontmost — critical for diagnosing AX cache invalidations
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
@@ -111,19 +202,48 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             object: nil
         )
 
-        startPolling()
+        if store.usePollingMode {
+            startPolling()
+        } else {
+            startAXObservers()
+        }
 
-        log("Monitoring started", level: .necessary, type: .system)
+        log("Monitoring started (\(store.usePollingMode ? "polling" : "event-driven") mode)", level: .necessary, type: .system)
     }
 
     func stopTracking() {
         isTracking = false
         trackingTask?.cancel()
+        axEventDebounceTask?.cancel()
+        isAXFlushScheduled = false
+        lastAXCaptureDate = nil
+        axIdleCaptureInterval = 2
+        stopAllAXObservers()
         NotificationCenter.default.removeObserver(self)
+        DistributedNotificationCenter.default().removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         windowObservers.forEach { NotificationCenter.default.removeObserver($0) }
         windowObservers.removeAll()
         log("Monitoring stopped", level: .necessary, type: .system)
+    }
+
+    /// Called when the user toggles polling mode in Settings — restarts tracking with the new strategy.
+    func restartTracking() {
+        guard isTracking else { return }
+        // Tear down only the capture strategy, leaving workspace observers intact
+        trackingTask?.cancel()
+        axEventDebounceTask?.cancel()
+        isAXFlushScheduled = false
+        lastAXCaptureDate = nil
+        axIdleCaptureInterval = 2
+        stopAllAXObservers()
+        if store.usePollingMode {
+            startPolling()
+            log("Switched to polling mode", level: .necessary, type: .system)
+        } else {
+            startAXObservers()
+            log("Switched to event-driven mode", level: .necessary, type: .system)
+        }
     }
 
     /// True if saving right now would update an existing session rather than creating a new one.
@@ -172,10 +292,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
     }
 
-    /// Manually save current window positions for this screen config.
-    /// If a session already exists for the current screen configuration it is updated
-    /// in-place and the diff (added / removed windows) is surfaced in the activity log.
     func saveNow(named snapshotName: String? = nil) {
+        guard store.saveLocationEnabled else {
+            performSave(named: snapshotName)
+            return
+        }
+
         let status = locationManager.authorizationStatus
         if status == .notDetermined {
             pendingSaveName = snapshotName
@@ -187,6 +309,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
         
         performSave(named: snapshotName)
+    }
+
+    func requestLocationPermission() {
+        isWaitingForLocationPermission = true
+        locationManager.requestWhenInUseAuthorization()
     }
 
     private func performSave(named snapshotName: String?) {
@@ -206,7 +333,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         
         // Ensure we have latest location if possible
         let status = locationManager.authorizationStatus
-        let isAuthorized = status != .notDetermined && status != .denied && status != .restricted
+        let isAuthorized = store.saveLocationEnabled && status != .notDetermined && status != .denied && status != .restricted
         
         if isAuthorized && !isWaitingForLocationUpdate {
             // If location is nil OR older than 60 seconds, request a fresh one for manual save
@@ -242,17 +369,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         if let (existingKey, existingSnapshot) = existingEntry {
             // ── UPDATE existing session (Exact match) ───────────────────────────
-            let oldIDs = Set(existingSnapshot.records.map { $0.windowID })
-            let addedRecords = filteredWindows.filter { !oldIDs.contains($0.windowID) }
-            
-            var mergedRecords = existingSnapshot.records
-            for newRecord in filteredWindows {
-                if let index = mergedRecords.firstIndex(where: { $0.windowID == newRecord.windowID }) {
-                    mergedRecords[index] = newRecord
-                } else {
-                    mergedRecords.append(newRecord)
-                }
+            let runningBundleIDs = Set(NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular || $0.activationPolicy == .accessory }
+                .compactMap { $0.bundleIdentifier ?? $0.localizedName })
+
+            // Keep old records only for apps that are NOT currently running
+            var mergedRecords = existingSnapshot.records.filter { record in
+                let appID = record.windowID.appBundleID
+                return !runningBundleIDs.contains(appID)
             }
+            
+            // Append all currently captured windows
+            mergedRecords.append(contentsOf: filteredWindows)
 
             var updated = existingSnapshot
             updated.records  = mergedRecords
@@ -276,15 +404,31 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
 
             // Build human-readable diff details
+            let oldIDsForRunningApps = Set(existingSnapshot.records
+                .filter { runningBundleIDs.contains($0.windowID.appBundleID) }
+                .map { $0.windowID })
+            let newIDs = Set(filteredWindows.map { $0.windowID })
+            
+            let addedRecords = filteredWindows.filter { !oldIDsForRunningApps.contains($0.windowID) }
+            let removedRecords = existingSnapshot.records.filter { 
+                runningBundleIDs.contains($0.windowID.appBundleID) && !newIDs.contains($0.windowID) 
+            }
+
             let addedNames = addedRecords.map { $0.windowID.displayName }
+            let removedNames = removedRecords.map { $0.windowID.displayName }
             var diffLines: [String] = []
             for n in addedNames { diffLines.append("➕ \(n)") }
+            for n in removedNames { diffLines.append("➖ \(n)") }
 
             let summary: String
-            if addedNames.isEmpty {
+            if addedNames.isEmpty && removedNames.isEmpty {
                 summary = "Positions updated"
             } else {
-                summary = "\(addedNames.count) added, positions updated"
+                var parts: [String] = []
+                if !addedNames.isEmpty { parts.append("\(addedNames.count) added") }
+                if !removedNames.isEmpty { parts.append("\(removedNames.count) removed") }
+                parts.append("positions updated")
+                summary = parts.joined(separator: ", ")
             }
 
             log("Session updated: '\(updated.name)' — \(summary)", level: .moderate,
@@ -336,7 +480,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     /// Restore saved layout for the current screen config.
     /// Prefers the user-marked default; falls back to the most recent saved session.
-    func restoreNow(animated: Bool? = nil) {
+    func restoreNow(animated: Bool? = nil, triggerSubtitle: String? = nil) {
         let fp = ScreenFingerprint.current()
         let candidate: LayoutSnapshot?
         if let defaultID = store.defaultSnapshotIDs[fp.key],
@@ -353,7 +497,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             return
         }
         let anim = animated ?? store.restoreAnimated
-        restore(snapshot: snapshot, animated: anim)
+        restore(snapshot: snapshot, animated: anim, triggerSubtitle: triggerSubtitle)
     }
 
     /// Checks if a snapshot can be restored based on current screen configuration.
@@ -396,6 +540,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         restore(snapshot: snapshot, animated: anim)
     }
 
+    func restore(snapshot: LayoutSnapshot, animated: Bool? = nil, specificAppBundleID: String? = nil, isAppLaunch: Bool = false, showNotification: Bool = true, skipCommandSend: Bool = false, triggerSubtitle: String? = nil, completion: (@MainActor () -> Void)? = nil) {
+        if !canRestore(snapshot: snapshot) {
+            log("Cannot restore: required external screens missing", level: .moderate, type: .system)
+            statusMessage = "Restore failed: External screen not detected"
+            return
+        }
+        let anim = animated ?? store.restoreAnimated
+        restore(snapshot: snapshot, animated: anim, specificAppBundleID: specificAppBundleID, isAppLaunch: isAppLaunch, showNotification: showNotification, skipCommandSend: skipCommandSend, triggerSubtitle: triggerSubtitle, completion: completion)
+    }
+
     @objc private func appFocusChanged(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let name = app.localizedName ?? "Unknown App"
@@ -435,9 +589,17 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     /// Sets the preferred app to bring to front for a specific layout.
     func setForegroundApp(key: String, bundleID: String) {
-        store.snapshots[key]?.foregroundBundleID = bundleID
+        guard var snap = store.snapshots[key] else { return }
+        // Toggle: if already set to this app, clear it; otherwise set it
+        if snap.foregroundBundleID == bundleID {
+            snap.foregroundBundleID = nil
+            log("Cleared foreground app for session", level: .moderate, type: .system)
+        } else {
+            snap.foregroundBundleID = bundleID
+            log("Set foreground app to '\(bundleID)' for session", level: .moderate, type: .system)
+        }
+        store.snapshots[key] = snap
         persist()
-        log("Set foreground app to '\(bundleID)' for session", level: .moderate, type: .system)
     }
 
     func deleteSnapshot(key: String) {
@@ -458,10 +620,125 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     func removeAppFromSnapshot(key: String, windowID: WindowID) {
         if var snap = store.snapshots[key] {
             snap.records.removeAll { $0.windowID == windowID }
+            // Clean up excluded app set if this was the last window of that app in the snapshot
+            let hasRemaining = snap.records.contains { $0.windowID.appBundleID == windowID.appBundleID }
+            if !hasRemaining {
+                snap.commandExcludedBundleIDs.remove(windowID.appBundleID)
+            }
             store.snapshots[key] = snap
             persist()
             log("Removed '\(windowID.displayName)' from session: \(snap.name)", level: .moderate, type: .system)
         }
+    }
+
+    /// Captures the live window positions of the specified application and updates (or adds) them in the active session layout.
+    func updateOrAddAppInActiveSnapshot(bundleID: String) {
+        let fp = ScreenFingerprint.current()
+        let applicableID = currentApplicableSnapshot?.id
+        let activePair = store.snapshots.first(where: { $0.value.id == applicableID })
+            ?? (selectedSnapshotKey != nil ? store.snapshots.first(where: { $0.key == selectedSnapshotKey! }) : nil)
+            ?? store.snapshots.first(where: { $0.value.screenKey == fp.key && !$0.value.isAutoSave })
+            ?? store.snapshots.first
+        
+        guard let (key, snapToUpdate) = activePair else { return }
+        var snap = snapToUpdate
+        
+        let appRecords = captureWindowsForApp(bundleID: bundleID, fp: fp)
+        let appName = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID })?.localizedName ?? bundleID
+
+        if appRecords.isEmpty {
+            log("Could not add '\(appName)': No open window detected", level: .necessary, type: .system)
+            deliverNotification(type: .snapshotUpdate, title: "Cannot Add \(appName)", subtitle: "No open window detected", isCompact: true, bundleID: bundleID)
+            return
+        }
+
+        let wasAlreadyPresent = snap.records.contains { $0.windowID.appBundleID == bundleID }
+        
+        // Overwrite existing records for this app or append new ones
+        snap.records.removeAll { $0.windowID.appBundleID == bundleID }
+        snap.records.append(contentsOf: appRecords)
+        snap.updatedAt = Date()
+        
+        store.snapshots[key] = snap
+        persist()
+        objectWillChange.send()
+        
+        let actionName = wasAlreadyPresent ? "Updated" : "Added"
+        log("\(actionName) '\(appName)' in active layout session: \(snap.displayName)", level: .necessary, type: .system)
+        
+        deliverNotification(type: .snapshotUpdate, title: "\(appName) \(actionName)", subtitle: snap.displayName, isCompact: true, bundleID: bundleID)
+    }
+
+    /// Captures live window records for a specific app, with direct CGWindow fallback if AX matching drops it.
+    private func captureWindowsForApp(bundleID: String, fp: ScreenFingerprint) -> [WindowRecord] {
+        let allRecords = captureAllWindows(for: fp, silent: true)
+        let appRecords = allRecords.filter { $0.windowID.appBundleID == bundleID }
+        if !appRecords.isEmpty {
+            return appRecords
+        }
+        
+        // Direct Fallback: capture windows for bundleID directly from CGWindowList if AX filtering dropped them
+        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }),
+              let windowList = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        
+        let targetPID = app.processIdentifier
+        let primaryScreenHeight = NSScreen.screens.first?.frame.height ?? 0
+        let screens = NSScreen.screens
+        var fallbackRecords: [WindowRecord] = []
+        var windowIndex = 0
+        
+        for entry in windowList {
+            guard let pid = entry[kCGWindowOwnerPID as String] as? Int32, pid == targetPID else { continue }
+            guard let bounds = entry[kCGWindowBounds as String] as? [String: Any],
+                  let x = bounds["X"] as? CGFloat,
+                  let y = bounds["Y"] as? CGFloat,
+                  let w = bounds["Width"] as? CGFloat,
+                  let h = bounds["Height"] as? CGFloat,
+                  let windowLayer = entry[kCGWindowLayer as String] as? Int,
+                  windowLayer == 0, w > 50, h > 50 else { continue }
+            
+            let alpha = entry[kCGWindowAlpha as String] as? Double ?? 1.0
+            guard alpha > 0.01 else { continue }
+            
+            let title = entry[kCGWindowName as String] as? String ?? ""
+            let appName = app.localizedName ?? bundleID
+            let appKitFrame = CGRect(x: x, y: primaryScreenHeight - y - h, width: w, height: h)
+            
+            let screen = screens.max(by: { s1, s2 in
+                s1.frame.intersection(appKitFrame).area < s2.frame.intersection(appKitFrame).area
+            })
+            
+            let wid = WindowID(appBundleID: bundleID, appName: appName, windowTitle: title, appWindowIndex: windowIndex)
+            let record = WindowRecord(
+                id: UUID(),
+                windowID: wid,
+                globalFrame: appKitFrame,
+                screenKey: fp.key,
+                screenFrame: screen?.frame,
+                screenName: screen?.localizedName ?? "Unknown Screen",
+                savedAt: Date(),
+                zIndex: windowIndex
+            )
+            fallbackRecords.append(record)
+            windowIndex += 1
+        }
+        
+        return fallbackRecords
+    }
+
+    func toggleCommandExclusion(key: String, bundleID: String) {
+        guard var snap = store.snapshots[key] else { return }
+        if snap.commandExcludedBundleIDs.contains(bundleID) {
+            snap.commandExcludedBundleIDs.remove(bundleID)
+            log("App '\(bundleID)' is now EXCLUDED from command triggers", level: .moderate, type: .system)
+        } else {
+            snap.commandExcludedBundleIDs.insert(bundleID)
+            log("App '\(bundleID)' is now INCLUDED in command triggers", level: .moderate, type: .system)
+        }
+        store.snapshots[key] = snap
+        persist()
     }
 
     func renameSnapshot(key: String, newName: String) {
@@ -506,26 +783,46 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     private func observeRunningApps() {
         for app in NSWorkspace.shared.runningApplications
-        where app.activationPolicy == .regular {
+        where app.activationPolicy == .regular || app.activationPolicy == .accessory {
             observeApp(app)
         }
     }
 
     @objc private func appLaunched(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-        // Brief delay so the app's windows appear
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+        // Configurable delay so the app's windows appear
+        let delay = store.singleAppRestoreDelay
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self = self else { return }
             self.observeApp(app)
+            // In event-driven mode, attach an AX observer so we detect its future window movements
+            if !self.store.usePollingMode {
+                self.attachAXObserver(to: app)
+                // Trigger one immediate capture to populate the live layout for the new app
+                self.scheduleAXEventFlush()
+            }
             
             if self.store.autoRestoreOnAppOpen {
                 if let snapshot = self.currentApplicableSnapshot {
                     let targetID = app.bundleIdentifier ?? app.localizedName
                     if let targetID = targetID {
-                        self.restore(snapshot: snapshot, animated: self.store.restoreAnimated, specificAppBundleID: targetID, showNotification: true)
+                        self.restore(snapshot: snapshot, animated: self.store.restoreAnimated, specificAppBundleID: targetID, isAppLaunch: true, showNotification: true)
                     }
                 }
             }
+        }
+    }
+
+    @objc private func appTerminated(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        let pid = app.processIdentifier
+        detachAXObserver(for: pid)
+        // Invalidate AX caches for this PID so stale data doesn't linger
+        cachedAXWindowsByPID.removeValue(forKey: pid)
+        lastCGWindowsByPID.removeValue(forKey: pid)
+        // Schedule a flush so the live layout drops the terminated app's windows
+        if !store.usePollingMode {
+            scheduleAXEventFlush()
         }
     }
 
@@ -608,13 +905,228 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
         lastWindowCount = newCount
 
+        // AX can repeatedly notify us about an app that has not actually changed. Publishing
+        // the same layout re-renders the full SwiftUI preview (and its springs) every time,
+        // preventing App Nap and causing substantial idle energy use.
+        guard liveLayoutChanged(from: liveRecords, to: currentWindows) else {
+            // A noisy AX source becomes almost free at idle: 2, 4, 8, 16, then at most
+            // one validation scan every 30 seconds.
+            axIdleCaptureInterval = min(axIdleCaptureInterval * 2, 30)
+            return
+        }
+        axIdleCaptureInterval = 2
         liveRecords = currentWindows
         log("Live layout updated (\(newCount) windows)", level: .verbose, type: .autoSave)
+    }
+
+    /// Compares the display-relevant parts of two captures while tolerating the small coordinate
+    /// variations returned by the accessibility APIs between otherwise identical snapshots.
+    private func liveLayoutChanged(from previous: [WindowRecord], to current: [WindowRecord]) -> Bool {
+        guard previous.count == current.count else { return true }
+
+        let previousByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.windowID, $0) })
+        for record in current {
+            guard let old = previousByID[record.windowID],
+                  old.screenKey == record.screenKey,
+                  old.screenName == record.screenName,
+                  old.zIndex == record.zIndex,
+                  old.isFullScreenMode == record.isFullScreenMode,
+                  old.isNativeFullScreen == record.isNativeFullScreen,
+                  framesMatch(old.globalFrame, record.globalFrame) else {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func framesMatch(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat = 2) -> Bool {
+        abs(lhs.origin.x - rhs.origin.x) <= tolerance &&
+        abs(lhs.origin.y - rhs.origin.y) <= tolerance &&
+        abs(lhs.width - rhs.width) <= tolerance &&
+        abs(lhs.height - rhs.height) <= tolerance
     }
 
 
     func clearEvents() {
         recentEvents.removeAll()
+    }
+
+    // MARK: - Lock State Handlers
+
+    @objc private func screenLockedReceived() {
+        _isScreenLockedState = true
+        log("🔒 Screen is locked", level: .verbose, type: .system)
+    }
+
+    @objc private func sessionDidResignActive() {
+        _isScreenLockedState = true
+    }
+
+    @objc private func screensDidSleep() {
+        _isScreenLockedState = true
+    }
+
+    @objc private func screensDidWake() {
+        if !isScreenLocked {
+            _isScreenLockedState = false
+            handleScreenUnlockedIfNeeded()
+        }
+    }
+
+    @objc private func sessionDidBecomeActive() {
+        _isScreenLockedState = false
+        handleScreenUnlockedIfNeeded()
+    }
+
+    @objc private func screenUnlockedReceived() {
+        _isScreenLockedState = false
+        log("🔓 Screen unlocked", level: .moderate, type: .system)
+        handleScreenUnlockedIfNeeded()
+    }
+
+    private func handleScreenUnlockedIfNeeded() {
+        guard let pending = pendingUnlockAction else { return }
+        pendingUnlockAction = nil
+
+        log("🔓 Mac unlocked. Executing post-unlock layout settlement for '\(pending.snapshot.name)'...", level: .moderate, type: .restore)
+
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            // Settle delay: allow WindowServer and Spaces to finish the unlock transition
+            try? await Task.sleep(nanoseconds: 400_000_000) // 400ms (0.4s)
+
+            // 1. 3-pass progressive verification & correction sweep for positions and dimensions
+            await self.verifyAndCorrectWindowFrames(for: pending.snapshot)
+
+            // 2. Bring preferred foreground app to front
+            if let targetBundleID = pending.snapshot.foregroundBundleID {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                self.bringAppToFront(bundleID: targetBundleID)
+            }
+
+            // 3. Deliver deferred Notch Notification
+            self.deliverNotification(
+                type: .fullRestore,
+                title: "Layout Restored",
+                subtitle: "\(pending.snapshot.name) · \(pending.restoredCount)/\(pending.totalCount) \(lz("windows"))"
+            )
+
+            // 4. Send Command+Shift+R shortcut if enabled
+            if pending.shouldSendShortcut {
+                self.sendCommandToFrontmostApp(targetBundleID: pending.snapshot.foregroundBundleID, snapshot: pending.snapshot)
+            }
+        }
+    }
+
+    /// Re-verifies all window positions and dimensions against a snapshot and corrects any mismatches (e.g. after screen unlock).
+    func verifyAndCorrectWindowFrames(for snapshot: LayoutSnapshot) async {
+        let runningApps = Dictionary(
+            NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) },
+            uniquingKeysWith: { _, new in new }
+        )
+        let primaryScreenH = NSScreen.screens.first?.frame.height ?? 0
+        let tolerance: CGFloat = 15.0
+
+        func isFrameClose(to target: CGRect, current: CGRect) -> Bool {
+            abs(current.origin.x - target.origin.x) <= tolerance &&
+            abs(current.origin.y - target.origin.y) <= tolerance &&
+            abs(current.size.width - target.size.width) <= tolerance &&
+            abs(current.size.height - target.size.height) <= tolerance
+        }
+
+        var resolvedTargets: [(record: WindowRecord, element: AXUIElement, targetFrame: CGRect)] = []
+        let groupedRecords = Dictionary(grouping: snapshot.records, by: { $0.windowID.appBundleID })
+
+        for (bundleID, appRecords) in groupedRecords {
+            guard let app = runningApps.values.first(where: { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID }) else {
+                continue
+            }
+            let appAX = AXUIElementCreateApplication(app.processIdentifier)
+            var windowsValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(appAX, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+                  let windowList = windowsValue as? [AXUIElement] else {
+                continue
+            }
+
+            var unclaimed = windowList
+            for rec in appRecords {
+                if rec.isNativeFullScreen || rec.isFullScreenMode { continue }
+                let target = self.calculateTargetFrame(for: rec)
+                let targetSize = rec.globalFrame.size
+                let targetAspect = targetSize.width / max(targetSize.height, 1)
+
+                var bestIdx = -1
+                var bestDiff = CGFloat.infinity
+
+                for (idx, el) in unclaimed.enumerated() {
+                    guard let frame = self.getCurrentFrame(of: el) else { continue }
+                    let elAspect = frame.width / max(frame.height, 1)
+                    let aspectDiff = abs(elAspect - targetAspect)
+                    let targetArea = targetSize.width * targetSize.height
+                    let elArea = frame.width * frame.height
+                    let areaDiff = abs(elArea - targetArea) / max(targetArea, 1)
+                    let score = aspectDiff * 2.0 + areaDiff
+                    if score < bestDiff {
+                        bestDiff = score
+                        bestIdx = idx
+                    }
+                }
+
+                if bestIdx != -1 {
+                    let element = unclaimed.remove(at: bestIdx)
+                    resolvedTargets.append((record: rec, element: element, targetFrame: target))
+                }
+            }
+        }
+
+        guard !resolvedTargets.isEmpty else { return }
+
+        // 3 progressive correction sweeps with settle intervals
+        for sweepAttempt in 1...3 {
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms settle per sweep
+            var mismatches: [(record: WindowRecord, element: AXUIElement, targetFrame: CGRect)] = []
+
+            for resolved in resolvedTargets {
+                guard let current = self.getCurrentFrame(of: resolved.element) else { continue }
+                let targetFrame = resolved.targetFrame
+                let axTargetFrame = CGRect(
+                    x: targetFrame.origin.x,
+                    y: primaryScreenH - targetFrame.origin.y - targetFrame.height,
+                    width: targetFrame.width,
+                    height: targetFrame.height
+                )
+                if !isFrameClose(to: axTargetFrame, current: current) {
+                    mismatches.append(resolved)
+                }
+            }
+
+            if mismatches.isEmpty {
+                self.log("✅ Post-unlock window frame verification verified all \(resolvedTargets.count) windows in position.", level: .verbose, type: .restore)
+                break
+            }
+
+            self.log("⚠️ Post-unlock verification sweep \(sweepAttempt)/3 found \(mismatches.count) mismatched window(s). Correcting...", level: .moderate, type: .restore)
+            for resolved in mismatches {
+                let targetFrame = resolved.targetFrame
+                let axX = targetFrame.origin.x
+                let axY = primaryScreenH - targetFrame.origin.y - targetFrame.height
+                let axW = targetFrame.width
+                let axH = targetFrame.height
+
+                var pos = CGPoint(x: axX, y: axY)
+                var sz = CGSize(width: axW, height: axH)
+
+                if let v = AXValueCreate(.cgPoint, &pos) {
+                    _ = AXUIElementSetAttributeValue(resolved.element, kAXPositionAttribute as CFString, v)
+                }
+                if let v = AXValueCreate(.cgSize, &sz) {
+                    _ = AXUIElementSetAttributeValue(resolved.element, kAXSizeAttribute as CFString, v)
+                }
+                if let v = AXValueCreate(.cgPoint, &pos) {
+                    _ = AXUIElementSetAttributeValue(resolved.element, kAXPositionAttribute as CFString, v)
+                }
+            }
+        }
     }
 
     // MARK: - Screen Change
@@ -671,14 +1183,24 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled, let self = self else { return }
 
-                // Show initial "Connected" notification
+                let isLocked = self.isScreenLocked
+                if isLocked {
+                    self.log("🔒 Screen is locked. Performing silent background restore (suppressing notch overlay and shortcuts until unlock)...", level: .necessary, type: .restore)
+                }
+
+                // Show initial "Connected" notification (or send system notification if locked)
                 let names = Array(self.pendingConnectedNames)
+                let notifTitle: String
                 if !names.isEmpty {
                     let joinedNames = names.joined(separator: " & ")
-                    self.showNotchNotification(title: "\(joinedNames) Connected", subtitle: "Restoring layout...")
+                    notifTitle = "\(joinedNames) Connected"
                 } else if hasAnyAddedScreens {
-                    self.showNotchNotification(title: "Display Connected", subtitle: "Restoring layout...")
+                    notifTitle = "Display Connected"
+                } else {
+                    notifTitle = "Display Configuration Changed"
                 }
+
+                self.deliverNotification(type: .displayChange, title: notifTitle, subtitle: "Restoring layout...")
 
                 // Start restoration
                 self.restoreNow()
@@ -689,21 +1211,186 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
     }
 
-    // MARK: - Notch Notification
-    
-    private var notchWindow: NotchNotificationWindow?
-    private func showNotchNotification(title: String, subtitle: String, isCompact: Bool = false) {
-        let showNotch = UserDefaults.standard.object(forKey: "showNotchNotification") as? Bool ?? true
-        guard showNotch else { return }
+    // MARK: - Notification Delivery (Notch & macOS System Notifications)
 
-        if let window = notchWindow, window.isVisible, window.isCompact == isCompact {
-            window.update(title: title, subtitle: subtitle)
-        } else {
-            notchWindow?.dismiss()
-            let window = NotchNotificationWindow(title: title, subtitle: subtitle, isCompact: isCompact)
-            notchWindow = window
-            window.show()
+    enum NotificationEventType {
+        case fullRestore
+        case singleRestore
+        case displayChange
+        case snapshotUpdate
+        case desktopToggle
+        case permissionWarning
+    }
+
+    private var notchWindow: NotchNotificationWindow?
+
+    func showNotchNotificationPublic(title: String, subtitle: String, isCompact: Bool = false, bundleID: String? = nil, appIcon: NSImage? = nil, triggerKey: String? = nil) {
+        deliverNotification(type: .singleRestore, title: title, subtitle: subtitle, isCompact: isCompact, bundleID: bundleID, appIcon: appIcon, triggerKey: triggerKey)
+    }
+
+    func deliverNotification(
+        type: NotificationEventType,
+        title: String,
+        subtitle: String,
+        isCompact: Bool = false,
+        bundleID: String? = nil,
+        appIcon: NSImage? = nil,
+        triggerKey: String? = nil
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            // 1. Notch Notification (suppressed while screen is locked to prevent LockScreen compositor flickering)
+            let showNotch = UserDefaults.standard.object(forKey: "showNotchNotification") as? Bool ?? true
+            if showNotch && !self.isScreenLocked {
+                var shouldShowNotch = false
+                var notchSoundEnabled = false
+                var notchSoundName = self.store.defaultNotificationSound
+                switch type {
+                case .fullRestore:
+                    shouldShowNotch = self.store.notchNotifyOnFullRestore
+                    notchSoundEnabled = self.store.notchSoundOnFullRestore
+                    notchSoundName = self.store.notchSoundNameFullRestore
+                case .singleRestore:
+                    shouldShowNotch = self.store.notchNotifyOnSingleRestore
+                    notchSoundEnabled = self.store.notchSoundOnSingleRestore
+                    notchSoundName = self.store.notchSoundNameSingleRestore
+                case .displayChange:
+                    shouldShowNotch = self.store.notchNotifyOnDisplayChange
+                    notchSoundEnabled = self.store.notchSoundOnDisplayChange
+                    notchSoundName = self.store.notchSoundNameDisplayChange
+                case .snapshotUpdate:
+                    shouldShowNotch = self.store.notchNotifyOnSnapshotUpdate
+                    notchSoundEnabled = self.store.notchSoundOnSnapshotUpdate
+                    notchSoundName = self.store.notchSoundNameSnapshotUpdate
+                case .desktopToggle:
+                    shouldShowNotch = self.store.notchNotifyOnDesktopToggle
+                    notchSoundEnabled = self.store.notchSoundOnDesktopToggle
+                    notchSoundName = self.store.notchSoundNameDesktopToggle
+                case .permissionWarning:
+                    shouldShowNotch = true
+                    notchSoundEnabled = true
+                    notchSoundName = "Hero"
+                }
+
+                if shouldShowNotch {
+                    if let window = self.notchWindow, window.isVisible, window.isCompact == isCompact {
+                        window.update(title: title, subtitle: subtitle, bundleID: bundleID, appIcon: appIcon)
+                    } else {
+                        self.notchWindow?.dismiss()
+                        let window = NotchNotificationWindow(title: title, subtitle: subtitle, isCompact: isCompact, bundleID: bundleID, appIcon: appIcon)
+                        self.notchWindow = window
+                        window.show()
+                    }
+
+                    if notchSoundEnabled {
+                        SystemSound.playSound(named: notchSoundName)
+                    }
+                }
+            }
+
+            // 2. macOS System Notification (UNUserNotificationCenter)
+            if self.store.showSystemNotification {
+                var shouldSend = false
+                var systemSoundEnabled = false
+                var systemSoundName = self.store.defaultNotificationSound
+                switch type {
+                case .fullRestore:
+                    shouldSend = self.store.systemNotifyOnFullRestore
+                    systemSoundEnabled = self.store.systemSoundOnFullRestore
+                    systemSoundName = self.store.systemSoundNameFullRestore
+                case .singleRestore:
+                    shouldSend = self.store.systemNotifyOnSingleRestore
+                    systemSoundEnabled = self.store.systemSoundOnSingleRestore
+                    systemSoundName = self.store.systemSoundNameSingleRestore
+                case .displayChange:
+                    shouldSend = self.store.systemNotifyOnDisplayChange
+                    systemSoundEnabled = self.store.systemSoundOnDisplayChange
+                    systemSoundName = self.store.systemSoundNameDisplayChange
+                case .snapshotUpdate:
+                    shouldSend = self.store.systemNotifyOnSnapshotUpdate
+                    systemSoundEnabled = self.store.systemSoundOnSnapshotUpdate
+                    systemSoundName = self.store.systemSoundNameSnapshotUpdate
+                case .desktopToggle:
+                    shouldSend = self.store.systemNotifyOnDesktopToggle
+                    systemSoundEnabled = self.store.systemSoundOnDesktopToggle
+                    systemSoundName = self.store.systemSoundNameDesktopToggle
+                case .permissionWarning:
+                    shouldSend = true
+                    systemSoundEnabled = true
+                    systemSoundName = "Hero"
+                }
+
+                if shouldSend {
+                    // Resolve quick-key trigger suffix for OS notification title
+                    let resolvedTrigger = triggerKey ?? ( (isCompact && (subtitle == "fn" || subtitle == "⇪⇪")) ? subtitle : nil )
+                    let triggerSuffix: String
+                    if let trig = resolvedTrigger, !trig.isEmpty {
+                        if trig == "fn" {
+                            triggerSuffix = " — via 🌐 Fn"
+                        } else if trig == "⇪⇪" {
+                            triggerSuffix = " — via ⇪⇪"
+                        } else {
+                            triggerSuffix = " — via \(trig)"
+                        }
+                    } else {
+                        triggerSuffix = ""
+                    }
+
+                    let osTitle = "\(title)\(triggerSuffix)"
+                    let osBody = (subtitle == "fn" || subtitle == "⇪" || subtitle == "⇪⇪") ? "" : subtitle
+
+                    self.sendSystemNotification(title: osTitle, subtitle: osBody, playSound: systemSoundEnabled, soundName: systemSoundName)
+                }
+            }
         }
+    }
+
+    private func sendSystemNotification(title: String, subtitle: String, playSound: Bool = true, soundName: String = "Stargaze") {
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        if !subtitle.isEmpty {
+            content.body = subtitle
+        }
+        content.sound = nil
+
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        center.add(request) { error in
+            if let error = error {
+                Task { @MainActor in
+                    WindowManager.shared.log("Failed to deliver system notification: \(error.localizedDescription)", level: .verbose, type: .system)
+                }
+            }
+        }
+
+        if playSound {
+            SystemSound.playSound(named: soundName)
+        }
+    }
+
+    func previewSound(named soundName: String) {
+        SystemSound.playSound(named: soundName)
+    }
+
+    func requestSystemNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            Task { @MainActor in
+                WindowManager.shared.log("macOS notification authorization: \(granted)", level: .moderate, type: .system)
+            }
+        }
+    }
+
+    // UNUserNotificationCenterDelegate
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound, .list])
     }
 
     // MARK: - Capture
@@ -740,7 +1427,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         for entry in windowList {
             guard let pid = entry[kCGWindowOwnerPID as String] as? Int32,
                   let app = runningApps[pid],
-                  app.activationPolicy == .regular else { continue }
+                  (app.activationPolicy == .regular || app.activationPolicy == .accessory) else { continue }
 
             guard let windowID = entry[kCGWindowNumber as String] as? UInt32,
                   let bounds = entry[kCGWindowBounds as String] as? [String: Any],
@@ -781,7 +1468,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         for entry in windowList {
             guard let pid = entry[kCGWindowOwnerPID as String] as? Int32,
                   let app = runningApps[pid],
-                  app.activationPolicy == .regular else { zOrder += 1; continue }
+                  (app.activationPolicy == .regular || app.activationPolicy == .accessory) else { zOrder += 1; continue }
 
             guard let bounds = entry[kCGWindowBounds as String] as? [String: Any],
                   let x = bounds["X"] as? CGFloat,
@@ -1022,7 +1709,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         staleCGPIDs.forEach { lastCGWindowsByPID.removeValue(forKey: $0) }
 
         for (pid, app) in runningApps {
-            guard app.activationPolicy == .regular else { continue }
+            guard app.activationPolicy == .regular || app.activationPolicy == .accessory else { continue }
             
             // Finder's AX tree only exposes the desktop background pseudo-window (e.g. 2560x2372),
             // not real folder windows. Including it would cause every Finder CGWindow to fail
@@ -1139,29 +1826,276 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         return result
     }
 
-    // MARK: - Permission Check
+    // MARK: - Permission Check & Auto-Recovery
 
-    /// Returns true if the app currently has Accessibility permission.
-    var hasAccessibilityPermission: Bool {
-        AXIsProcessTrusted()
+    /// Starts continuous background permission tracking to handle login race conditions and macOS TCC initialization.
+    func startPermissionMonitoring() {
+        refreshAccessibilityPermissionStatus()
+
+        permissionCheckTimer?.invalidate()
+        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAccessibilityPermissionStatus()
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAccessibilityPermissionStatus()
+            }
+        }
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAccessibilityPermissionStatus()
+            }
+        }
+    }
+
+    /// Re-evaluates AXIsProcessTrusted() and triggers auto-recovery when permissions become active.
+    func refreshAccessibilityPermissionStatus() {
+        let current = AXIsProcessTrusted()
+        if current != hasAccessibilityPermission {
+            hasAccessibilityPermission = current
+            handlePermissionTransition(to: current)
+        }
+    }
+
+    private func handlePermissionTransition(to granted: Bool) {
+        if granted {
+            log("Accessibility permission detected as ACTIVE. Initializing tracking, observers, and shortcuts.", level: .necessary, type: .system)
+            if isTracking && !store.usePollingMode {
+                startAXObservers()
+            }
+            scheduleAXEventFlush(delay: 0)
+            DesktopToggleManager.shared.start()
+            if store.quickKeyRestoreEnabled {
+                QuickKeyRestoreManager.shared.setup()
+            }
+        } else {
+            log("Accessibility permission is inactive or missing. Waiting for macOS TCC initialization...", level: .moderate, type: .system)
+        }
     }
 
     /// Prompts the user to grant Accessibility permission (shows system dialog once).
     func requestAccessibilityPermission() {
         let opts = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(opts)
+        refreshAccessibilityPermissionStatus()
+    }
+
+    /// Manually re-checks permissions (e.g. from user UI interaction).
+    func checkAccessibilityPermissionManually() {
+        refreshAccessibilityPermissionStatus()
+    }
+
+    /// Explicitly opens the macOS System Settings Privacy & Security > Accessibility pane.
+    func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Toggles a bundle ID in the custom web apps set.
+    func toggleCustomWebApp(bundleID: String) {
+        if store.customWebAppBundleIDs.contains(bundleID) {
+            store.customWebAppBundleIDs.remove(bundleID)
+        } else {
+            store.customWebAppBundleIDs.insert(bundleID)
+        }
+        persist()
+    }
+
+    /// Silently checks Finder Automation permission using AEDeterminePermissionToAutomateTarget.
+    /// Never shows a dialog — reads TCC state only.
+    var hasFinderAutomationPermission: Bool {
+        guard let finder = NSRunningApplication
+                .runningApplications(withBundleIdentifier: "com.apple.finder")
+                .first else { return false }
+        var pid = finder.processIdentifier
+        var target = AEAddressDesc()
+        let createErr = AECreateDesc(typeKernelProcessID, &pid, MemoryLayout<pid_t>.size, &target)
+        guard createErr == noErr else { return false }
+        defer { AEDisposeDesc(&target) }
+        let status = AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, false)
+        return status == noErr
+    }
+
+    /// Triggers the macOS Automation permission dialog for Finder.
+    /// Only call from a user-initiated action — this will show the system dialog.
+    func requestFinderAutomationPermission() {
+        guard let finder = NSRunningApplication
+                .runningApplications(withBundleIdentifier: "com.apple.finder")
+                .first else {
+            var error: NSDictionary?
+            _ = NSAppleScript(source: "tell application \"Finder\" to get name")?.executeAndReturnError(&error)
+            return
+        }
+        var pid = finder.processIdentifier
+        var target = AEAddressDesc()
+        let createErr = AECreateDesc(typeKernelProcessID, &pid, MemoryLayout<pid_t>.size, &target)
+        guard createErr == noErr else { return }
+        defer { AEDisposeDesc(&target) }
+        
+        let status = AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, true)
+        if status == errAEEventNotPermitted {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
+        } else {
+            var error: NSDictionary?
+            _ = NSAppleScript(source: "tell application \"Finder\" to get name")?.executeAndReturnError(&error)
+        }
+    }
+
+    /// Restores a single app's windows on a background queue. Calls `completion` on the main thread when all windows are in place.
+    func restoreSingleAppBackground(snapshot: LayoutSnapshot, bundleID: String, showNotification: Bool = true, completion: (() -> Void)? = nil) {
+        let appRecords = snapshot.records.filter { $0.windowID.appBundleID == bundleID || $0.windowID.appName == bundleID }
+        guard !appRecords.isEmpty else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            guard self.hasAccessibilityPermission else { return }
+
+            let runningApps = NSWorkspace.shared.runningApplications
+            guard let app = runningApps.first(where: { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID }) else { return }
+
+            let axApp = AXUIElementCreateApplication(app.processIdentifier)
+            var windowsRef: CFTypeRef?
+            var wins: [AXUIElement] = []
+            if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+               let foundWins = windowsRef as? [AXUIElement] {
+                wins = foundWins
+            }
+
+            guard !wins.isEmpty else { return }
+
+            let screens = NSScreen.screens
+            let primaryScreenH = screens.first?.frame.height ?? 1080
+
+            for (idx, record) in appRecords.enumerated() {
+                let win = idx < wins.count ? wins[idx] : wins.first!
+                let targetFrame = self.calculateTargetFrame(for: record)
+                let axX = targetFrame.origin.x
+                let axY = primaryScreenH - targetFrame.origin.y - targetFrame.height
+                let axW = targetFrame.width
+                let axH = targetFrame.height
+
+                if record.isNativeFullScreen || record.isFullScreenMode {
+                    var pos = CGPoint(x: axX, y: axY)
+                    if let v = AXValueCreate(.cgPoint, &pos) {
+                        _ = AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, v)
+                    }
+                    var sz = CGSize(width: axW, height: axH)
+                    if let v = AXValueCreate(.cgSize, &sz) {
+                        _ = AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, v)
+                    }
+                    if record.isNativeFullScreen {
+                        _ = AXUIElementSetAttributeValue(win, "AXFullScreen" as CFString, kCFBooleanTrue)
+                    }
+                } else {
+                    let currentFrame = self.getCurrentFrame(of: win)
+                    let currentScreen: NSScreen?
+                    if let cur = currentFrame {
+                        let curMid = CGPoint(x: cur.midX, y: primaryScreenH - cur.midY)
+                        currentScreen = screens.first { $0.frame.contains(curMid) } ?? screens.first
+                    } else {
+                        currentScreen = screens.first
+                    }
+                    
+                    let targetMid = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
+                    let targetScreen = screens.first { $0.frame.contains(targetMid) } ?? screens.first
+
+                    let currentScreenArea = (currentScreen?.frame.width ?? 1920) * (currentScreen?.frame.height ?? 1080)
+                    let targetScreenArea = (targetScreen?.frame.width ?? 1920) * (targetScreen?.frame.height ?? 1080)
+                    let isMovingToSmallerScreen = targetScreen != currentScreen && targetScreenArea < currentScreenArea
+
+                    var targetPos = CGPoint(x: axX, y: axY)
+                    var targetSize = CGSize(width: axW, height: axH)
+
+                    if isMovingToSmallerScreen {
+                        // Pre-shrink so window can enter smaller target bounds freely
+                        let maxAllowedW = min(axW, (targetScreen?.visibleFrame.width ?? axW))
+                        let maxAllowedH = min(axH, (targetScreen?.visibleFrame.height ?? axH))
+                        var preShrinkSize = CGSize(width: maxAllowedW, height: maxAllowedH)
+                        if let v = AXValueCreate(.cgSize, &preShrinkSize) {
+                            _ = AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, v)
+                        }
+                        if let v = AXValueCreate(.cgPoint, &targetPos) {
+                            _ = AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, v)
+                        }
+                        if let v = AXValueCreate(.cgSize, &targetSize) {
+                            _ = AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, v)
+                        }
+                    } else {
+                        // Move to position first, then apply size
+                        if let v = AXValueCreate(.cgPoint, &targetPos) {
+                            _ = AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, v)
+                        }
+                        if let v = AXValueCreate(.cgSize, &targetSize) {
+                            _ = AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, v)
+                        }
+                    }
+
+                    // Settle & verification loop (up to 3 passes) to guarantee position + size
+                    let axTargetFrame = CGRect(x: axX, y: axY, width: axW, height: axH)
+                    for _ in 1...3 {
+                        usleep(40_000) // 40ms settle
+                        if let current = self.getCurrentFrame(of: win) {
+                            if abs(current.origin.x - axTargetFrame.origin.x) <= 4 &&
+                               abs(current.origin.y - axTargetFrame.origin.y) <= 4 &&
+                               abs(current.size.width - axTargetFrame.size.width) <= 4 &&
+                               abs(current.size.height - axTargetFrame.size.height) <= 4 {
+                                break
+                            }
+                            if let v = AXValueCreate(.cgPoint, &targetPos) {
+                                _ = AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, v)
+                            }
+                            if let v = AXValueCreate(.cgSize, &targetSize) {
+                                _ = AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, v)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if showNotification {
+                let appName = appRecords.first?.windowID.appName ?? bundleID
+                // Pre-fetch the icon on the background thread before menu modal loop can block AppKit lookups
+                let prefetchedIcon: NSImage? = app.icon
+                    ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID).map { NSWorkspace.shared.icon(forFile: $0.path) }
+                self.deliverNotification(
+                    type: .singleRestore,
+                    title: "\(appName) \(lz("Restored"))",
+                    subtitle: "",
+                    isCompact: true,
+                    bundleID: bundleID,
+                    appIcon: prefetchedIcon
+                )
+            }
+
+            if let completion = completion {
+                DispatchQueue.main.async { completion() }
+            }
+        }
     }
 
     // MARK: - Restore
 
-    private func restore(snapshot: LayoutSnapshot, animated: Bool, specificAppBundleID: String? = nil, showNotification: Bool = true) {
+    private func restore(snapshot: LayoutSnapshot, animated: Bool, specificAppBundleID: String? = nil, isAppLaunch: Bool = false, showNotification: Bool = true, skipCommandSend: Bool = false, triggerSubtitle: String? = nil, completion: (@MainActor () -> Void)? = nil) {
+        MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
         let fp = ScreenFingerprint.current()
 
         if !hasAccessibilityPermission {
-            log("⚠️ Accessibility permission not granted — grant it in System Settings › Privacy › Accessibility then rebuild/relaunch", level: .necessary)
+            log("⚠️ Accessibility permission not active — grant it in System Settings › Privacy & Security › Accessibility / Device Control", level: .necessary)
             if specificAppBundleID == nil {
                 statusMessage = "Accessibility permission required"
-                requestAccessibilityPermission()
             }
             // Don't return — still attempt AppleScript fallback for each window
         }
@@ -1180,103 +2114,707 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             statusMessage = "Restoring \(records.count) windows…"
         }
 
-        let details = records.map { self.formatWindowDetail(record: $0) }
 
         Task {
-            let screens = NSScreen.screens
-            let primaryH = screens.first?.frame.height ?? 0
-            let screenCGRects: [CGRect] = screens.map { s in
-                CGRect(x: s.frame.minX, y: primaryH - s.frame.maxY, width: s.frame.width, height: s.frame.height)
-            }
             let runningApps = Dictionary(
                 NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) },
                 uniquingKeysWith: { _, new in new }
             )
-            let axWindowsByPID = self.getValidAXWindows(runningApps: runningApps, screenCGRects: screenCGRects, cgWindowsByPID: [:])
-            let fullScreenPIDs = Set(axWindowsByPID.compactMap { pid, wins in
-                wins.contains(where: { $0.isFullScreen }) ? pid : nil
-            })
+            let fp = ScreenFingerprint.current()
+            let liveRecords = self.captureAllWindows(for: fp, silent: true)
 
-            await withTaskGroup(of: Void.self) { group in
-                for record in records {
-                    let appName = record.windowID.appBundleID
-                    
-                    // Calculate the target frame once per window, respecting the "Behind Dock" setting
-                    let target = self.calculateTargetFrame(for: record)
+            // ---------- Pre-resolve AX window targets grouped by application ----------
+            struct ResolvedTarget {
+                let record: WindowRecord
+                let element: AXUIElement
+                let targetFrame: CGRect
+            }
+            var resolvedTargets: [ResolvedTarget] = []
 
-                    // ---------- Skip if app is not running ----------
-                    if !runningApps.values.contains(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) {
-                        self.log("⏭️ Skipping '\(appName)' — app is not running", level: .verbose, type: .restore)
-                        continue
-                    }
+            let externalRecords = records.filter { $0.windowID.appBundleID != Bundle.main.bundleIdentifier && $0.windowID.appBundleID != ownProcessName }
+            let groupedRecords = Dictionary(grouping: externalRecords, by: { $0.windowID.appBundleID })
 
-                    // ---------- Skip if app is currently in full-screen (and NOT intended to be) ----------
-                    if let app = runningApps.values.first(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }),
-                       fullScreenPIDs.contains(app.processIdentifier),
-                       !(record.isNativeFullScreen || record.isFullScreenMode) {
-                        self.log("⏭️ Skipping '\(appName)' — currently in full-screen mode", level: .verbose, type: .restore)
-                        continue
-                    }
+            // Optional: Launch closed apps sequentially if enabled for full restore
+            if specificAppBundleID == nil && self.store.launchMissingAppsOnRestore {
+                let missingBundleIDs = groupedRecords.keys.filter { bundleID in
+                    !runningApps.values.contains { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID }
+                }
 
-                    // ---------- Our own windows: use NSWindow directly ----------
-                    if appName == ownProcessName {
-                        group.addTask { @MainActor [weak self] in
-                            if let win = NSApplication.shared.windows.first(where: { $0.title == record.windowID.windowTitle }) {
-                                if animated {
-                                    win.animator().setFrame(target, display: true)
-                                } else {
-                                    win.setFrame(target, display: true)
-                                }
-                                self?.log("✅ Own window '\(record.windowID.windowTitle)' restored", level: .verbose)
-                            }
+                if !missingBundleIDs.isEmpty {
+                    self.log("🚀 Launching \(missingBundleIDs.count) closed application(s) for full restore...", level: .necessary, type: .restore)
+                    for (index, bundleID) in missingBundleIDs.enumerated() {
+                        let sampleName = groupedRecords[bundleID]?.first?.windowID.appName ?? bundleID
+                        if showNotification {
+                            self.deliverNotification(
+                                type: .fullRestore,
+                                title: "Opening \(sampleName)",
+                                subtitle: "Launching app (\(index + 1)/\(missingBundleIDs.count))...",
+                                isCompact: true,
+                                bundleID: bundleID
+                            )
                         }
-                        continue
-                    }
 
-                    // ---------- External apps: AX first, osascript fallback ----------
-                    self.log("→ Queuing restore for '\(appName)'", level: .verbose)
-                    let rec = record
-                    let screenH = primaryScreenH
-                    group.addTask { [weak self] in
-                        let axOK = await self?.restoreViaAX(record: rec, targetFrame: target, primaryScreenH: screenH) ?? false
-                        if !axOK {
-                            await self?.log("⚠️ AX failed for '\(appName)', trying AppleScript...", level: .verbose, type: .system)
-                            await self?.restoreViaOsascript(record: rec, targetFrame: target, primaryScreenH: screenH)
+                        let launched: Bool
+                        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                            let configuration = NSWorkspace.OpenConfiguration()
+                            configuration.activates = false
+                            configuration.addsToRecentItems = false
+
+                            var launchSuccess = false
+                            let semaphore = DispatchSemaphore(value: 0)
+                            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
+                                launchSuccess = (error == nil)
+                                semaphore.signal()
+                            }
+                            _ = semaphore.wait(timeout: .now() + 4.0)
+                            launched = launchSuccess
+                        } else {
+                            launched = NSWorkspace.shared.launchApplication(sampleName)
+                        }
+
+                        if launched {
+                            self.log("✅ Successfully launched '\(sampleName)'", level: .moderate, type: .restore)
+                            // Allow application window subsystem to initialize safely
+                            try? await Task.sleep(nanoseconds: 1_200_000_000)
+                        } else {
+                            self.log("⚠️ Could not launch '\(sampleName)'", level: .moderate, type: .restore)
                         }
                     }
                 }
             }
 
-            // Finally, bring the user's preferred foreground app to the absolute front (if set)
-            // We wait a brief moment to allow macOS window server to settle after the frame changes.
-            if specificAppBundleID == nil, let targetBundleID = snapshot.foregroundBundleID {
-                try? await Task.sleep(nanoseconds: 500_000_000) // 500ms delay
-                self.bringAppToFront(bundleID: targetBundleID)
+            // Refresh running applications map after launching missing apps
+            let updatedRunningApps = Dictionary(
+                NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) },
+                uniquingKeysWith: { _, new in new }
+            )
+
+            for (bundleID, appRecords) in groupedRecords {
+                // Skip if app is still not running
+                guard let app = updatedRunningApps.values.first(where: { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID }) else {
+                    self.log("⏭️ Skipping '\(bundleID)' — app is not running", level: .verbose, type: .restore)
+                    continue
+                }
+                
+                let pid = app.processIdentifier
+                let appElement = AXUIElementCreateApplication(pid)
+                
+                // Fetch the live AX window list.
+                // IMPORTANT: apps currently in full-screen on a different Mission Control Space
+                // often return an EMPTY kAXWindowsAttribute until activated.
+                // We must activate + retry (same logic as resolveAXWindow) to get their AX element.
+                var windowListRef: CFTypeRef?
+                var wins: [AXUIElement] = []
+                if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowListRef) == .success,
+                   let foundWins = windowListRef as? [AXUIElement] {
+                    wins = foundWins
+                }
+                
+                if wins.isEmpty {
+                    // Activate the app and retry — necessary for full-screen Space occupants
+                    app.activate()
+                    for _ in 1...3 {
+                        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+                        if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowListRef) == .success,
+                           let foundWins = windowListRef as? [AXUIElement], !foundWins.isEmpty {
+                            wins = foundWins
+                            break
+                        }
+                    }
+                }
+                
+                if wins.isEmpty {
+                    // Final fallback: kAXChildren (for non-standard apps like VLC)
+                    if AXUIElementCopyAttributeValue(appElement, kAXChildrenAttribute as CFString, &windowListRef) == .success,
+                       let children = windowListRef as? [AXUIElement] {
+                        wins = children.filter { child in
+                            var roleRef: CFTypeRef?
+                            if AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &roleRef) == .success,
+                               let role = roleRef as? String {
+                                if role == kAXWindowRole { return true }
+                                var subroleRef: CFTypeRef?
+                                if AXUIElementCopyAttributeValue(child, kAXSubroleAttribute as CFString, &subroleRef) == .success,
+                                   let subrole = subroleRef as? String {
+                                    return subrole == kAXStandardWindowSubrole ||
+                                           subrole == kAXFloatingWindowSubrole ||
+                                           subrole == kAXDialogSubrole
+                                }
+                            }
+                            return false
+                        }
+                    }
+                }
+                
+                guard !wins.isEmpty else {
+                    self.log("⏭️ Skipping '\(bundleID)' — no AX windows found after retries", level: .verbose, type: .restore)
+                    continue
+                }
+                
+                var unclaimed = wins
+                var matchedTargetsForApp: [ResolvedTarget] = []
+                
+                func getTitle(of el: AXUIElement) -> String {
+                    var tv: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &tv) == .success,
+                       let t = tv as? String {
+                        return t
+                    }
+                    return ""
+                }
+                
+                // Pass 1: Exact title match
+                for rec in appRecords {
+                    guard !rec.windowID.windowTitle.isEmpty else { continue }
+                    if let idx = unclaimed.firstIndex(where: { getTitle(of: $0) == rec.windowID.windowTitle }) {
+                        let element = unclaimed.remove(at: idx)
+                        let target = self.calculateTargetFrame(for: rec)
+                        matchedTargetsForApp.append(ResolvedTarget(record: rec, element: element, targetFrame: target))
+                    }
+                }
+                
+                // Pass 2: Fuzzy title match
+                for rec in appRecords {
+                    if matchedTargetsForApp.contains(where: { $0.record.id == rec.id }) { continue }
+                    guard !rec.windowID.windowTitle.isEmpty else { continue }
+                    
+                    let targetTitle = rec.windowID.windowTitle
+                    if let idx = unclaimed.firstIndex(where: {
+                        let t = getTitle(of: $0)
+                        return t.contains(targetTitle) || targetTitle.contains(t)
+                    }) {
+                        let element = unclaimed.remove(at: idx)
+                        let target = self.calculateTargetFrame(for: rec)
+                        matchedTargetsForApp.append(ResolvedTarget(record: rec, element: element, targetFrame: target))
+                    }
+                }
+                
+                // Pass 3: Match remaining windows using size and aspect ratio similarity (extremely robust for apps like VLC with multi-window layouts)
+                let unmatchedRecords = appRecords.filter { rec in
+                    !matchedTargetsForApp.contains(where: { $0.record.id == rec.id })
+                }
+                
+                for rec in unmatchedRecords {
+                    let targetSize = rec.globalFrame.size
+                    let targetAspect = targetSize.width / max(targetSize.height, 1)
+                    
+                    var bestIdx = -1
+                    var bestDiff = CGFloat.infinity
+                    
+                    for (idx, el) in unclaimed.enumerated() {
+                        guard let frame = self.getCurrentFrame(of: el) else { continue }
+                        let elAspect = frame.width / max(frame.height, 1)
+                        
+                        let aspectDiff = abs(elAspect - targetAspect)
+                        
+                        let targetArea = targetSize.width * targetSize.height
+                        let elArea = frame.width * frame.height
+                        let areaDiff = abs(elArea - targetArea) / max(targetArea, 1)
+                        
+                        let score = aspectDiff * 2.0 + areaDiff
+                        if score < bestDiff {
+                            bestDiff = score
+                            bestIdx = idx
+                        }
+                    }
+                    
+                    if bestIdx != -1 {
+                        let element = unclaimed.remove(at: bestIdx)
+                        let target = self.calculateTargetFrame(for: rec)
+                        matchedTargetsForApp.append(ResolvedTarget(record: rec, element: element, targetFrame: target))
+                    }
+                }
+                
+                // Pass 4: Fallback index match for any remaining unmatched records
+                let remainingRecords = appRecords.filter { rec in
+                    !matchedTargetsForApp.contains(where: { $0.record.id == rec.id })
+                }
+                let sortedRemaining = remainingRecords.sorted(by: { $0.windowID.appWindowIndex < $1.windowID.appWindowIndex })
+                for (i, rec) in sortedRemaining.enumerated() {
+                    let element: AXUIElement
+                    if i < unclaimed.count {
+                        element = unclaimed[i]
+                    } else if let first = wins.first {
+                        element = first
+                    } else {
+                        continue
+                    }
+                    let target = self.calculateTargetFrame(for: rec)
+                    matchedTargetsForApp.append(ResolvedTarget(record: rec, element: element, targetFrame: target))
+                }
+                
+                resolvedTargets.append(contentsOf: matchedTargetsForApp)
+            }
+
+            // ---------- Sequential Restoration ----------
+            var restoredCount = 0
+            for record in records {
+                let appName = record.windowID.appBundleID
+                let target = self.calculateTargetFrame(for: record)
+
+                // Skip if app is not running
+                if !updatedRunningApps.values.contains(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) {
+                    continue
+                }
+
+                // Skip if app is already full-screen on the correct screen in the live layout
+                if (record.isNativeFullScreen || record.isFullScreenMode) {
+                    let liveRecord = liveRecords.first { lr in
+                        lr.windowID.appBundleID == record.windowID.appBundleID &&
+                        (record.windowID.windowTitle.isEmpty ? lr.windowID.appWindowIndex == record.windowID.appWindowIndex : lr.windowID.windowTitle == record.windowID.windowTitle)
+                    }
+                    if let liveRecord = liveRecord, liveRecord.isNativeFullScreen || liveRecord.isFullScreenMode {
+                        let sameScreen = liveRecord.screenName == record.screenName ||
+                                         (liveRecord.screenFrame != nil && record.screenFrame != nil &&
+                                          abs(liveRecord.screenFrame!.origin.x - record.screenFrame!.origin.x) < 5 &&
+                                          abs(liveRecord.screenFrame!.origin.y - record.screenFrame!.origin.y) < 5)
+                        if sameScreen {
+                            continue
+                        }
+                    }
+                }
+
+                // ---------- Our own windows: use NSWindow directly ----------
+                if appName == Bundle.main.bundleIdentifier || appName == ownProcessName {
+                    let success = await MainActor.run { [weak self] in
+                        if let win = NSApplication.shared.windows.first(where: { $0.title == record.windowID.windowTitle }) {
+                            if animated {
+                                win.animator().setFrame(target, display: true)
+                            } else {
+                                win.setFrame(target, display: true)
+                            }
+                            self?.log("✅ Own window '\(record.windowID.windowTitle)' restored", level: .verbose)
+                            return true
+                        }
+                        return false
+                    }
+                    if success {
+                        restoredCount += 1
+                    }
+                    continue
+                }
+
+                // ---------- External apps: AX first, osascript fallback ----------
+                self.log("→ Restoring '\(appName)'", level: .verbose)
+                
+                var success = false
+                if let resolved = resolvedTargets.first(where: { $0.record.id == record.id }) {
+                    let liveRecord = liveRecords.first { lr in
+                        lr.windowID.appBundleID == record.windowID.appBundleID &&
+                        (record.windowID.windowTitle.isEmpty ? lr.windowID.appWindowIndex == record.windowID.appWindowIndex : lr.windowID.windowTitle == record.windowID.windowTitle)
+                    }
+                    success = await self.restoreViaAX(
+                        win: resolved.element,
+                        record: record,
+                        targetFrame: target,
+                        primaryScreenH: primaryScreenH,
+                        liveRecord: liveRecord,
+                        animated: animated
+                    )
+                }
+                
+                if !success {
+                    self.log("⚠️ AX failed or unavailable for '\(appName)', trying AppleScript...", level: .verbose, type: .system)
+                    success = await self.restoreViaOsascript(record: record, targetFrame: target, primaryScreenH: primaryScreenH)
+                }
+
+                if success {
+                    restoredCount += 1
+                    if record.isNativeFullScreen || record.isFullScreenMode {
+                        // Allow macOS Space transition to settle before restoring subsequent windows
+                        try? await Task.sleep(nanoseconds: 800_000_000) // 800ms
+                    }
+                }
+            }
+
+            // Build status-aware detail lines: ✓ = app was running, ✗ = app was not running (skipped)
+            let details: [String] = records.map { record in
+                let isRunning = updatedRunningApps.values.contains(where: {
+                    $0.bundleIdentifier == record.windowID.appBundleID ||
+                    $0.localizedName == record.windowID.appBundleID
+                })
+                let marker = isRunning ? "✓ " : "✗ "
+                return marker + self.formatWindowDetail(record: record)
+            }
+
+            let isLocked = self.isScreenLocked
+            if isLocked && specificAppBundleID == nil {
+                self.pendingUnlockAction = PendingUnlockRestoreAction(
+                    snapshot: snapshot,
+                    restoredCount: restoredCount,
+                    totalCount: snapshot.records.count,
+                    connectedDisplayNames: Array(self.pendingConnectedNames),
+                    shouldSendShortcut: self.store.refreshFrontmostOnFullRestore
+                )
+                self.log("🔒 Layout restore completed while locked. Deferred notch overlay and shortcut queued for screen unlock.", level: .necessary, type: .restore)
             }
 
             if specificAppBundleID == nil {
+                // Finally, bring the user's preferred foreground app to the absolute front (if set and screen is unlocked)
+                if !isLocked, let targetBundleID = snapshot.foregroundBundleID {
+                    self.bringAppToFront(bundleID: targetBundleID)
+                }
+
                 self.log("Restoring layout for \(fp.readableName)", level: .necessary, type: .restore, details: details)
                 self.statusMessage = "Restore complete"
-            } else {
-                self.log("Restored \(records.count) window(s) for \(specificAppBundleID!)", level: .necessary, type: .restore, details: details)
-            }
+                
+                if !isLocked && self.store.refreshFrontmostOnFullRestore {
+                    await self.sendCommandToFrontmostAppAsync(targetBundleID: snapshot.foregroundBundleID, snapshot: snapshot)
+                }
 
-            // Show notch notification after windows have settled
-            if showNotification {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                let isCompact = specificAppBundleID != nil
-                if isCompact {
-                    let appName = records.first?.windowID.appName ?? specificAppBundleID ?? "App"
-                    self.showNotchNotification(
-                        title: "\(appName) \(lz("Restored"))",
-                        subtitle: "",
-                        isCompact: true
-                    )
-                } else {
-                    self.showNotchNotification(
+                if showNotification {
+                    self.deliverNotification(
+                        type: .fullRestore,
                         title: "Layout Restored",
-                        subtitle: "\(snapshot.name) · \(snapshot.records.count) windows"
+                        subtitle: "\(snapshot.name) · \(restoredCount)/\(snapshot.records.count) \(lz("windows"))",
+                        triggerKey: triggerSubtitle
                     )
+                }
+
+                // Fire completion handler on MainActor immediately so UI is responsive
+                if let completion = completion {
+                    await MainActor.run {
+                        completion()
+                    }
+                }
+
+                // ---------- Per-App WindowServer Verification (Background) ----------
+                // The live layout is built from CGWindowList, so it is the source of truth for the
+                // frames that macOS has actually committed. Run verification and minor nudge corrections
+                // quietly in the background so full restore never hangs waiting on Space transitions.
+                Task {
+                    self.log("🔎 Verifying each restored app against the live WindowServer layout...", level: .verbose, type: .restore)
+                    func isFrameClose(to target: CGRect, current: CGRect, tolerance: CGFloat = 15.0) -> Bool {
+                        abs(current.origin.x - target.origin.x) <= tolerance &&
+                        abs(current.origin.y - target.origin.y) <= tolerance &&
+                        abs(current.size.width - target.size.width) <= tolerance &&
+                        abs(current.size.height - target.size.height) <= tolerance
+                    }
+
+                    func takeMatchingLiveRecord(
+                        for record: WindowRecord,
+                        from availableRecords: inout [WindowRecord]
+                    ) -> WindowRecord? {
+                        if !record.windowID.windowTitle.isEmpty,
+                           let titleAndIndex = availableRecords.firstIndex(where: {
+                               $0.windowID.windowTitle == record.windowID.windowTitle &&
+                               $0.windowID.appWindowIndex == record.windowID.appWindowIndex
+                           }) {
+                            return availableRecords.remove(at: titleAndIndex)
+                        }
+
+                        if !record.windowID.windowTitle.isEmpty,
+                           let titleMatch = availableRecords.firstIndex(where: {
+                               $0.windowID.windowTitle == record.windowID.windowTitle
+                           }) {
+                            return availableRecords.remove(at: titleMatch)
+                        }
+
+                        if let indexMatch = availableRecords.firstIndex(where: {
+                            $0.windowID.appWindowIndex == record.windowID.appWindowIndex
+                        }) {
+                            return availableRecords.remove(at: indexMatch)
+                        }
+
+                        return nil
+                    }
+
+                    func mismatchedRecords(
+                        for appRecords: [WindowRecord],
+                        in liveLayout: [WindowRecord],
+                        targetFramesByRecordID: [UUID: CGRect]
+                    ) -> [WindowRecord] {
+                        guard let appID = appRecords.first?.windowID.appBundleID else { return [] }
+                        var availableLiveRecords = liveLayout.filter {
+                            $0.windowID.appBundleID == appID
+                        }
+                        var mismatches: [WindowRecord] = []
+
+                        for record in appRecords {
+                            guard let liveRecord = takeMatchingLiveRecord(
+                                for: record,
+                                from: &availableLiveRecords
+                            ) else {
+                                mismatches.append(record)
+                                continue
+                            }
+
+                            guard let targetFrame = targetFramesByRecordID[record.id] else {
+                                mismatches.append(record)
+                                continue
+                            }
+                            if !isFrameClose(to: targetFrame, current: liveRecord.globalFrame) {
+                                mismatches.append(record)
+                            }
+                        }
+
+                        return mismatches
+                    }
+
+                    let verificationRecords = records.filter { record in
+                        record.windowID.appBundleID != Bundle.main.bundleIdentifier &&
+                        record.windowID.appBundleID != ownProcessName &&
+                        !record.isNativeFullScreen &&
+                        !record.isFullScreenMode &&
+                        updatedRunningApps.values.contains(where: {
+                            $0.bundleIdentifier == record.windowID.appBundleID ||
+                            $0.localizedName == record.windowID.appBundleID
+                        })
+                    }
+                    var targetFramesByRecordID: [UUID: CGRect] = [:]
+                    for record in verificationRecords {
+                        targetFramesByRecordID[record.id] = self.calculateTargetFrame(for: record)
+                    }
+                    var verificationAppIDs: [String] = []
+                    var seenVerificationAppIDs = Set<String>()
+                    for record in verificationRecords where seenVerificationAppIDs.insert(record.windowID.appBundleID).inserted {
+                        verificationAppIDs.append(record.windowID.appBundleID)
+                    }
+
+                    // Give WindowServer one quiet settling interval before the first check
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    let verificationDeadline = Date().addingTimeInterval(4)
+                    var verificationAttempt = 0
+                    var mismatchesByApp: [String: [WindowRecord]] = [:]
+
+                    while true {
+                        verificationAttempt += 1
+                        let liveLayout = self.captureAllWindows(for: ScreenFingerprint.current(), silent: true)
+                        mismatchesByApp = [:]
+                        for appID in verificationAppIDs {
+                            let appRecords = verificationRecords.filter {
+                                $0.windowID.appBundleID == appID
+                            }
+                            guard !appRecords.isEmpty else { continue }
+                            let appMismatches = mismatchedRecords(
+                                for: appRecords,
+                                in: liveLayout,
+                                targetFramesByRecordID: targetFramesByRecordID
+                            )
+                            if !appMismatches.isEmpty {
+                                mismatchesByApp[appID] = appMismatches
+                            }
+                        }
+
+                        if mismatchesByApp.isEmpty {
+                            self.log("✅ All apps verified by WindowServer after \(verificationAttempt) attempt(s).", level: .verbose, type: .restore)
+                            break
+                        }
+
+                        if Date() >= verificationDeadline {
+                            self.log("⚠️ Verification deadline reached with \(mismatchesByApp.count) app(s) still mismatched.", level: .moderate, type: .restore)
+                            break
+                        }
+
+                        let correctionRecords = verificationAppIDs.flatMap { mismatchesByApp[$0] ?? [] }
+                        let directCorrectionRecords = correctionRecords.filter { record in
+                            resolvedTargets.contains { $0.record.id == record.id }
+                        }
+                        let fallbackCorrectionRecords = correctionRecords.filter { record in
+                            !resolvedTargets.contains { $0.record.id == record.id }
+                        }
+
+                        self.log("🔧 Correction pass \(verificationAttempt): re-applying frame to \(correctionRecords.count) window(s)...", level: .verbose, type: .restore)
+                        // Keep direct AX writes together in one non-animated run-loop turn per pass.
+                        for record in directCorrectionRecords {
+                            let targetFrame = self.calculateTargetFrame(for: record)
+                            guard let resolved = resolvedTargets.first(where: { $0.record.id == record.id }) else {
+                                continue
+                            }
+                            let axY = primaryScreenH - targetFrame.origin.y - targetFrame.height
+                            var position = CGPoint(x: targetFrame.origin.x, y: axY)
+                            var size = targetFrame.size
+                            if let value = AXValueCreate(.cgPoint, &position) {
+                                _ = AXUIElementSetAttributeValue(resolved.element, kAXPositionAttribute as CFString, value)
+                            }
+                            if let value = AXValueCreate(.cgSize, &size) {
+                                _ = AXUIElementSetAttributeValue(resolved.element, kAXSizeAttribute as CFString, value)
+                            }
+                        }
+
+                        for record in fallbackCorrectionRecords {
+                            let targetFrame = self.calculateTargetFrame(for: record)
+                            _ = await self.restoreViaOsascript(
+                                record: record,
+                                targetFrame: targetFrame,
+                                primaryScreenH: primaryScreenH
+                            )
+                        }
+
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                    }
+
+                    for appID in verificationAppIDs {
+                        if mismatchesByApp[appID] != nil {
+                            self.log("⚠️ \(appID) could not be fully verified by WindowServer.", level: .moderate, type: .restore)
+                        } else {
+                            self.log("✅ \(appID) verified by WindowServer.", level: .verbose, type: .restore)
+                        }
+                    }
+                }
+            } else {
+                // ---------- Single-App Restore Path ----------
+                var singleRestoreVerified: Bool? = nil
+                var singleRestoreUnverifiedCount = 0
+                let windowServerVerifiableRecords = records.filter {
+                    !$0.isNativeFullScreen && !$0.isFullScreenMode
+                }
+                let nonVerifiableRecordCount = records.count - windowServerVerifiableRecords.count
+                var targetFramesByRecordID: [UUID: CGRect] = [:]
+                for record in windowServerVerifiableRecords {
+                    targetFramesByRecordID[record.id] = self.calculateTargetFrame(for: record)
+                }
+
+                func matchingWindowServerRecord(
+                    for record: WindowRecord,
+                    in currentRecords: [WindowRecord]
+                ) -> WindowRecord? {
+                    let appRecords = currentRecords.filter {
+                        $0.windowID.appBundleID == record.windowID.appBundleID
+                    }
+                    guard !appRecords.isEmpty else { return nil }
+
+                    if !record.windowID.windowTitle.isEmpty,
+                       let titleMatch = appRecords.first(where: {
+                           $0.windowID.windowTitle == record.windowID.windowTitle
+                       }) {
+                        return titleMatch
+                    }
+
+                    return appRecords.first {
+                        $0.windowID.appWindowIndex == record.windowID.appWindowIndex
+                    }
+                }
+
+                func matchesWindowServerFrame(_ record: WindowRecord, _ currentRecord: WindowRecord) -> Bool {
+                    guard let targetFrame = targetFramesByRecordID[record.id] else { return false }
+                    let currentFrame = currentRecord.globalFrame
+                    let tolerance: CGFloat = 2
+                    return abs(targetFrame.origin.x - currentFrame.origin.x) <= tolerance &&
+                        abs(targetFrame.origin.y - currentFrame.origin.y) <= tolerance &&
+                        abs(targetFrame.width - currentFrame.width) <= tolerance &&
+                        abs(targetFrame.height - currentFrame.height) <= tolerance
+                }
+
+                let verificationDeadline = Date().addingTimeInterval(4)
+                var verificationAttempt = 0
+
+                while Date() < verificationDeadline && verificationAttempt < 24 {
+                    verificationAttempt += 1
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+
+                    let currentRecords = self.captureAllWindows(
+                        for: ScreenFingerprint.current(),
+                        silent: true
+                    )
+                    let mismatchedRecords = windowServerVerifiableRecords.filter { record in
+                        guard let currentRecord = matchingWindowServerRecord(
+                            for: record,
+                            in: currentRecords
+                        ) else {
+                            return true
+                        }
+                        return !matchesWindowServerFrame(record, currentRecord)
+                    }
+
+                    if mismatchedRecords.isEmpty && nonVerifiableRecordCount == 0 {
+                        singleRestoreVerified = true
+                        self.log(
+                            "✅ Single-app restore verified by WindowServer after \(verificationAttempt) attempt(s).",
+                            level: .verbose,
+                            type: .restore
+                        )
+                        break
+                    }
+
+                    if mismatchedRecords.isEmpty {
+                        singleRestoreUnverifiedCount = nonVerifiableRecordCount
+                        break
+                    }
+
+                    singleRestoreUnverifiedCount = mismatchedRecords.count + nonVerifiableRecordCount
+                    self.log(
+                        "⚠️ WindowServer single-app check \(verificationAttempt): \(singleRestoreUnverifiedCount) window(s) not yet confirmed.",
+                        level: .verbose,
+                        type: .restore
+                    )
+
+                    for record in mismatchedRecords {
+                        let targetFrame = self.calculateTargetFrame(for: record)
+                        if let resolved = resolvedTargets.first(where: { $0.record.id == record.id }) {
+                            let liveRecord = liveRecords.first {
+                                $0.windowID.appBundleID == record.windowID.appBundleID &&
+                                $0.windowID.appWindowIndex == record.windowID.appWindowIndex
+                            }
+                            _ = await self.restoreViaAX(
+                                win: resolved.element,
+                                record: record,
+                                targetFrame: targetFrame,
+                                primaryScreenH: primaryScreenH,
+                                liveRecord: liveRecord,
+                                animated: false
+                            )
+                        } else {
+                            _ = await self.restoreViaOsascript(
+                                record: record,
+                                targetFrame: targetFrame,
+                                primaryScreenH: primaryScreenH
+                            )
+                        }
+                    }
+                }
+
+                if singleRestoreVerified != true {
+                    singleRestoreVerified = false
+                    self.log(
+                        "⚠️ Single-app restore could not be fully verified by WindowServer (\(singleRestoreUnverifiedCount) window(s)).",
+                        level: .moderate,
+                        type: .restore
+                    )
+                }
+
+                self.log("Restored \(records.count) window(s) for \(specificAppBundleID!)", level: .necessary, type: .restore, details: details)
+                if singleRestoreVerified == false {
+                    self.statusMessage = lz("Restore needs attention")
+                }
+                
+                if !isLocked && self.store.refreshFrontmostOnSingleRestore && !skipCommandSend {
+                    var delay = isAppLaunch ? self.store.singleAppCommandDelay : 0.05
+                    if isAppLaunch {
+                        let runningApps = NSWorkspace.shared.runningApplications
+                        let targetApp = runningApps.first(where: { $0.bundleIdentifier == specificAppBundleID || $0.localizedName == specificAppBundleID })
+                        let isWeb = WebAppDetector.shared.isWebApp(
+                            bundleID: specificAppBundleID,
+                            appURL: targetApp?.bundleURL,
+                            processIdentifier: targetApp?.processIdentifier,
+                            customIDs: self.store.customWebAppBundleIDs
+                        )
+                        if isWeb {
+                            let extra = self.store.webAppLaunchCommandDelay
+                            delay += extra
+                            self.log("🌐 Detected web app '\(targetApp?.localizedName ?? specificAppBundleID!)' — adding +\(String(format: "%.1f", extra))s delay (total \(String(format: "%.1f", delay))s) before ⌘⇧R", level: .necessary, type: .restore)
+                        }
+                    }
+                    await self.sendCommandToFrontmostAppAsync(targetBundleID: specificAppBundleID, snapshot: snapshot, delayOverride: delay)
+                }
+
+                if showNotification {
+                    let appName = records.first?.windowID.appName ?? specificAppBundleID ?? "App"
+                    self.deliverNotification(
+                        type: .singleRestore,
+                        title: "\(appName) \(lz("Restored"))",
+                        subtitle: triggerSubtitle ?? "",
+                        isCompact: true,
+                        bundleID: specificAppBundleID,
+                        triggerKey: triggerSubtitle
+                    )
+                    // Brief pause so the icon drop animation is visible before the menu opens
+                    try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+                }
+
+                if let completion = completion {
+                    await MainActor.run {
+                        completion()
+                    }
                 }
             }
         }
@@ -1284,30 +2822,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     // MARK: - AX restore (must be called from @MainActor context)
 
-    private func restoreViaAX(record: WindowRecord, targetFrame: CGRect, primaryScreenH: CGFloat) async -> Bool {
+    private func resolveAXWindow(for record: WindowRecord, runningApps: [NSRunningApplication]) async -> AXUIElement? {
         let appName = record.windowID.appBundleID
-
-        // CG/AX coords: origin = top-left of primary screen
-        let axX = targetFrame.origin.x
-        let axY = primaryScreenH - targetFrame.origin.y - targetFrame.height  // AppKit → CG Y flip
-        let axW = targetFrame.width
-        let axH = targetFrame.height
-
-        guard hasAccessibilityPermission else {
-            log("AX ❌ no permission for '\(appName)' — will fall back to osascript", level: .verbose)
-            return false
+        guard let app = runningApps.first(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) else {
+            return nil
         }
-
-        // Find the running app by its process name (kCGWindowOwnerName == localizedName)
-        guard let app = NSWorkspace.shared.runningApplications.first(
-            where: { $0.localizedName == appName || $0.bundleIdentifier == appName }
-        ) else {
-            log("AX ❌ '\(appName)' not running", level: .verbose)
-            return false
-        }
-
-        // Try to activate the app (sometimes required for AX to work reliably)
-        app.activate()
         
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         var windowsRef: CFTypeRef?
@@ -1318,6 +2837,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
         
         if wins.isEmpty {
+            // Try to activate the app (sometimes required for AX to work reliably / report windows)
+            app.activate()
             // Retry a few times with a small delay, as some apps take a moment to report windows after activation
             for _ in 1...3 {
                 try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
@@ -1352,18 +2873,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
         }
         
-        guard !wins.isEmpty else {
-            log("AX ❌ '\(appName)' — no windows found via AX", level: .verbose)
-            return false
-        }
+        guard !wins.isEmpty else { return nil }
 
-        // Match by title first; if no title, use appWindowIndex to pick the nth window.
-        // This ensures multiple windows from the same app are restored correctly
-        // even without Screen Recording permission (which is needed for window titles).
-        let target: AXUIElement?
+        // Match by title first; if title changed or not found, fall back to window index or first window
         if !record.windowID.windowTitle.isEmpty {
-            // Match by title (exact then fuzzy)
-            target = wins.first { w in
+            return wins.first { w in
                 var tv: CFTypeRef?
                 guard AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &tv) == .success,
                       let t = tv as? String else { return false }
@@ -1373,60 +2887,275 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 guard AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &tv) == .success,
                       let t = tv as? String else { return false }
                 return t.contains(record.windowID.windowTitle) || record.windowID.windowTitle.contains(t)
-            }
+            } ?? (record.windowID.appWindowIndex < wins.count ? wins[record.windowID.appWindowIndex] : wins.first)
         } else {
             let idx = record.windowID.appWindowIndex
-            target = idx < wins.count ? wins[idx] : wins.first
+            return idx < wins.count ? wins[idx] : wins.first
+        }
+    }
+
+    private func getCurrentFrame(of element: AXUIElement) -> CGRect? {
+        var positionValueRef: AnyObject?
+        var sizeValueRef: AnyObject?
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValueRef) == .success,
+              let positionValue = positionValueRef,
+              AXValueGetValue((positionValue as! AXValue), .cgPoint, &position) else {
+            return nil
+        }
+        
+        guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValueRef) == .success,
+              let sizeValue = sizeValueRef,
+              AXValueGetValue((sizeValue as! AXValue), .cgSize, &size) else {
+            return nil
+        }
+        
+        return CGRect(origin: position, size: size)
+    }
+
+    private func restoreViaAX(
+        win: AXUIElement,
+        record: WindowRecord,
+        targetFrame: CGRect,
+        primaryScreenH: CGFloat,
+        liveRecord: WindowRecord?,
+        animated: Bool = true
+    ) async -> Bool {
+        let appName = record.windowID.appBundleID
+
+        // CG/AX coords: origin = top-left of primary screen
+        let axX = targetFrame.origin.x
+        let axY = primaryScreenH - targetFrame.origin.y - targetFrame.height  // AppKit → CG Y flip
+        let axW = targetFrame.width
+        let axH = targetFrame.height
+
+        func isFrameClose(to target: CGRect, current: CGRect, tolerance: CGFloat = 15) -> Bool {
+            abs(current.origin.x - target.origin.x) <= tolerance &&
+            abs(current.origin.y - target.origin.y) <= tolerance &&
+            abs(current.size.width - target.size.width) <= tolerance &&
+            abs(current.size.height - target.size.height) <= tolerance
         }
 
-        guard let win = target else {
-            log("⚠️ Restore: '\(appName)' — no AX window found for title '\(record.windowID.windowTitle)'", level: .verbose, type: .restore)
+        guard hasAccessibilityPermission else {
+            log("AX ❌ no permission for '\(appName)' — will fall back to osascript", level: .verbose)
             return false
         }
 
+        var isAlreadyFullScreen = false
+        var fsRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(win, "AXFullScreen" as CFString, &fsRef) == .success,
+           let fsVal = fsRef as? Bool {
+            isAlreadyFullScreen = fsVal
+        }
+
+        // Determine if we need to change screens for a full-screen window
+        var needsScreenChangeForFullScreen = false
+        if (record.isNativeFullScreen || record.isFullScreenMode) && isAlreadyFullScreen {
+            if let liveScreen = liveRecord?.screenName, let targetScreenName = record.screenName {
+                if liveScreen != targetScreenName {
+                    needsScreenChangeForFullScreen = true
+                }
+            } else {
+                // Fallback to coordinate check if screenName info isn't available
+                var positionValueRef: AnyObject?
+                var position = CGPoint.zero
+                if AXUIElementCopyAttributeValue(win, kAXPositionAttribute as CFString, &positionValueRef) == .success,
+                   let positionValue = positionValueRef {
+                    AXValueGetValue((positionValue as! AXValue), .cgPoint, &position)
+                }
+                
+                let screens = NSScreen.screens
+                let primaryScreen = screens.first
+                let primaryHeight = primaryScreen?.frame.height ?? 0
+                
+                func axFrame(for screen: NSScreen) -> CGRect {
+                    return CGRect(
+                        x: screen.frame.origin.x,
+                        y: primaryHeight - screen.frame.origin.y - screen.frame.size.height,
+                        width: screen.frame.size.width,
+                        height: screen.frame.size.height
+                    )
+                }
+                
+                let currentScreen = screens.first { screen in
+                    axFrame(for: screen).contains(position)
+                } ?? screens.first
+                
+                let targetMidPoint = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
+                let targetScreen = screens.first { $0.frame.contains(targetMidPoint) } ?? screens.first
+                
+                if currentScreen != targetScreen {
+                    needsScreenChangeForFullScreen = true
+                }
+            }
+        }
+
+        var activeWin = win
+
+        // If target layout wants NORMAL but window is currently full-screen, OR
+        // target layout wants full-screen but window is currently full-screen on a DIFFERENT monitor,
+        // exit full-screen first.
+        if isAlreadyFullScreen && (!(record.isNativeFullScreen || record.isFullScreenMode) || needsScreenChangeForFullScreen) {
+            log("ℹ️ Restore: '\(appName)' → exiting Full Screen first to change screens or layout", level: .verbose, type: .restore)
+            _ = AXUIElementSetAttributeValue(win, "AXFullScreen" as CFString, kCFBooleanFalse)
+            
+            // Wait up to 500ms, retrying the exit command if the window manager ignores it
+            var exited = false
+            for _ in 1...5 {
+                for _ in 1...10 { // 100ms wait per attempt
+                    try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
+                    var fsCheckRef: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(win, "AXFullScreen" as CFString, &fsCheckRef) == .success,
+                       let val = fsCheckRef as? Bool, !val {
+                        exited = true
+                        break
+                    }
+                }
+                if exited { break }
+                // Re-send exit command in case it was ignored or missed during space transitions
+                _ = AXUIElementSetAttributeValue(win, "AXFullScreen" as CFString, kCFBooleanFalse)
+            }
+            
+            if exited {
+                try? await Task.sleep(nanoseconds: 800_000_000) // 800ms settle delay
+            } else {
+                log("⚠️ Restore: '\(appName)' failed to exit full screen programmatically", level: .moderate, type: .restore)
+            }
+
+            // Re-resolve the AXUIElement to ensure the reference is fresh and valid after the space transition
+            let runningAppsArray = Array(NSWorkspace.shared.runningApplications)
+            if let freshWin = await self.resolveAXWindow(for: record, runningApps: runningAppsArray) {
+                activeWin = freshWin
+                log("🔄 Re-resolved fresh AXUIElement for '\(appName)' after exiting Full Screen", level: .verbose, type: .restore)
+            }
+        }
+
         if record.isNativeFullScreen || record.isFullScreenMode {
-            // Move window to the target screen first so it enters full-screen on the right display
+            // 1. Move window to the target screen
             var pos = CGPoint(x: axX, y: axY)
             if let v = AXValueCreate(.cgPoint, &pos) {
-                _ = AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, v)
+                _ = AXUIElementSetAttributeValue(activeWin, kAXPositionAttribute as CFString, v)
+            }
+            
+            // 2. Set size to fill screen bounds on the destination screen FIRST
+            var sz = CGSize(width: axW, height: axH)
+            if let v = AXValueCreate(.cgSize, &sz) {
+                _ = AXUIElementSetAttributeValue(activeWin, kAXSizeAttribute as CFString, v)
+            }
+            if let v = AXValueCreate(.cgPoint, &pos) {
+                _ = AXUIElementSetAttributeValue(activeWin, kAXPositionAttribute as CFString, v)
             }
 
-            // Send AXFullScreen = true
-            let fsErr = AXUIElementSetAttributeValue(win, "AXFullScreen" as CFString, kCFBooleanTrue)
-            if fsErr == .success {
-                log("✅ Restore: '\(appName)' → entering Full Screen", level: .verbose, type: .restore)
-                return true
-            } else if fsErr.rawValue == -25200 || fsErr.rawValue == -25205 {
-                // kAXErrorIllegalArgument / kAXErrorActionUnsupported:
-                // App doesn't expose AXFullScreen for writing (e.g. Stremio).
-                // The window is already at the correct position/size — accept as done.
-                log("ℹ️ Restore: '\(appName)' — programmatic full-screen not supported, window positioned instead", level: .verbose, type: .restore)
-                return true
+            // 3. Wait briefly and confirm window arrived on target screen coordinates
+            for _ in 1...10 {
+                if let current = getCurrentFrame(of: activeWin),
+                   abs(current.origin.x - axX) <= 150 && abs(current.origin.y - axY) <= 150 {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+
+            // 4. If native full screen is requested, activate the app first then trigger AXFullScreen
+            if record.isNativeFullScreen {
+                let runningAppsArray = NSWorkspace.shared.runningApplications
+                if let targetApp = runningAppsArray.first(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) {
+                    targetApp.activate()
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms settle
+
+                let fsErr = AXUIElementSetAttributeValue(activeWin, "AXFullScreen" as CFString, kCFBooleanTrue)
+                if fsErr == .success {
+                    log("✅ Restore: '\(appName)' → entering Full Screen on target display", level: .verbose, type: .restore)
+                    return true
+                } else {
+                    log("ℹ️ Restore: '\(appName)' — native full-screen unsupported, kept at filled screen bounds", level: .verbose, type: .restore)
+                    return true
+                }
             } else {
-                log("❌ Restore: '\(appName)' — AXFullScreen failed (AXError \(fsErr.rawValue))", level: .verbose, type: .restore)
-                return false
+                return true
             }
         }
 
-        // Position must be set before size
-        var pos = CGPoint(x: axX, y: axY)
-        if let v = AXValueCreate(.cgPoint, &pos) {
-            let e = AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, v)
-            if e != .success { log("AX ⚠️ '\(appName)' set-position error \(e.rawValue)", level: .verbose) }
+        let axTargetFrame = CGRect(x: axX, y: axY, width: axW, height: axH)
+        var targetSize = CGSize(width: axW, height: axH)
+        var targetPos = CGPoint(x: axX, y: axY)
+
+        // 1. Identify current screen and target screen to determine optimal resize order
+        let screens = NSScreen.screens
+        let currentFrame = getCurrentFrame(of: activeWin)
+        let currentScreen: NSScreen?
+        if let cur = currentFrame {
+            let curMid = CGPoint(x: cur.midX, y: primaryScreenH - cur.midY)
+            currentScreen = screens.first { $0.frame.contains(curMid) } ?? screens.first
+        } else {
+            currentScreen = screens.first
         }
-        var sz = CGSize(width: axW, height: axH)
-        if let v = AXValueCreate(.cgSize, &sz) {
-            let e = AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, v)
-            if e != .success { log("AX ⚠️ '\(appName)' set-size error \(e.rawValue)", level: .verbose) }
+        
+        let targetMid = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
+        let targetScreen = screens.first { $0.frame.contains(targetMid) } ?? screens.first
+
+        let currentScreenArea = (currentScreen?.frame.width ?? 1920) * (currentScreen?.frame.height ?? 1080)
+        let targetScreenArea = (targetScreen?.frame.width ?? 1920) * (targetScreen?.frame.height ?? 1080)
+        let isMovingToSmallerScreen = targetScreen != currentScreen && targetScreenArea < currentScreenArea
+
+        if isMovingToSmallerScreen {
+            // Target monitor is smaller: pre-shrink first so window can freely move into target monitor bounds
+            let maxAllowedW = min(axW, (targetScreen?.visibleFrame.width ?? axW))
+            let maxAllowedH = min(axH, (targetScreen?.visibleFrame.height ?? axH))
+            var preShrinkSize = CGSize(width: maxAllowedW, height: maxAllowedH)
+            if let v = AXValueCreate(.cgSize, &preShrinkSize) {
+                _ = AXUIElementSetAttributeValue(activeWin, kAXSizeAttribute as CFString, v)
+            }
+            // Move to target position
+            if let v = AXValueCreate(.cgPoint, &targetPos) {
+                let e = AXUIElementSetAttributeValue(activeWin, kAXPositionAttribute as CFString, v)
+                if e != .success { log("AX ⚠️ '\(appName)' set-position error \(e.rawValue)", level: .verbose) }
+            }
+            // Apply exact target size
+            if let v = AXValueCreate(.cgSize, &targetSize) {
+                let e = AXUIElementSetAttributeValue(activeWin, kAXSizeAttribute as CFString, v)
+                if e != .success { log("AX ⚠️ '\(appName)' set-size error \(e.rawValue)", level: .verbose) }
+            }
+        } else {
+            // Same monitor or moving to larger monitor: Position FIRST, then Size!
+            // Move to target position
+            if let v = AXValueCreate(.cgPoint, &targetPos) {
+                let e = AXUIElementSetAttributeValue(activeWin, kAXPositionAttribute as CFString, v)
+                if e != .success { log("AX ⚠️ '\(appName)' set-position error \(e.rawValue)", level: .verbose) }
+            }
+            // Apply exact target size
+            if let v = AXValueCreate(.cgSize, &targetSize) {
+                let e = AXUIElementSetAttributeValue(activeWin, kAXSizeAttribute as CFString, v)
+                if e != .success { log("AX ⚠️ '\(appName)' set-size error \(e.rawValue)", level: .verbose) }
+            }
         }
 
-        log("AX ✅ '\(appName)' → (\(Int(axX)), \(Int(axY))) \(Int(axW))×\(Int(axH))", level: .verbose)
+        // Double-check verification loop (up to 3 passes)
+        for _ in 1...3 {
+            try? await Task.sleep(nanoseconds: 30_000_000) // 30ms
+            if let current = getCurrentFrame(of: activeWin) {
+                if isFrameClose(to: axTargetFrame, current: current, tolerance: 3.0) {
+                    break
+                }
+                // Discrepancy detected: re-apply position & size
+                if let v = AXValueCreate(.cgPoint, &targetPos) {
+                    _ = AXUIElementSetAttributeValue(activeWin, kAXPositionAttribute as CFString, v)
+                }
+                if let v = AXValueCreate(.cgSize, &targetSize) {
+                    _ = AXUIElementSetAttributeValue(activeWin, kAXSizeAttribute as CFString, v)
+                }
+            }
+        }
+
+        log("AX ✅ '\(appName)' final frame → (\(Int(axX)), \(Int(axY))) \(Int(axW))×\(Int(axH))", level: .verbose)
         return true
     }
 
     // MARK: - osascript fallback (nonisolated — safe on any thread)
 
-    nonisolated private func restoreViaOsascript(record: WindowRecord, targetFrame: CGRect, primaryScreenH: CGFloat) async {
+    nonisolated private func restoreViaOsascript(record: WindowRecord, targetFrame: CGRect, primaryScreenH: CGFloat) async -> Bool {
         let appName = record.windowID.appBundleID
         let x       = Int(targetFrame.origin.x)
         let y       = Int(primaryScreenH - targetFrame.origin.y - targetFrame.height)
@@ -1484,17 +3213,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             proc.waitUntilExit()
             let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let success = proc.terminationStatus == 0
             await MainActor.run { [weak self] in
-                if proc.terminationStatus == 0 {
+                if success {
                     self?.log("osascript ✅ '\(appName)' → (\(x), \(y)) \(right - x)×\(bottom - y)", level: .verbose)
                 } else {
                     self?.log("osascript ❌ '\(appName)': \(output.isEmpty ? "unknown error" : output)", level: .verbose)
                 }
             }
+            return success
         } catch {
             await MainActor.run { [weak self] in
                 self?.log("osascript ❌ could not launch for '\(appName)': \(error)", level: .verbose)
             }
+            return false
         }
     }
 
@@ -1504,27 +3236,124 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let f = record.globalFrame
         
         // Find which screen this window primarily lives on
-        guard let screen = NSScreen.screens.max(by: { $0.frame.intersection(f).area < $1.frame.intersection(f).area }) else {
+        guard let screen = NSScreen.screens.max(by: { $0.frame.intersection(f).area < $1.frame.intersection(f).area }) ?? NSScreen.main else {
             return f
         }
         
         let vf = screen.visibleFrame
         
-        // Standard Clamp: Ensure window stays within visible bounds (on top of Dock and below Menu Bar)
-        let targetY = max(f.origin.y, vf.minY)
-        let targetX = max(f.origin.x, vf.minX)
+        // Preserve exact saved width and height (only capped if window is physically larger than visible screen)
+        let targetW = min(f.width, vf.width)
+        let targetH = min(f.height, vf.height)
         
-        // Limit height/width so they don't push the window off the other side of the visible frame
-        let targetMaxY = min(f.origin.y + f.height, vf.maxY)
-        let targetMaxX = min(f.origin.x + f.width, vf.maxX)
+        // Clamp origin so the entire window fits inside visibleFrame without mutating dimensions
+        let targetX = min(max(f.origin.x, vf.minX), max(vf.minX, vf.maxX - targetW))
+        let targetY = min(max(f.origin.y, vf.minY), max(vf.minY, vf.maxY - targetH))
         
-        let finalW = max(50, targetMaxX - targetX)
-        let finalH = max(50, targetMaxY - targetY)
-        
-        return CGRect(x: targetX, y: targetY, width: finalW, height: finalH)
+        return CGRect(x: targetX, y: targetY, width: targetW, height: targetH)
+    }
+
+    // MARK: - AX Observer Event-Driven Tracking
+
+    /// Registers AX observers for all currently-running user apps and does an initial capture.
+    private func startAXObservers() {
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular || app.activationPolicy == .accessory {
+            attachAXObserver(to: app)
+        }
+        // One initial capture to populate liveRecords
+        scheduleAXEventFlush(delay: 0)
+    }
+
+    /// Removes all AX observers and clears storage.
+    private func stopAllAXObservers() {
+        for (_, entry) in axObservers {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), entry.source, .defaultMode)
+        }
+        axObservers.removeAll()
+    }
+
+    /// Attaches an AXObserver to the given app that fires on window-moved / resized / created / destroyed events.
+    private func attachAXObserver(to app: NSRunningApplication) {
+        let pid = app.processIdentifier
+        guard pid > 0, axObservers[pid] == nil else { return }
+        // Skip our own process (handled via NSWindow notifications)
+        guard app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        guard hasAccessibilityPermission else { return }
+
+        var observer: AXObserver?
+        // The C callback is a plain C function pointer — captures a raw unmanaged pointer to self.
+        // We hop to the MainActor explicitly so WindowManager's actor isolation is respected.
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let err = AXObserverCreate(pid, { _, _, _, refcon in
+            guard let refcon = refcon else { return }
+            let manager = Unmanaged<WindowManager>.fromOpaque(refcon).takeUnretainedValue()
+            Task { @MainActor in
+                manager.scheduleAXEventFlush()
+            }
+        }, &observer)
+
+        guard err == .success, let obs = observer else {
+            log("AX observer: failed to create for pid \(pid) — err \(err.rawValue)", level: .verbose, type: .system)
+            return
+        }
+
+        let axApp = AXUIElementCreateApplication(pid)
+        let notifications: [String] = [
+            kAXWindowMovedNotification,
+            kAXWindowResizedNotification,
+            kAXWindowCreatedNotification,
+            kAXUIElementDestroyedNotification
+        ]
+        for n in notifications {
+            // Errors here are expected for apps that don't expose AX windows — ignore them.
+            AXObserverAddNotification(obs, axApp, n as CFString, selfPtr)
+        }
+
+        let src = AXObserverGetRunLoopSource(obs)
+        CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
+        axObservers[pid] = (observer: obs, source: src)
+    }
+
+    /// Removes and destroys the AX observer for a given PID.
+    private func detachAXObserver(for pid: pid_t) {
+        guard let entry = axObservers[pid] else { return }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), entry.source, .defaultMode)
+        axObservers.removeValue(forKey: pid)
+    }
+
+    /// Coalesces AX notification bursts and rate-limits expensive full window scans.
+    /// A few apps emit these notifications while idle, so cancellation-based debouncing alone
+    /// would repeatedly allocate tasks and keep the process awake.
+    func scheduleAXEventFlush(delay: UInt64 = 500_000_000) { // 500 ms default
+        guard !isAXFlushScheduled else { return }
+        isAXFlushScheduled = true
+
+        // Keep live tracking responsive after a drag. Repeated idle notifications back off.
+        let elapsed = lastAXCaptureDate.map { Date().timeIntervalSince($0) } ?? .infinity
+        let throttleDelay = UInt64(max(0, axIdleCaptureInterval - elapsed) * 1_000_000_000)
+        let effectiveDelay = max(delay, throttleDelay)
+        axEventDebounceTask = Task { [weak self] in
+            if effectiveDelay > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: effectiveDelay)
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled, let self = self, self.isTracking else {
+                self?.isAXFlushScheduled = false
+                return
+            }
+            // Already on MainActor (inherited from the class isolation)
+            self.isAXFlushScheduled = false
+            self.lastAXCaptureDate = Date()
+            self.flushPendingSaves()
+        }
     }
 
     private func startPolling() {
+
         trackingTask?.cancel()
         trackingTask = Task { [weak self] in
             // Initial snapshot to avoid logging everything on start
@@ -1534,14 +3363,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 for r in records {
                     self.lastKnownWindows[r.windowID] = (r.globalFrame, r.id)
                 }
-                if !records.isEmpty {
-                    self.handleExternalChanges([:]) // Trigger a sync
-                }
+                self.liveRecords = records
+                self.lastWindowCount = records.count
             }
 
+            // Polling is a compatibility fallback. Start at five seconds for responsiveness,
+            // then exponentially back off while the desktop is unchanged to avoid idle wakeups.
+            var pollInterval: UInt64 = 5_000_000_000
+            let maximumPollInterval: UInt64 = 60_000_000_000
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-                // Always poll to keep liveRecords current.
+                do {
+                    try await Task.sleep(nanoseconds: pollInterval)
+                } catch {
+                    break
+                }
                 guard let self = self, isTracking else { continue }
                 
                 let fp = ScreenFingerprint.current()
@@ -1574,7 +3409,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         nextMap[r.windowID] = (r.globalFrame, r.id)
                     }
                     self.lastKnownWindows = nextMap
-                    self.handleExternalChanges([:])
+                    self.liveRecords = currentRecords
+                    self.lastWindowCount = currentRecords.count
+                    pollInterval = 5_000_000_000
+                } else {
+                    pollInterval = min(pollInterval * 2, maximumPollInterval)
                 }
             }
         }
@@ -1594,7 +3433,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     // MARK: - Persistence
 
-    private func persist() {
+    func persist() {
         do {
             let data = try JSONEncoder().encode(store)
             try data.write(to: saveURL, options: .atomic)
@@ -1660,7 +3499,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 if let app = NSWorkspace.shared.runningApplications.first(where: { 
                     $0.bundleIdentifier == appRef || $0.localizedName == appRef 
                 }) {
-                    return app.activationPolicy != .regular
+                    return app.activationPolicy != .regular && app.activationPolicy != .accessory
                 }
                 return false
             }
@@ -1755,6 +3594,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in
             let status = manager.authorizationStatus
+            self.locationAuthorizationStatus = status
             
             // If authorized, start a single request to get the initial location
             if status != .notDetermined && status != .denied && status != .restricted {
@@ -1791,6 +3631,86 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
             }
         }
+    }
+
+    /// Sends the Command+Shift+R keystroke (Reader Mode / Media Video Pop-up) to the frontmost application.
+    /// Can optionally check if there is an external monitor connected.
+    func sendCommandToFrontmostApp(targetBundleID: String? = nil, snapshot: LayoutSnapshot? = nil, delayOverride: Double? = nil) {
+        Task { @MainActor in
+            await self.sendCommandToFrontmostAppAsync(targetBundleID: targetBundleID, snapshot: snapshot, delayOverride: delayOverride)
+        }
+    }
+
+    func sendCommandToFrontmostAppAsync(targetBundleID: String? = nil, snapshot: LayoutSnapshot? = nil, delayOverride: Double? = nil) async {
+        guard !isScreenLocked else {
+            log("Command skipped: Screen is currently locked.", level: .verbose, type: .system)
+            return
+        }
+        guard AXIsProcessTrusted() else { return }
+        
+        let runningApps = NSWorkspace.shared.runningApplications
+        var targetApp: NSRunningApplication?
+        
+        if let bundleID = targetBundleID {
+            targetApp = runningApps.first(where: { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID })
+        }
+        
+        if targetApp == nil {
+            targetApp = runningApps.first(where: { $0.isActive })
+        }
+        
+        guard let app = targetApp else {
+            log("Command skipped: No target application found to activate.", level: .verbose, type: .system)
+            return
+        }
+        
+        let appBundleID = app.bundleIdentifier ?? ""
+        if let snap = snapshot, !snap.commandExcludedBundleIDs.contains(appBundleID) {
+            log("Command skipped: App '\(app.localizedName ?? appBundleID)' is not enabled in the active layout.", level: .moderate, type: .system)
+            return
+        }
+        
+        // If external monitor restriction is active, verify that we have at least 2 screens connected
+        if store.refreshFrontmostOnlyOnExternalDisplay {
+            guard NSScreen.screens.count >= 2 else {
+                log("Command skipped: Single monitor detected, but setting requires an external display.", level: .verbose, type: .system)
+                return
+            }
+        }
+        
+        // Ensure the app is active and brought to frontmost status
+        if !app.isActive {
+            app.activate()
+            if let url = app.bundleURL {
+                let config = NSWorkspace.OpenConfiguration()
+                config.activates = true
+                NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in }
+            }
+        }
+        
+        log("Sending Command+Shift+R (Reader/Video Mode) to app '\(app.localizedName ?? "")'", level: .moderate, type: .system)
+        
+        let delay = delayOverride ?? 0.3
+        let shouldAnimate = store.showCommandOverlayAnimation
+        
+        if delay > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+        
+        if shouldAnimate {
+            CommandOverlayManager.shared.showOverlay(for: app)
+        }
+        
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let rKeyDown = CGEvent(keyboardEventSource: src, virtualKey: 15, keyDown: true)
+        rKeyDown?.flags = [.maskCommand, .maskShift]
+        let rKeyUp = CGEvent(keyboardEventSource: src, virtualKey: 15, keyDown: false)
+        rKeyUp?.flags = []
+        
+        rKeyDown?.post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms key down hold
+        rKeyUp?.post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: 30_000_000) // 30ms settle
     }
 }
 

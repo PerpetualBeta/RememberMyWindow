@@ -108,7 +108,7 @@ struct SnapshotListView: View {
                             .liquidGlass(
                                 isSelected: manager.selectedSnapshotKey == live.key,
                                 prominent: true,
-                                tint: themeColor.color ?? .green,
+                                tint: themeColor.color(seed: 1),
                                 isHovered: hoveredKey == live.key
                             )
                             .contentShape(Rectangle())
@@ -116,13 +116,29 @@ struct SnapshotListView: View {
                                 if isHovered { hoveredKey = live.key }
                                 else if hoveredKey == live.key { hoveredKey = nil }
                             }
-                            .onTapGesture { manager.selectedSnapshotKey = live.key }
+                            .onTapGesture {
+                                manager.selectedSnapshotKey = live.key
+                                manager.selectedAppBundleID = nil
+                            }
                     } else {
                         Text("No active layout for this screen config".localized(appLanguage))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .padding(.leading, 8)
                     }
+
+                    // SCREEN ID — fixed below the live layout row
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("SCREEN ID".localized(appLanguage))
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.tertiary)
+                        Text(manager.currentFingerprint.key)
+                            .font(.system(size: 8).monospaced())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 8)
                 }
 
                 // SAVED SESSIONS SECTION
@@ -145,7 +161,7 @@ struct SnapshotListView: View {
                                 .liquidGlass(
                                     isSelected: manager.selectedSnapshotKey == item.key,
                                     prominent: false,
-                                    tint: themeColor.color ?? .blue,
+                                    tint: themeColor.color(seed: 2),
                                     isHovered: hoveredKey == item.key
                                 )
                                 .contentShape(Rectangle())
@@ -153,7 +169,10 @@ struct SnapshotListView: View {
                                     if isHovered { hoveredKey = item.key }
                                     else if hoveredKey == item.key { hoveredKey = nil }
                                 }
-                                .onTapGesture { manager.selectedSnapshotKey = item.key }
+                                .onTapGesture {
+                                    manager.selectedSnapshotKey = item.key
+                                    manager.selectedAppBundleID = nil
+                                }
                                 .contextMenu {
                                     Button("Restore") { manager.restore(key: item.key) }
                                         .disabled(!manager.canRestore(snapshot: item.snapshot))
@@ -169,15 +188,19 @@ struct SnapshotListView: View {
             }
             .padding(12)
         }
+        .scrollContentBackground(.hidden)
         .navigationTitle("Remember")
     }
 
     func snapshotRow(_ snapshot: LayoutSnapshot, key: String, isLive: Bool) -> some View {
-        let rowTint = isLive ? (themeColor.color ?? Color.accentColor) : (themeColor.color ?? Color.primary)
+        let isApplicable = isLive || (manager.currentApplicableSnapshot?.id == snapshot.id)
+        let rowTint = isApplicable ? themeColor.color(seed: 0) : Color.primary
+        let displayCount = ScreenFingerprint.from(key: snapshot.screenKey).displays.count
+        let systemIcon = displayCount > 1 ? "display.2" : "display"
         return HStack(spacing: 12) {
-            Image(systemName: isLive ? "display.2" : "display")
+            Image(systemName: systemIcon)
                 .font(.system(size: 18))
-                .foregroundStyle(isLive ? (themeColor.color ?? Color.accentColor) : .secondary)
+                .foregroundStyle(isApplicable ? themeColor.color(seed: 0) : .secondary)
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -190,8 +213,8 @@ struct SnapshotListView: View {
                             .font(.system(size: 11, weight: .bold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background((themeColor.color ?? Color.accentColor).opacity(0.15))
-                            .foregroundStyle(themeColor.color ?? Color.accentColor)
+                            .background(themeColor.color(seed: 3).opacity(0.15))
+                            .foregroundStyle(themeColor.color(seed: 3))
                             .clipShape(Capsule())
                     }
                 }
@@ -199,13 +222,14 @@ struct SnapshotListView: View {
                 if isLive {
                     Text(ScreenFingerprint.from(key: snapshot.screenKey).readableName)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(themeColor.color ?? Color.accentColor)
+                        .foregroundStyle(themeColor.color(seed: 4))
                         .lineLimit(1)
                 }
 
                 Text("\(snapshot.records.count) windows · \(snapshot.updatedAt.formatted(.relative(presentation: .named).locale(currentLocale)))")
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
 
             Spacer()
@@ -213,7 +237,8 @@ struct SnapshotListView: View {
             ScreenLayoutThumbnail(
                 screenKey: snapshot.screenKey,
                 tint: rowTint,
-                isLive: isLive
+                isLive: isLive,
+                isHighlighted: isApplicable
             )
         }
     }
@@ -241,106 +266,108 @@ struct SnapshotDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(snapshot.displayName)
-                            .font(.system(.title2, design: .rounded).weight(.semibold))
-                        Text(ScreenFingerprint.from(key: snapshot.screenKey).readableName)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.tertiary)
+                HStack(alignment: .top, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(snapshot.displayName)
+                                .font(.system(.title2, design: .rounded).weight(.semibold))
+                            Text(ScreenFingerprint.from(key: snapshot.screenKey).readableName)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.tertiary)
+                        }
+                        
+                        HStack(spacing: 24) {
+                            statPill(label: "Windows".localized(appLanguage), value: "\(snapshot.records.count)")
+                            statPill(label: "Created".localized(appLanguage), value: snapshot.createdAt.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: currentLocale)))
+                            statPill(label: "Updated".localized(appLanguage), value: snapshot.updatedAt.formatted(.relative(presentation: .named).locale(currentLocale)))
+                        }
                     }
                     
-                    Spacer()
-                    
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("SCREEN ID".localized(appLanguage))
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.tertiary)
-                        Text(snapshot.screenKey)
-                            .font(.system(size: 9).monospaced())
-                            .foregroundStyle(.tertiary)
-                            .multilineTextAlignment(.trailing)
-                            .frame(maxWidth: 240)
+                    if let location = snapshot.location, !snapshot.isAutoSave && manager.store.saveLocationEnabled {
+                        LocationBlock(snapshotID: key, location: location, isUpdated: snapshot.updatedAt.timeIntervalSince(snapshot.createdAt) > 1)
                     }
-                }
-
-                HStack(spacing: 24) {
-                    statPill(label: "Windows".localized(appLanguage), value: "\(snapshot.records.count)")
-                    statPill(label: "Created".localized(appLanguage), value: snapshot.createdAt.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: currentLocale)))
-                    statPill(label: "Updated".localized(appLanguage), value: snapshot.updatedAt.formatted(.relative(presentation: .named).locale(currentLocale)))
                 }
                 
-                if isPhysicalMismatch {
-                    HStack(spacing: 10) {
-                        Image(systemName: "display.and.arrow.down")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("New monitor detected with the same name".localized(appLanguage))
-                                .font(.system(size: 12, weight: .bold))
-                            Text("This is a different physical unit than the one in this session.".localized(appLanguage))
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.blue.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.blue.opacity(0.15), lineWidth: 1)
-                    }
-                }
 
-                if let location = snapshot.location, !snapshot.isAutoSave {
-                    LocationBlock(snapshotID: key, location: location, isUpdated: snapshot.updatedAt.timeIntervalSince(snapshot.createdAt) > 1)
-                }
 
-                if !manager.canRestore(snapshot: snapshot) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "display.trianglebadge.exclamationmark")
-                            .font(.title3)
-                            .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("External Screens Missing".localized(appLanguage))
-                                .font(.subheadline.weight(.semibold))
-                            Text("Connect the required displays to enable restoration of this session.".localized(appLanguage))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                if isPhysicalMismatch || !manager.canRestore(snapshot: snapshot) {
+                    HStack(alignment: .top, spacing: 10) {
+                        if isPhysicalMismatch {
+                            HStack(spacing: 10) {
+                                Image(systemName: "display.and.arrow.down")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(.blue)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("New monitor detected with the same name".localized(appLanguage))
+                                        .font(.system(size: 12, weight: .bold))
+                                    Text("This is a different physical unit than the one in this session.".localized(appLanguage))
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.blue.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.blue.opacity(0.15), lineWidth: 1)
+                            }
                         }
-                    }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.orange.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+
+                        if !manager.canRestore(snapshot: snapshot) {
+                            HStack(spacing: 10) {
+                                Image(systemName: "display.trianglebadge.exclamationmark")
+                                    .font(.title3)
+                                    .foregroundStyle(.orange)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("External Screens Missing".localized(appLanguage))
+                                        .font(.subheadline.weight(.semibold))
+                                    Text("Connect the required displays to enable restoration of this session.".localized(appLanguage))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.orange.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+                            }
+                        }
                     }
                 }
             }
             .padding(24)
-            .background(Color.black.opacity(0.04))
+            .background(Color.clear)
 
             Divider()
 
             // Window list
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(snapshot.records) { record in
-                        let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
-                        windowRow(record, isForeground: isForeground)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                            .liquidGlass(isSelected: isForeground, prominent: false, tint: themeColor.color, isHovered: false)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(snapshot.records.filter { !$0.windowID.appBundleID.isEmpty }) { record in
+                            let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
+                            let isCurrentApp = record.windowID.appBundleID == manager.selectedAppBundleID
+                            windowRow(record, isForeground: isForeground, isCurrentApp: isCurrentApp)
+                                .id(record.id)
+                        }
                     }
-
+                    .padding(24)
                 }
-                .padding(24)
+                .onAppear {
+                    scrollToCurrentApp(using: proxy)
+                }
+                .onChange(of: manager.selectedAppBundleID) { _ in
+                    scrollToCurrentApp(using: proxy)
+                }
             }
+            .scrollContentBackground(.hidden)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -352,11 +379,59 @@ struct SnapshotDetailView: View {
         record.isFullScreenMode
     }
 
-    func windowRow(_ record: WindowRecord, isForeground: Bool) -> some View {
+    func windowRow(_ record: WindowRecord, isForeground: Bool, isCurrentApp: Bool) -> some View {
         let isFull = isEntireScreen(record)
-        let rowTint = isFull ? Color.indigo : (themeColor.color ?? .accentColor)
+        let rowTint = isFull ? Color.indigo : themeColor.color(seed: 6)
+        
+        return WindowRowContainer(
+            record: record,
+            isForeground: isForeground,
+            isCurrentApp: isCurrentApp,
+            isFull: isFull,
+            rowTint: rowTint,
+            snapshot: snapshot,
+            key: key,
+            appLanguage: appLanguage,
+            themeColor: themeColor
+        )
+    }
 
-        return HStack(spacing: 12) {
+    private func scrollToCurrentApp(using proxy: ScrollViewProxy) {
+        guard let currentAppID = manager.selectedAppBundleID,
+              let record = snapshot.records.first(where: { $0.windowID.appBundleID == currentAppID }) else {
+            return
+        }
+        withAnimation(.smooth) {
+            proxy.scrollTo(record.id, anchor: .center)
+        }
+    }
+
+    func statPill(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label.uppercased())
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .font(.caption.weight(.medium))
+        }
+    }
+}
+
+struct WindowRowContainer: View {
+    let record: WindowRecord
+    let isForeground: Bool
+    let isCurrentApp: Bool
+    let isFull: Bool
+    let rowTint: Color
+    let snapshot: LayoutSnapshot
+    let key: String
+    let appLanguage: AppLanguage
+    let themeColor: ThemeColor
+    @EnvironmentObject var manager: WindowManager
+    @State private var isRowHovered = false
+    
+    var body: some View {
+        HStack(spacing: 12) {
             // Icon: full-screen variant vs normal positioned preview
             if isFull {
                 FullScreenPreviewIcon(tint: rowTint)
@@ -368,8 +443,20 @@ struct SnapshotDetailView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
+                    AppIconView(bundleID: record.windowID.appBundleID)
+                        .frame(width: 15, height: 15)
+                        .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
                     Text(record.windowID.appName ?? record.windowID.appBundleID)
                         .font(.system(.headline, design: .rounded).weight(.medium))
+                    if isCurrentApp {
+                        Text("Active".localized(appLanguage))
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.15))
+                            .foregroundStyle(Color.green)
+                            .clipShape(Capsule())
+                    }
                     if isFull {
                         HStack(spacing: 3) {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -386,7 +473,7 @@ struct SnapshotDetailView: View {
                     if isForeground {
                         Image(systemName: "square.3.layers.3d.top.filled")
                             .font(.system(size: 10))
-                            .foregroundStyle(themeColor.color ?? Color.accentColor)
+                            .foregroundStyle(themeColor.color(seed: 5))
                             .help("This app will be brought to the front upon restore")
                     }
                 }
@@ -411,6 +498,33 @@ struct SnapshotDetailView: View {
                 }
             }
             Spacer()
+            
+            if !snapshot.isAutoSave {
+                HStack(spacing: 8) {
+                    let appID = record.windowID.appBundleID
+                    let isIncluded = snapshot.commandExcludedBundleIDs.contains(appID)
+                    
+                    // ⌘⇧R button: always visible, showing green checkmark when enabled, dim when disabled.
+                    ExcludeCommandButton(appLanguage: appLanguage, isIncluded: isIncluded) {
+                        manager.toggleCommandExclusion(key: key, bundleID: appID)
+                    }
+                    
+                    // Bring-to-front: always visible when active (filled), only on hover otherwise
+                    if isForeground || isRowHovered {
+                        BringToFrontButton(appLanguage: appLanguage, isActive: isForeground) {
+                            manager.setForegroundApp(key: key, bundleID: appID)
+                            manager.bringAppToFront(bundleID: appID)
+                        }
+                    } else {
+                        Spacer().frame(width: 26, height: 26)
+                    }
+                    
+                    DeleteSessionAppButton(appLanguage: appLanguage) {
+                        manager.removeAppFromSnapshot(key: key, windowID: record.windowID)
+                    }
+                }
+            }
+            
             VStack(alignment: .trailing, spacing: 2) {
                 Text("\(Int(record.globalFrame.width)) × \(Int(record.globalFrame.height))")
                     .font(.footnote.monospaced())
@@ -419,53 +533,22 @@ struct SnapshotDetailView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .contextMenu {
-            let appID = record.windowID.appBundleID
-            let appName = record.windowID.appName ?? appID
-
-            Button {
-                manager.setForegroundApp(key: key, bundleID: appID)
-                manager.bringAppToFront(bundleID: appID)
-            } label: {
-                Label("Bring \"\(appName)\" to Front", systemImage: "square.3.layers.3d.top.filled")
-            }
-
-            Divider()
-
-            Button {
-                manager.restore(key: key)
-                // Small delay so windows settle, then bring this app to top
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    manager.bringAppToFront(bundleID: appID)
-                }
-            } label: {
-                Label("Restore Layout & Bring \"\(appName)\" to Front", systemImage: "arrow.counterclockwise")
-            }
-            .disabled(!manager.canRestore(snapshot: snapshot))
-
-            if !snapshot.isAutoSave {
-                Divider()
-
-                Button(role: .destructive) {
-                    manager.removeAppFromSnapshot(key: key, windowID: record.windowID)
-                } label: {
-                    Label("Remove from Session", systemImage: "trash")
-                }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .liquidGlass(isSelected: isCurrentApp || isForeground, prominent: false, tint: themeColor.color(seed: 6), isHovered: isRowHovered)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isRowHovered ? themeColor.color(seed: 6).opacity(0.35) : Color.clear, lineWidth: 1.5)
+        }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) {
+                isRowHovered = hovering
             }
         }
     }
-
-    func statPill(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label.uppercased())
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            Text(value)
-                .font(.caption.weight(.medium))
-        }
-    }
-
 }
+
+
 
 struct LocationBlock: View {
     @EnvironmentObject var manager: WindowManager
@@ -502,18 +585,18 @@ struct LocationBlock: View {
                         NSWorkspace.shared.open(url)
                     }
             }
-            .frame(width: 120, height: 80)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .frame(width: 100, height: 80)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(Color.white.opacity(0.15), lineWidth: 1)
             }
             .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
             .fixedSize()
             
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Label((isUpdated ? "Saved&Updated At" : "Saved At").localized(appLanguage), systemImage: "location.fill")
-                    .font(.system(size: 10, weight: .black))
+                    .font(.system(size: 9, weight: .black))
                     .foregroundStyle(.secondary)
                     .opacity(0.8)
                 
@@ -523,7 +606,7 @@ struct LocationBlock: View {
                         isEditing = false
                     })
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
                     .focused($isFocused)
                     .onAppear {
                         editedAddress = location.address ?? "\(location.latitude), \(location.longitude)"
@@ -531,10 +614,10 @@ struct LocationBlock: View {
                     }
                 } else {
                     Text(location.address ?? "\(location.latitude), \(location.longitude)")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(.primary)
-                        .lineLimit(3)
-                        .frame(maxWidth: 200, alignment: .leading)
+                        .lineLimit(2)
+                        .frame(maxWidth: 170, alignment: .leading)
                         .onTapGesture {
                             isEditing = true
                         }
@@ -546,10 +629,9 @@ struct LocationBlock: View {
                         .foregroundStyle(.tertiary)
                 }
             }
-            .frame(width: 200, alignment: .leading)
+            .frame(width: 170, alignment: .leading)
         }
-        .padding(12)
-        .frame(height: 104)
+        .padding(10)
         .fixedSize(horizontal: true, vertical: true)
         .background {
             VisualEffectView(material: .selection, blendingMode: .withinWindow)
@@ -560,5 +642,105 @@ struct LocationBlock: View {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
         }
+    }
+}
+
+struct DeleteSessionAppButton: View {
+    let appLanguage: AppLanguage
+    let action: () -> Void
+    @State private var isHovered = false
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(isHovered ? Color.red.opacity(0.15) : Color.clear)
+                .frame(width: 26, height: 26)
+            Image(systemName: "trash")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isHovered ? Color.red : Color.red.opacity(0.7))
+        }
+        .frame(width: 26, height: 26)
+        .contentShape(Circle())
+        .onTapGesture { action() }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering }
+        }
+        .help("Remove from Session".localized(appLanguage))
+    }
+}
+
+struct ExcludeCommandButton: View {
+    let appLanguage: AppLanguage
+    let isIncluded: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+    
+    var body: some View {
+        ZStack {
+            // Background capsule
+            Capsule()
+                .fill(isIncluded
+                      ? Color.green.opacity(0.1)
+                      : (isHovered ? Color.primary.opacity(0.08) : Color.primary.opacity(0.02)))
+                .frame(width: 56, height: 26)
+            
+            // Command badge — use a ZStack.topTrailing for the inclusion checkmark badge
+            ZStack(alignment: .topTrailing) {
+                Text("⌘⇧R")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(isIncluded 
+                                     ? Color.green.opacity(0.85) 
+                                     : (isHovered ? Color.primary.opacity(0.65) : Color.secondary.opacity(0.35)))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                
+                if isIncluded {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 6.5, weight: .black))
+                        .foregroundStyle(Color.white)
+                        .padding(1.5)
+                        .background(Color.green, in: Circle())
+                        .offset(x: 3, y: -3)
+                }
+            }
+        }
+        .frame(width: 60, height: 30)
+        .contentShape(Capsule())
+        .onTapGesture { action() }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering }
+        }
+        .help(isIncluded
+              ? "Disable Command Trigger for this app".localized(appLanguage)
+              : "Enable Command Trigger for this app".localized(appLanguage))
+    }
+}
+
+struct BringToFrontButton: View {
+    let appLanguage: AppLanguage
+    let isActive: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(isActive
+                      ? Color.accentColor
+                      : (isHovered ? Color.accentColor.opacity(0.15) : Color.clear))
+                .frame(width: 26, height: 26)
+            Image(systemName: "square.3.layers.3d.top.filled")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isActive ? Color.white : (isHovered ? Color.accentColor : Color.secondary))
+        }
+        .frame(width: 26, height: 26)
+        .contentShape(Circle())
+        .onTapGesture { action() }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering }
+        }
+        .help(isActive
+              ? "Click to unset Bring to Front".localized(appLanguage)
+              : "Bring to Front".localized(appLanguage))
     }
 }

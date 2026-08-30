@@ -52,7 +52,8 @@ final class DesktopToggleManager: ObservableObject {
 
     // MARK: - Tap lifecycle
 
-    private func start() {
+    func start() {
+        guard isEnabled else { return }
         guard eventTap == nil else { return }
 
         guard AXIsProcessTrusted() else {
@@ -118,7 +119,7 @@ final class DesktopToggleManager: ObservableObject {
         }
     }
 
-    private func stop() {
+    func stop() {
         retryTimer?.invalidate()
         retryTimer = nil
         guard let tap = eventTap else { return }
@@ -213,6 +214,7 @@ final class DesktopToggleManager: ObservableObject {
         }
 
         isDesktopHidden = true
+        WindowManager.shared.deliverNotification(type: .desktopToggle, title: "Desktop Clean", subtitle: "All windows hidden", isCompact: true)
     }
 
     // MARK: - Show
@@ -273,6 +275,8 @@ final class DesktopToggleManager: ObservableObject {
         if restoreOnUnhide {
             WindowManager.shared.log("Cmd+D action: triggering layout restore", type: .system)
             WindowManager.shared.restoreNow()
+        } else {
+            WindowManager.shared.deliverNotification(type: .desktopToggle, title: "Windows Restored", subtitle: "All windows unhidden", isCompact: true)
         }
     }
 

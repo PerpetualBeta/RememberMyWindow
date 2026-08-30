@@ -1,3 +1,4 @@
+// this file is in charge of the notch notification and its behavior and appearance plus its logic and its animations 
 import SwiftUI
 import AppKit
 import CoreGraphics
@@ -31,10 +32,14 @@ private func builtInScreen() -> NSScreen {
 final class NotificationData: ObservableObject {
     @Published var title: String
     @Published var subtitle: String
+    @Published var bundleID: String?
+    @Published var appIcon: NSImage?
     
-    init(title: String, subtitle: String) {
+    init(title: String, subtitle: String, bundleID: String? = nil, appIcon: NSImage? = nil) {
         self.title = title
         self.subtitle = subtitle
+        self.bundleID = bundleID
+        self.appIcon = appIcon
     }
 }
 
@@ -46,10 +51,21 @@ final class NotchNotificationWindow: NSPanel {
     private let data: NotificationData
     private var dismissTimer: Timer?
 
-    init(title: String, subtitle: String, isCompact: Bool = false) {
+    static func isAllowedSubtitle(_ subtitle: String) -> Bool {
+        let trimmed = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == "fn" || trimmed.contains("⇪")
+    }
+
+    init(title: String, subtitle: String, isCompact: Bool = false, bundleID: String? = nil, appIcon: NSImage? = nil) {
+        let finalSubtitle: String
+        if isCompact {
+            finalSubtitle = Self.isAllowedSubtitle(subtitle) ? subtitle : ""
+        } else {
+            finalSubtitle = subtitle
+        }
         self.isCompact = isCompact
-        self.pillWidth = isCompact ? 180 : 280
-        self.data = NotificationData(title: title, subtitle: subtitle)
+        self.pillWidth = isCompact ? (finalSubtitle.isEmpty ? 180 : 215) : 280
+        self.data = NotificationData(title: title, subtitle: finalSubtitle, bundleID: bundleID, appIcon: appIcon)
         
         let notchDepth = builtInScreen().safeAreaInsets.top > 0 ? builtInScreen().safeAreaInsets.top : 24.0
         let dynamicPillHeight = notchDepth + (isCompact ? 24.0 : 38.0)
@@ -60,7 +76,7 @@ final class NotchNotificationWindow: NSPanel {
             backing: .buffered,
             defer: false
         )
-        level              = .screenSaver
+        level              = NSWindow.Level(Int(CGWindowLevelForKey(.popUpMenuWindow)) + 1)
         backgroundColor    = .clear
         isOpaque           = false
         hasShadow          = false
@@ -68,23 +84,33 @@ final class NotchNotificationWindow: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     }
 
-    func update(title: String, subtitle: String) {
+    func update(title: String, subtitle: String, bundleID: String? = nil, appIcon: NSImage? = nil) {
+        let finalSubtitle: String
+        if isCompact {
+            finalSubtitle = Self.isAllowedSubtitle(subtitle) ? subtitle : ""
+        } else {
+            finalSubtitle = subtitle
+        }
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
             data.title = title
-            data.subtitle = subtitle
+            data.subtitle = finalSubtitle
+            data.bundleID = bundleID
+            if let icon = appIcon { data.appIcon = icon }
         }
         resetDismissTimer()
     }
 
     func show() {
+        guard !WindowManager.shared.isScreenLocked else { return }
         let screen = builtInScreen()
         let sf = screen.frame
         let notchDepth = screen.safeAreaInsets.top > 0 ? screen.safeAreaInsets.top : 24.0
         let dynamicPillHeight = notchDepth + (isCompact ? 24.0 : 38.0)
-        let visibleY  = sf.maxY - dynamicPillHeight
+        let windowHeight = dynamicPillHeight + 20.0
+        let visibleY  = sf.maxY - windowHeight
         let originX   = sf.midX - self.pillWidth / 2
 
-        setFrame(NSRect(x: originX, y: visibleY, width: self.pillWidth, height: dynamicPillHeight), display: true)
+        setFrame(NSRect(x: originX, y: visibleY, width: self.pillWidth, height: windowHeight), display: true)
         self.alphaValue = 1.0
 
         let rootView = NotchNotificationView(
@@ -96,7 +122,9 @@ final class NotchNotificationWindow: NSPanel {
             onDismiss: { [weak self] in self?.dismiss() }
         )
         let hosting = NSHostingView(rootView: rootView)
-        hosting.frame = NSRect(x: 0, y: 0, width: self.pillWidth, height: dynamicPillHeight)
+        hosting.wantsLayer = true
+        hosting.layer?.backgroundColor = NSColor.clear.cgColor
+        hosting.frame = NSRect(x: 0, y: 0, width: self.pillWidth, height: windowHeight)
         hosting.autoresizingMask = [.width, .height]
         contentView = hosting
 
@@ -106,7 +134,7 @@ final class NotchNotificationWindow: NSPanel {
 
     private func resetDismissTimer() {
         dismissTimer?.invalidate()
-        let duration: TimeInterval = isCompact ? 2.0 : 5.0
+        let duration: TimeInterval = isCompact ? 2.2 : 5.0
         dismissTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
             self?.dismiss()
         }
@@ -116,7 +144,7 @@ final class NotchNotificationWindow: NSPanel {
         dismissTimer?.invalidate()
         dismissTimer = nil
         NotificationCenter.default.post(name: NSNotification.Name("NotchDismiss"), object: nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             self?.close()
         }
     }
@@ -132,97 +160,398 @@ struct NotchNotificationView: View {
     let isCompact: Bool
     let onDismiss: () -> Void
 
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @State private var appeared  = false
     @State private var isHovered = false
+    @State private var dotPulse  = false
+    @State private var iconDrop  = false
+
+    private var accentColor: Color {
+        if themeColor == .black {
+            return Color(white: 0.88)
+        }
+        return themeColor.color ?? Color(red: 0.2, green: 0.9, blue: 0.5)
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Color.clear
-                .overlay(
-                    RoundedRectangle(cornerRadius: isCompact ? 12 : 18, style: .continuous)
-                        .fill(Color.black)
-                        .padding(.top, isCompact ? -12 : -18)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: isCompact ? 12 : 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                        .padding(.top, isCompact ? -12 : -18)
-                )
-                .clipped()
+            // Main Hardware Notch Body & Border (Extended upwards into bezel with seamless bottom curvature)
+            ZStack {
+                RoundedRectangle(cornerRadius: isCompact ? 14 : 18, style: .continuous)
+                    .fill(Color.black)
+                    .padding(.top, -100)
 
-            HStack(spacing: isCompact ? 8 : 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color(red: 0.2, green: 0.9, blue: 0.5).opacity(0.22))
-                        .frame(width: isCompact ? 18 : 30, height: isCompact ? 18 : 30)
-                        .scaleEffect(appeared ? 1.0 : 0.55)
-                        .animation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true), value: appeared)
-                    Circle()
-                        .fill(Color(red: 0.2, green: 0.9, blue: 0.5))
-                        .frame(width: isCompact ? 6 : 9, height: isCompact ? 6 : 9)
+                RoundedRectangle(cornerRadius: isCompact ? 14 : 18, style: .continuous)
+                    .stroke(Color.white.opacity(appeared ? 0.38 : 0.12), lineWidth: 1.0)
+                    .padding(.top, -100)
+                    .padding(.bottom, 0.5)
+
+                RoundedRectangle(cornerRadius: isCompact ? 14 : 18, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(appeared ? 0.3 : 0.1),
+                                accentColor.opacity(appeared ? 0.5 : 0.15),
+                                .white.opacity(appeared ? 0.3 : 0.1)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ),
+                        lineWidth: 1.0
+                    )
+                    .padding(.top, -100)
+                    .padding(.bottom, 0.5)
+            }
+            .frame(width: pillWidth, height: pillHeight)
+
+            HStack(spacing: isCompact ? 8 : 10) {
+                // Far-Left Icon/Dot dropping down from top-left
+                Group {
+                    if let icon = data.appIcon ?? (data.bundleID.flatMap { bID in
+                        NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bID })?.icon
+                            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bID).map { NSWorkspace.shared.icon(forFile: $0.path) }
+                    }) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .interpolation(.high)
+                            .antialiased(true)
+                            .frame(width: isCompact ? 18 : 22, height: isCompact ? 18 : 22)
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .shadow(color: accentColor.opacity(0.4), radius: 3)
+                            .offset(y: iconDrop ? 0 : -35)
+                            .scaleEffect(iconDrop ? 1.0 : 0.25, anchor: .topLeading)
+                            .opacity(iconDrop ? 1.0 : 0.0)
+                            .animation(.spring(response: 0.42, dampingFraction: 0.65), value: iconDrop)
+                    } else {
+                        ZStack {
+                            // Pulsing outer ripple ring
+                            Circle()
+                                .stroke(accentColor, lineWidth: 1.5)
+                                .frame(width: isCompact ? 16 : 22, height: isCompact ? 16 : 22)
+                                .scaleEffect(dotPulse ? 1.55 : 0.55)
+                                .opacity(dotPulse ? 0.0 : 0.85)
+
+                            // Glowing solid center dot
+                            Circle()
+                                .fill(accentColor)
+                                .frame(width: isCompact ? 5.5 : 7.5, height: isCompact ? 5.5 : 7.5)
+                                .shadow(color: accentColor.opacity(0.85), radius: 4, x: 0, y: 0)
+                        }
+                        .offset(y: iconDrop ? 0 : -35)
+                        .scaleEffect(iconDrop ? 1.0 : 0.25, anchor: .topLeading)
+                        .opacity(iconDrop ? 1.0 : 0.0)
+                        .animation(.spring(response: 0.42, dampingFraction: 0.65), value: iconDrop)
+                    }
                 }
+                .padding(.leading, isCompact ? 8 : 12)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(data.title)
-                        .font(.system(size: isCompact ? 9.5 : 11, weight: .semibold))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .id(data.title)
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .move(edge: .bottom)).combined(with: .scale(scale: 0.9)),
-                            removal: .opacity.combined(with: .move(edge: .top)).combined(with: .scale(scale: 1.1))
-                        ))
-                    
-                    if !isCompact {
-                        Text(data.subtitle)
-                            .font(.system(size: 9.5, weight: .regular))
-                            .foregroundColor(.white.opacity(0.5))
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(data.title)
+                            .font(.system(size: isCompact ? 11 : 12.5, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
                             .lineLimit(1)
-                            .id(data.subtitle)
+                            .minimumScaleFactor(0.8)
+                            .id(data.title)
                             .transition(.asymmetric(
                                 insertion: .opacity.combined(with: .move(edge: .bottom)).combined(with: .scale(scale: 0.9)),
                                 removal: .opacity.combined(with: .move(edge: .top)).combined(with: .scale(scale: 1.1))
                             ))
+                        
+                        if !isCompact && !data.subtitle.isEmpty {
+                            Text(data.subtitle)
+                                .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                                .foregroundColor(.white.opacity(0.6))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                                .id(data.subtitle)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .bottom)).combined(with: .scale(scale: 0.9)),
+                                    removal: .opacity.combined(with: .move(edge: .top)).combined(with: .scale(scale: 1.1))
+                                ))
+                        }
+                    }
+                    
+                    if isCompact && !data.subtitle.isEmpty && NotchNotificationWindow.isAllowedSubtitle(data.subtitle) {
+                        let isSymbol = data.subtitle.contains("⇪")
+                        Text(data.subtitle)
+                            .font(.system(size: isSymbol ? 13 : 9.5, weight: .bold, design: isSymbol ? .default : .monospaced))
+                            .foregroundColor(.white.opacity(0.95))
+                            .padding(.horizontal, isSymbol ? 6 : 5.5)
+                            .padding(.vertical, isSymbol ? 1 : 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(Color.white.opacity(0.16))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            .stroke(Color.white.opacity(0.28), lineWidth: 0.5)
+                                    )
+                            )
+                            .id(data.subtitle)
+                            .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     }
                 }
-                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: data.title)
+                .animation(.spring(response: 0.38, dampingFraction: 0.78), value: data.title)
 
-                Spacer()
-
-                if isHovered && !isCompact {
-                    Button(action: onDismiss) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(.white.opacity(0.65))
-                            .frame(width: 20, height: 20)
-                            .background(Color.white.opacity(0.12))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .transition(.opacity.combined(with: .scale(scale: 0.65)))
-                }
+                Spacer(minLength: 4)
             }
-            .padding(.horizontal, isCompact ? 10 : 14)
-            .frame(height: isCompact ? 24 : 38)
+            .padding(.horizontal, isCompact ? 8 : 14)
+            .padding(.bottom, isCompact ? 4 : 8)
+            .frame(height: isCompact ? 26 : 40)
+            .opacity(appeared ? 1.0 : 0.0)
+            .offset(y: appeared ? 0 : -6)
         }
-        .frame(width: appeared ? pillWidth : (isCompact ? 100 : 160), height: appeared ? pillHeight : notchDepth, alignment: .bottom)
-        .shadow(color: .black.opacity(appeared ? 0.55 : 0), radius: appeared ? (isCompact ? 10 : 18) : 0, x: 0, y: isCompact ? 4 : 6)
-        .opacity(appeared ? 1.0 : 0.0)
-        .scaleEffect(appeared ? 1.0 : 0.8, anchor: .top)
         .frame(width: pillWidth, height: pillHeight, alignment: .top)
-        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: appeared)
-        .onAppear { 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-                appeared = true 
+        .shadow(color: .black.opacity(appeared ? 0.55 : 0), radius: appeared ? 14 : 0, x: 0, y: 5)
+        .opacity(appeared ? 1.0 : 0.0)
+        .scaleEffect(x: appeared ? 1.0 : 0.88, y: appeared ? 1.0 : 0.01, anchor: .top)
+        .animation(.spring(response: 0.38, dampingFraction: 0.78), value: appeared)
+        .onAppear {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+                appeared = true
+            }
+            withAnimation(.easeOut(duration: 0.85).repeatForever(autoreverses: false)) {
+                dotPulse = true
+            }
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.65).delay(0.04)) {
+                iconDrop = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NotchDismiss"))) { _ in
-            appeared = false
+            withAnimation(.easeOut(duration: 0.3)) {
+                appeared = false
+                iconDrop = false
+            }
         }
         .onHover { hovering in
             if !isCompact {
                 withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
             }
+        }
+    }
+}
+
+// MARK: - Position HUD (notch-drop pill with Done / Cancel buttons)
+
+/// A persistent notch-style HUD that stays on screen until the user clicks Done or Cancel.
+/// Drops from the top of the active screen using the same geometry as NotchNotificationView.
+final class NotchPositionHUDWindow: NSPanel {
+    var onDone:   (() -> Void)?
+    var onCancel: (() -> Void)?
+    private let appName:  String
+    private let bundleID: String?
+
+    // Fixed pill size (wide enough for all content + both buttons)
+    private let pillW: CGFloat = 540
+    // pillH will be set in show() based on notch depth
+    private var pillH: CGFloat = 70
+    private var winH:  CGFloat = 90
+
+    init(appName: String, bundleID: String? = nil) {
+        self.appName  = appName
+        self.bundleID = bundleID
+        super.init(
+            contentRect: .zero,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        level              = .screenSaver
+        backgroundColor    = .clear
+        isOpaque           = false
+        hasShadow          = false
+        ignoresMouseEvents = false
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    }
+
+    func show() {
+        guard !WindowManager.shared.isScreenLocked else { return }
+        // Use the screen containing the mouse — correct on any monitor setup
+        let screen = NSScreen.screens.first(where: {
+            NSMouseInRect(NSEvent.mouseLocation, $0.frame, false)
+        }) ?? NSScreen.main ?? NSScreen.screens[0]
+
+        let sf         = screen.frame
+        let notchDepth = screen.safeAreaInsets.top > 0 ? screen.safeAreaInsets.top : 24.0
+        pillH = notchDepth + 52.0   // notch area + content row
+        winH  = pillH + 20.0        // extra space for shadow & slide-in animation
+
+        // Centre horizontally, clamped to screen bounds
+        let x = max(sf.minX, min(sf.midX - pillW / 2, sf.maxX - pillW))
+        let y = sf.maxY - winH
+
+        setFrame(NSRect(x: x, y: y, width: pillW, height: winH), display: true)
+        alphaValue = 1.0
+
+        let rootView = NotchPositionHUDView(
+            appName:    appName,
+            bundleID:   bundleID,
+            notchDepth: notchDepth,
+            pillWidth:  pillW,
+            pillHeight: pillH,
+            onDone:     { [weak self] in self?.handleDone() },
+            onCancel:   { [weak self] in self?.handleCancel() }
+        )
+        let hosting = NSHostingView(rootView: rootView)
+        hosting.wantsLayer = true
+        hosting.layer?.backgroundColor = NSColor.clear.cgColor
+        hosting.frame = NSRect(x: 0, y: 0, width: pillW, height: winH)
+        hosting.autoresizingMask = [.width, .height]
+        contentView = hosting
+        orderFrontRegardless()
+    }
+
+    private func handleDone()   { onDone?();   dismissHUD() }
+    private func handleCancel() { onCancel?(); dismissHUD() }
+
+    private func dismissHUD() {
+        NotificationCenter.default.post(name: NSNotification.Name("NotchPositionHUDDismiss"), object: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.close() }
+    }
+}
+
+// MARK: - Position HUD SwiftUI View
+
+struct NotchPositionHUDView: View {
+    let appName:    String
+    let bundleID:   String?
+    let notchDepth: CGFloat
+    let pillWidth:  CGFloat
+    let pillHeight: CGFloat
+    let onDone:     () -> Void
+    let onCancel:   () -> Void
+
+    @AppStorage("themeColor")  private var themeColor:  ThemeColor  = .default
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @State private var appeared    = false
+    @State private var iconDrop    = false
+    @State private var hoverDone   = false
+    @State private var hoverCancel = false
+
+    private var accentColor: Color { themeColor.color ?? Color(red: 0.18, green: 0.85, blue: 0.5) }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            // ---- Notch-style pill background (Seamless top-anchored geometry) ----
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.black)
+                    .padding(.top, -100)
+
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(appeared ? 0.38 : 0.12), lineWidth: 1.0)
+                    .padding(.top, -100)
+                    .padding(.bottom, 0.5)
+
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(appeared ? 0.3 : 0.1),
+                                accentColor.opacity(appeared ? 0.5 : 0.15),
+                                .white.opacity(appeared ? 0.3 : 0.1)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ),
+                        lineWidth: 1.0
+                    )
+                    .padding(.top, -100)
+                    .padding(.bottom, 0.5)
+            }
+            .frame(width: pillWidth, height: pillHeight)
+
+            // ---- Content row ----
+            HStack(spacing: 10) {
+                // App icon
+                Group {
+                    if let bID = bundleID {
+                        AppIconView(bundleID: bID)
+                            .frame(width: 22, height: 22)
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .shadow(color: accentColor.opacity(0.4), radius: 3)
+                            .offset(y: iconDrop ? 0 : -45)
+                            .scaleEffect(iconDrop ? 1.0 : 0.25, anchor: .topLeading)
+                            .opacity(iconDrop ? 1.0 : 0.0)
+                            .animation(.spring(response: 0.42, dampingFraction: 0.65), value: iconDrop)
+                    }
+                }
+                .padding(.leading, 12)
+
+                // Labels
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(String(format: "Position \"%@\"", appName))
+                        .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Text("Resize & move the window, then tap Done".localized(appLanguage))
+                        .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                        .foregroundColor(.white.opacity(0.6))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                // ---- Action Buttons Group (Guaranteed high priority rendering) ----
+                HStack(spacing: 8) {
+                    // Cancel button
+                    Button(action: onCancel) {
+                        Text("Cancel".localized(appLanguage))
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundColor(.white.opacity(0.85))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            .background(Color.white.opacity(hoverCancel ? 0.12 : 0.0))
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule()
+                                    .stroke(Color.white.opacity(0.45), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { h in withAnimation(.easeInOut(duration: 0.12)) { hoverCancel = h } }
+
+                    // Done button (Vivid Neon Green Fill with Black Text - GUARANTEED 100% VISIBLE)
+                    Button(action: onDone) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("Done".localized(appLanguage))
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                        }
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 5)
+                        .background(Color(red: 0.2, green: 0.9, blue: 0.5))
+                        .clipShape(Capsule())
+                        .shadow(color: Color(red: 0.2, green: 0.9, blue: 0.5).opacity(0.4), radius: 4)
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { h in withAnimation(.easeInOut(duration: 0.12)) { hoverDone = h } }
+                }
+                .fixedSize()
+                .layoutPriority(1)
+                .padding(.trailing, 14)
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 8)
+            .frame(height: 44)
+            .opacity(appeared ? 1.0 : 0.0)
+            .offset(y: appeared ? 0 : -6)
+        }
+        .frame(width: pillWidth, height: pillHeight, alignment: .top)
+        .shadow(color: .black.opacity(appeared ? 0.55 : 0), radius: appeared ? 14 : 0, x: 0, y: 5)
+        .opacity(appeared ? 1.0 : 0.0)
+        .scaleEffect(x: appeared ? 1.0 : 0.88, y: appeared ? 1.0 : 0.01, anchor: .top)
+        .animation(.spring(response: 0.38, dampingFraction: 0.78), value: appeared)
+        .onAppear {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) { appeared = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.65)) { iconDrop = true }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NotchPositionHUDDismiss"))) { _ in
+            withAnimation(.easeOut(duration: 0.3)) { appeared = false; iconDrop = false }
         }
     }
 }

@@ -1,3 +1,4 @@
+// this file used for window preview icon plus full screen preview
 import SwiftUI
 
 // MARK: - Window Preview Icon (for list rows)
@@ -118,8 +119,14 @@ struct AppIconView: View {
     let bundleID: String
     var body: some View {
         let image: NSImage? = {
+            // 1. Standard NSWorkspace lookup — works for .app bundles in /Applications
             if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
                 return NSWorkspace.shared.icon(forFile: url.path)
+            }
+            // 2. Running-app icon — works for Chrome PWAs, Electron apps, anything currently running
+            if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }),
+               let icon = runningApp.icon {
+                return icon
             }
             return nil
         }()
@@ -174,11 +181,18 @@ struct LayoutPreviewView: View {
         return ZStack {
             // Main Panel
             RoundedRectangle(cornerRadius: cornerR, style: .continuous)
-                .fill(Color.black.opacity(0.65))
+                .fill(Color(red: 0.04, green: 0.07, blue: 0.18).opacity(0.85))
             
             // Inner glow / bezel detail
             RoundedRectangle(cornerRadius: cornerR, style: .continuous)
-                .stroke(LinearGradient(colors: [.white.opacity(0.15), .clear, .white.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.38), Color.white.opacity(0.12), Color.white.opacity(0.22)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.2
+                )
         }
         .frame(width: w, height: h)
         .position(x: x + w/2, y: y + h/2)
@@ -191,8 +205,8 @@ struct LayoutPreviewView: View {
         let w = record.globalFrame.width * scale
         let h = record.globalFrame.height * scale
         
-        // Match Theme Colors
-        let baseTint = tint
+        // Match Theme Colors (Use high-contrast slate for Black theme so preview window cards remain visible)
+        let baseTint = (tint == .black || tint == Color.black) ? Color(white: 0.8) : tint
         let winCorner: CGFloat = max(4, 8 * scale)
         
         return ZStack {
@@ -233,7 +247,13 @@ struct LayoutPreviewView: View {
     // Helpers
     
     private func getScreenFrames() -> [CGRect] {
-        let frames = Set(snapshot.records.compactMap { $0.screenFrame }).sorted { $0.origin.x < $1.origin.x }
+        var uniqueFrames: [CGRect] = []
+        for frame in snapshot.records.compactMap({ $0.screenFrame }) {
+            if !uniqueFrames.contains(where: { $0.equalTo(frame) }) {
+                uniqueFrames.append(frame)
+            }
+        }
+        let frames = uniqueFrames.sorted { $0.origin.x < $1.origin.x }
         if frames.isEmpty {
             return [NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)]
         }
@@ -261,6 +281,7 @@ struct ScreenLayoutThumbnail: View {
     let screenKey: String
     let tint: Color
     let isLive: Bool
+    var isHighlighted: Bool = false
 
     /// Fixed canvas size for the thumbnail area
     private let canvasW: CGFloat = 34
@@ -298,8 +319,11 @@ struct ScreenLayoutThumbnail: View {
         let offsetX = (canvasW - layoutW) / 2
         let offsetY = (canvasH - layoutH) / 2
 
+        let active = isLive || isHighlighted
+
         return AnyView(
             ZStack(alignment: .topLeading) {
+                // Screens
                 ForEach(Array(displays.enumerated()), id: \.offset) { _, d in
                     let x = CGFloat(d.originX - Int(bb.minX)) * scale + offsetX
                     // Invert Y: macOS is Y-up, SwiftUI is Y-down.
@@ -308,18 +332,162 @@ struct ScreenLayoutThumbnail: View {
                     let w = max(6, CGFloat(d.width)  * scale)
                     let h = max(4, CGFloat(d.height) * scale)
 
+                    let screenFill = active
+                        ? (tint == .black ? Color.white.opacity(0.35) : tint.opacity(0.45))
+                        : Color.white.opacity(0.22)
+                    let screenStroke = active
+                        ? (tint == .black ? Color.white : tint)
+                        : Color.white.opacity(0.88)
+
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(tint.opacity(isLive ? 0.18 : 0.08))
+                        .fill(screenFill)
                         .overlay {
                             RoundedRectangle(cornerRadius: 2, style: .continuous)
-                                .stroke(tint.opacity(isLive ? 0.85 : 0.55), lineWidth: 1)
+                                .stroke(screenStroke, lineWidth: active ? 1.5 : 1.0)
                         }
+                        .shadow(color: active ? screenStroke.opacity(0.70) : Color.black.opacity(0.45), radius: active ? 3.0 : 1.5, x: 0, y: 1)
                         .frame(width: w, height: h)
                         .offset(x: x, y: y)
+                }
+
+                // Small active layout indicator dot in top-right corner
+                if active {
+                    Circle()
+                        .fill(tint == .black ? Color.white : tint)
+                        .frame(width: 5, height: 5)
+                        .shadow(color: Color.white.opacity(0.85), radius: 2)
+                        .shadow(color: Color.black.opacity(0.5), radius: 1, x: 0, y: 1)
+                        .position(x: canvasW, y: 0)
                 }
             }
             .frame(width: canvasW, height: canvasH)
         )
+    }
+
+    private static var thumbnailCache: [String: NSImage] = [:]
+
+    /// Renders the layout thumbnail as a compact, crisp NSImage properly dimensioned for native NSMenuItems (20x14 pt).
+    @MainActor
+    static func renderImage(screenKey: String, tint: Color, isLive: Bool = false) -> NSImage? {
+        let cacheKey = "\(screenKey)_\(isLive)"
+        if let cached = thumbnailCache[cacheKey] {
+            return cached
+        }
+
+        let displays = ScreenFingerprint.from(key: screenKey).displays.sorted { $0.originX < $1.originX }
+        guard let first = displays.first else { return nil }
+        let boundingBox = displays.reduce(CGRect(x: first.originX, y: first.originY, width: first.width, height: first.height)) { box, d in
+            box.union(CGRect(x: d.originX, y: d.originY, width: d.width, height: d.height))
+        }
+        guard boundingBox.width > 0, boundingBox.height > 0 else { return nil }
+
+        let canvasW: CGFloat = 20
+        let canvasH: CGFloat = 14
+        let scaleX = (canvasW - 2) / boundingBox.width
+        let scaleY = (canvasH - 2) / boundingBox.height
+        let scale = min(scaleX, scaleY)
+        let layoutW = boundingBox.width * scale
+        let layoutH = boundingBox.height * scale
+        let offsetX = (canvasW - layoutW) / 2
+        let offsetY = (canvasH - layoutH) / 2
+
+        let image = NSImage(size: NSSize(width: canvasW, height: canvasH), flipped: false) { _ in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            for d in displays {
+                let x = CGFloat(d.originX - Int(boundingBox.minX)) * scale + offsetX
+                let y = CGFloat(d.originY - Int(boundingBox.minY)) * scale + offsetY
+                let w = max(4.5, CGFloat(d.width) * scale)
+                let h = max(3.5, CGFloat(d.height) * scale)
+                let r = CGRect(x: x, y: y, width: w, height: h)
+                let path = CGPath(roundedRect: r, cornerWidth: 1.5, cornerHeight: 1.5, transform: nil)
+
+                let fillColor = isLive
+                    ? NSColor.white.withAlphaComponent(0.40)
+                    : NSColor.white.withAlphaComponent(0.20)
+                let strokeColor = isLive
+                    ? NSColor.white
+                    : NSColor.white.withAlphaComponent(0.88)
+
+                ctx.addPath(path)
+                ctx.setFillColor(fillColor.cgColor)
+                ctx.fillPath()
+
+                ctx.addPath(path)
+                ctx.setStrokeColor(strokeColor.cgColor)
+                ctx.setLineWidth(isLive ? 1.25 : 0.90)
+                ctx.strokePath()
+            }
+
+            if isLive {
+                let dotRect = CGRect(x: canvasW - 4.5, y: canvasH - 4.5, width: 3.5, height: 3.5)
+                ctx.addEllipse(in: dotRect)
+                ctx.setFillColor(NSColor.white.cgColor)
+                ctx.fillPath()
+            }
+
+            return true
+        }
+        image.isTemplate = false
+        thumbnailCache[cacheKey] = image
+        return image
+    }
+}
+
+// MARK: - Command Badge View
+struct CommandBadgeView: View {
+    let isActive: Bool
+    let isHovered: Bool
+    let themeColor: Color
+    
+    @State private var offsetX: CGFloat = 100
+    @State private var opacity: Double = 0.0
+    @State private var glowRadius: CGFloat = 1.5
+    @State private var glowOpacity: Double = 0.15
+    @State private var strokeOpacity: Double = 0.3
+
+    var body: some View {
+        if isActive {
+            Text("⌘⇧R")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(isHovered ? Color.white : themeColor)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isHovered ? Color.white.opacity(0.2) : themeColor.opacity(0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(isHovered ? Color.white.opacity(0.6) : themeColor.opacity(strokeOpacity), lineWidth: 0.8)
+                )
+                .shadow(color: isHovered ? Color.white.opacity(0.5) : themeColor.opacity(glowOpacity), radius: glowRadius)
+                .offset(x: offsetX)
+                .opacity(opacity)
+                .onAppear {
+                    // Step 1: Slide in from far right (100 -> 0) slowly and fade in with glow
+                    withAnimation(.spring(response: 0.75, dampingFraction: 0.7)) {
+                        offsetX = 0
+                        opacity = 1.0
+                        glowRadius = 14
+                        glowOpacity = 0.85
+                        strokeOpacity = 0.85
+                    }
+                    // Step 2: Settle glow back to resting state
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_150_000_000)
+                        withAnimation(.spring(response: 0.8, dampingFraction: 0.85)) {
+                            glowRadius = 2.0
+                            glowOpacity = 0.3
+                            strokeOpacity = 0.35
+                        }
+                    }
+                }
+        } else {
+            // Non-active rows: show ⌘⇧R dimly instead of the plain ⌘ icon
+            Text("⌘⇧R")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(isHovered ? Color.white.opacity(0.9) : Color.secondary.opacity(0.6))
+        }
     }
 }
 
@@ -327,63 +495,190 @@ struct ScreenLayoutThumbnail: View {
 
 struct MenuWindowListView: View {
     let snapshot: LayoutSnapshot
+    let activeBundleID: String?
+    var limitToActiveApp: Bool = false
+    var specificRecords: [WindowRecord]? = nil
+    @EnvironmentObject var manager: WindowManager
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hoveredRecordID: UUID? = nil
+    @State private var isAppeared = false
+
+    // Opacities that need boosting in light mode
+    private var badgeBgOpacity: Double { colorScheme == .dark ? 0.1 : 0.18 }
+    private var activeBgOpacity: Double { colorScheme == .dark ? 0.06 : 0.12 }
+    private var activeBadgeBgOpacity: Double { colorScheme == .dark ? 0.15 : 0.22 }
 
     var body: some View {
         VStack(spacing: 2) {
-            ForEach(snapshot.records) { record in
-                let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
-                let rowTint = record.isFullScreenMode ? Color.indigo : (themeColor.color ?? .accentColor)
-                
-                HStack(spacing: 12) {
-                    if record.isFullScreenMode {
-                        FullScreenPreviewIcon(tint: rowTint)
-                            .frame(width: 32, height: 21)
-                    } else {
-                        WindowPreviewIcon(record: record, tint: rowTint)
-                            .frame(width: 32, height: 21)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Text(record.windowID.appName ?? record.windowID.appBundleID)
-                                .font(.system(.subheadline, design: .rounded).weight(.medium))
-                                .lineLimit(1)
-                            
-                            if isForeground {
-                                Image(systemName: "square.3.layers.3d.top.filled")
-                                    .font(.system(size: 8))
-                                    .foregroundStyle(themeColor.color ?? Color.accentColor)
-                            }
-                        }
-                        
-                        HStack(spacing: 4) {
-                            if let screenName = record.screenName {
-                                Text(lz(screenName))
-                                    .font(.system(size: 9, weight: .bold))
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 1)
-                                    .background(rowTint.opacity(0.1))
-                                    .foregroundStyle(rowTint)
-                                    .clipShape(RoundedRectangle(cornerRadius: 3))
-                            }
-                            
-                            if !record.windowID.windowTitle.isEmpty {
-                                Text(record.windowID.windowTitle)
-                                    .font(.system(size: 9, design: .rounded))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
-                    }
-                    Spacer(minLength: 0)
+            if let customList = specificRecords {
+                ForEach(customList) { record in
+                    appRow(record)
+                        .scaleEffect(isAppeared ? 1.0 : 0.96)
+                        .offset(y: isAppeared ? 0 : 4)
+                        .opacity(isAppeared ? 1.0 : 0.0)
                 }
-                .padding(.vertical, 4)
-                .padding(.horizontal, 16)
+            } else {
+                let frontmostBundleID = activeBundleID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                let activeRecords = snapshot.records.filter { $0.windowID.appBundleID == frontmostBundleID }
+                let otherRecords = limitToActiveApp ? [] : snapshot.records.filter { $0.windowID.appBundleID != frontmostBundleID }
+                let displayedActiveRecords = (!activeRecords.isEmpty || !limitToActiveApp) ? activeRecords : [snapshot.records.first].compactMap { $0 }
+                
+                if !displayedActiveRecords.isEmpty {
+                    ForEach(displayedActiveRecords) { record in
+                        appRow(record)
+                            .scaleEffect(isAppeared ? 1.0 : 0.96)
+                            .offset(y: isAppeared ? 0 : 4)
+                            .opacity(isAppeared ? 1.0 : 0.0)
+                    }
+                    if !otherRecords.isEmpty {
+                        Divider()
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 14)
+                    }
+                }
+                ForEach(otherRecords) { record in
+                    appRow(record)
+                }
             }
         }
         .padding(.vertical, 6)
-        .frame(width: 280)
+        .frame(maxWidth: .infinity)
+        .onAppear {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
+                isAppeared = true
+            }
+        }
+    }
+
+    private func appRow(_ record: WindowRecord) -> some View {
+        let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
+        let rowTint = record.isFullScreenMode ? Color.indigo : themeColor.color(seed: 6)
+        let isHovered = hoveredRecordID == record.id
+        let itemTint = isHovered ? Color.white : rowTint
+        let isActive = record.windowID.appBundleID == (activeBundleID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        
+        return HStack(spacing: 12) {
+            if record.isFullScreenMode {
+                FullScreenPreviewIcon(tint: itemTint)
+                    .frame(width: 32, height: 21)
+            } else {
+                WindowPreviewIcon(record: record, tint: itemTint)
+                    .frame(width: 32, height: 21)
+            }
+            
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(record.windowID.appName ?? record.windowID.appBundleID)
+                        .font(.system(.subheadline, design: .rounded).weight(.medium))
+                        .foregroundStyle(isHovered ? Color(NSColor.selectedMenuItemTextColor) : Color.primary)
+                        .lineLimit(1)
+                    
+                    if isActive {
+                        Text("Active".localized(appLanguage))
+                            .font(.system(size: 8, weight: .bold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(isHovered ? Color.white.opacity(0.25) : Color.green.opacity(activeBadgeBgOpacity))
+                            .foregroundStyle(isHovered ? Color.white : Color.green)
+                            .clipShape(Capsule())
+                            .scaleEffect(isAppeared ? 1.0 : 0.8)
+                    }
+                    
+                    if isForeground {
+                        Image(systemName: "square.3.layers.3d.top.filled")
+                            .font(.system(size: 8))
+                            .foregroundStyle(isHovered ? Color.white : themeColor.color(seed: 5))
+                    }
+                    
+                    // ⌘ badge: visible when Command+Shift+R will be sent to this app.
+                    // Shows only when the global trigger is on AND the app is not excluded.
+                    let willReceiveCommand = (manager.store.refreshFrontmostOnFullRestore || manager.store.refreshFrontmostOnSingleRestore)
+                        && snapshot.commandExcludedBundleIDs.contains(record.windowID.appBundleID)
+                    if willReceiveCommand {
+                        CommandBadgeView(
+                            isActive: isActive,
+                            isHovered: isHovered,
+                            themeColor: themeColor.color(seed: 5)
+                        )
+                    }
+                }
+                
+                HStack(spacing: 4) {
+                    if let screenName = record.screenName {
+                        Text(lz(screenName))
+                            .font(.system(size: 9, weight: .bold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(isHovered ? Color.white.opacity(0.2) : rowTint.opacity(badgeBgOpacity))
+                            .foregroundStyle(isHovered ? Color.white : rowTint)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                    
+                    if !record.windowID.windowTitle.isEmpty {
+                        Text(record.windowID.windowTitle)
+                            .font(.system(size: 9, design: .rounded))
+                            .foregroundStyle(isHovered ? Color(NSColor.selectedMenuItemTextColor).opacity(0.8) : .secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+            
+            if isHovered {
+                Text("Restore".localized(appLanguage))
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.7))
+                    .padding(.trailing, 4)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(isHovered ? Color(NSColor.selectedContentBackgroundColor) : Color.clear)
+                
+                if isActive && !isHovered {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(rowTint.opacity(activeBgOpacity))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .stroke(rowTint.opacity(isAppeared ? 0.35 : 0.0), lineWidth: 1.2)
+                                .animation(.easeOut(duration: 0.45), value: isAppeared)
+                        )
+                        .overlay(
+                            GeometryReader { geo in
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color.clear,
+                                        rowTint.opacity(0.4),
+                                        Color.white.opacity(0.25),
+                                        rowTint.opacity(0.4),
+                                        Color.clear
+                                    ]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                                .frame(width: geo.size.width * 0.4)
+                                .offset(x: isAppeared ? geo.size.width * 1.3 : -geo.size.width * 0.5)
+                                .animation(.easeOut(duration: 0.95).delay(0.1), value: isAppeared)
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        )
+                }
+            }
+        )
+        .padding(.horizontal, 8)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            hoveredRecordID = hovering ? record.id : nil
+        }
+        .onTapGesture {
+            manager.restore(snapshot: snapshot, specificAppBundleID: record.windowID.appBundleID)
+            NSApp.sendAction(#selector(NSMenu.cancelTracking), to: nil, from: nil)
+        }
     }
 }
 

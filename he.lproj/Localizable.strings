@@ -1,0 +1,62 @@
+/* Settings Translation */
+"Automation" = "אוטומציה";
+"Auto-restore on connect" = "שחזר אוטומטית בעת חיבור";
+"Restores layout when displays reconnect" = "משחזר את סידור החלונות כאשר מסכים מתחברים מחדש";
+"Auto-restore on app open" = "שחזר אוטומטית בפתיחת יישום";
+"Restores layout when an app is launched" = "משחזר את סידור החלונות כאשר יישום נפתח";
+"Animate restoration" = "הנפש שחזור";
+"Smoothly move windows to their spots" = "הזז חלונות בצורה חלקה למקומם";
+"Launch at login" = "הפעל בעת כניסה";
+"Start RememberMyWindows automatically" = "הפעל את RememberMyWindows אוטומטית";
+"Activity Log Level" = "רמת פירוט יומן";
+"Filter which events appear in the log" = "סנן אילו אירועים יופיעו ביומן";
+"Use polling mode (legacy)" = "השתמש במצב בדיקה מחזורית (מדור קודם)";
+"Checks window positions after 5 s, then backs off while idle" = "בודק את מיקומי החלונות לאחר 5 שניות, ואז מצמצם בדיקות במצב סרק";
+"Higher energy usage" = "צריכת אנרגיה גבוהה יותר";
+"Polling checks less often while idle, but event-driven mode uses the least power." = "בדיקה מחזורית פועלת בתדירות נמוכה יותר במצב סרק, אך מצב מונחה־אירועים צורך את כמות האנרגיה הנמוכה ביותר.";
+
+"Experimental" = "ניסיוני";
+"Desktop Toggle (Cmd+D)" = "הצג/הסתר שולחן עבודה (Cmd+D)";
+"Quickly hide/show all windows (disabled for Safari)" = "הסתר/הצג במהירות את כל החלונות (מושבת עבור Safari)";
+"Restore on Cmd+D unhide" = "שחזר בעת ביטול הסתרה עם Cmd+D";
+"Automatically run layout restore when showing windows" = "הפעל שחזור אוטומטי של חלונות בעת חזרתם";
+
+"Appearance" = "מראה";
+"Liquid Glass interface" = "ממשק Liquid Glass";
+"Enable premium transparency and effects" = "הפעל שקיפות ואפקטים מתקדמים";
+"Notch Notification" = "התראות מגרעת";
+"Show layout restore alerts from the notch" = "הצג התראות שחזור מהמגרעת";
+"Theme Color" = "צבע ערכת נושא";
+"Primary accent for the interface" = "צבע הדגשה ראשי לממשק";
+
+"System Permissions" = "הרשאות מערכת";
+"Accessibility access granted" = "הרשאת נגישות אושרה";
+"Accessibility access required" = "נדרשת הרשאת נגישות";
+"Grant Permission…" = "אשר הרשאה…";
+"RememberMyWindows needs Accessibility permission to restore window positions in other apps like Telegram, Chrome, etc." = "RememberMyWindows זקוק להרשאת נגישות כדי לשחזר מיקומי חלונות ביישומים אחרים כמו Telegram, Chrome, וכו׳.";
+"Open System Settings…" = "פתח הגדרות מערכת…";
+
+"App Language" = "שפת היישום";
+"Override the system language" = "עקוף את שפת המערכת";
+
+/* Language Picker */
+"System" = "מערכת";
+
+/* Theme Colors */
+"Default" = "ברירת מחדל";
+"Grey" = "אפור";
+"Purple" = "סגול";
+"Yellow" = "צהוב";
+"Red" = "אדום";
+"Blue" = "כחול";
+"Light Blue" = "תכלת";
+"Green" = "ירוק";
+"Orange" = "כתום";
+
+/* Log Levels */
+"Necessary" = "חיוני";
+"Moderate" = "מתון";
+"Verbose" = "מפורט";
+
+/* Version */
+"Version 1.0.0" = "גרסה 1.0.0";

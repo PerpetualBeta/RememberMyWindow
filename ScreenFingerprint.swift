@@ -127,15 +127,22 @@ struct ScreenFingerprint: Codable, Hashable, CustomStringConvertible {
         var nameCounts: [String: Int] = [:]
         for d in displays {
             var n = d.name ?? "\(lz("Display")) \(d.screenNumber)"
-            if n.hasPrefix("Built-in") || n.contains("מובנה") { n = lz("Built-in") }
+            let lower = n.lowercased()
+            if lower.contains("built-in") || lower.contains("retina display") || n.contains("מובנה") {
+                n = lz("Built-in")
+            }
             nameCounts[n, default: 0] += 1
         }
 
         return displays.map { d in
             let originalName = d.name ?? "\(lz("Display")) \(d.screenNumber)"
             var label = originalName
-            if label.hasPrefix("Built-in") || label.contains("מובנה") { label = lz("Built-in") }
-            else { label = lz(label) }
+            let lower = label.lowercased()
+            if lower.contains("built-in") || lower.contains("retina display") || label.contains("מובנה") {
+                label = lz("Built-in")
+            } else {
+                label = lz(label)
+            }
             
             // Disambiguate if multiple monitors have the same name
             if nameCounts[label, default: 0] > 1, let uuid = d.uuid {

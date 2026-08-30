@@ -1,5 +1,8 @@
+// this file is the main entry point of the app
 import SwiftUI
 import AppKit
+import CoreGraphics
+import IOKit.hid
 
 @main
 struct RememberMyWindowsApp: App {
@@ -23,7 +26,7 @@ struct RememberMyWindowsApp: App {
         Window("RememberMyWindows", id: "main") {
             ContentView()
                 .environmentObject(WindowManager.shared)
-                .tint(themeColor.color)
+                .tint(themeColor.color(seed: 0))
                 .environment(\.locale, currentLocale)
         }
         .windowStyle(.hiddenTitleBar)
@@ -38,28 +41,306 @@ struct RememberMyWindowsApp: App {
     }
 }
 
+// MARK: - Quick Key Restore Manager (Fn Long-Press & Double-Tap Caps Lock)
+
+/// Monitors global modifier events for the user-configured quick restore trigger:
+/// 1. `fn` Long-Press: Holds the Fn / Globe (🌐) key for `quickKeyHoldDuration` (default 1.0s).
+/// 2. Double-Tap Caps Lock: Double-taps the Caps Lock (⇪) key within 0.65s.
+@MainActor
+final class QuickKeyRestoreManager {
+    static let shared = QuickKeyRestoreManager()
+    private(set) var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var retryTimer: Timer?
+
+    // Fn hold tracking
+    private var fnHoldWorkItem: DispatchWorkItem?
+    private var isFnDown = false
+
+    // Caps Lock double-tap tracking
+    private var lastCapsLockTapTime: Date?
+    private var capsLockResetTimer: Timer?
+
+    private init() {}
+
+    // MARK: Install / Remove
+
+    func setup() {
+        guard WindowManager.shared.store.quickKeyRestoreEnabled else { return }
+        guard eventTap == nil else { return }
+
+        guard AXIsProcessTrusted() else {
+            retryTimer?.invalidate()
+            retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                Task { @MainActor in
+                    if WindowManager.shared.store.quickKeyRestoreEnabled && self?.eventTap == nil {
+                        self?.setup()
+                    }
+                }
+            }
+            return
+        }
+
+        let eventMask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
+
+        eventTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: eventMask,
+            callback: { (_, type, event, _) -> Unmanaged<CGEvent>? in
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    if let tap = QuickKeyRestoreManager.shared.eventTap {
+                        CGEvent.tapEnable(tap: tap, enable: true)
+                    }
+                    return nil
+                }
+
+                let flags = event.flags
+                let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+
+                DispatchQueue.main.async {
+                    QuickKeyRestoreManager.shared.handleFlagsChanged(flags: flags, keycode: keycode)
+                }
+                return nil
+            },
+            userInfo: nil
+        )
+
+        if let tap = eventTap {
+            runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            WindowManager.shared.log("Quick Key Restore monitoring enabled", level: .moderate, type: .system)
+        } else {
+            retryTimer?.invalidate()
+            retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+                Task { @MainActor in
+                    if WindowManager.shared.store.quickKeyRestoreEnabled && self?.eventTap == nil {
+                        self?.setup()
+                    }
+                }
+            }
+        }
+    }
+
+    func teardown() {
+        retryTimer?.invalidate()
+        retryTimer = nil
+        cancelFnHold()
+        isFnDown = false
+        lastCapsLockTapTime = nil
+        capsLockResetTimer?.invalidate()
+        capsLockResetTimer = nil
+
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let src = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
+        }
+        eventTap = nil
+        runLoopSource = nil
+        WindowManager.shared.log("Quick Key Restore monitoring disabled", level: .moderate, type: .system)
+    }
+
+    // MARK: Event Handling
+
+    private func handleFlagsChanged(flags: CGEventFlags, keycode: Int64) {
+        guard WindowManager.shared.store.quickKeyRestoreEnabled else { return }
+
+        let trigger = WindowManager.shared.store.quickKeyTrigger
+
+        // Process Fn hold if enabled for fnLongPress or both
+        if trigger == .fnLongPress || trigger == .both {
+            let fnPressed = flags.contains(.maskSecondaryFn)
+            if fnPressed && !isFnDown {
+                isFnDown = true
+                startFnHold()
+            } else if !fnPressed && isFnDown {
+                isFnDown = false
+                cancelFnHold()
+            }
+        }
+
+        // Process Caps Lock double-tap if enabled for capsLockDoubleTap or both
+        if trigger == .capsLockDoubleTap || trigger == .both {
+            if keycode == 57 /* Caps Lock */ {
+                handleCapsLockTap()
+            }
+        }
+    }
+
+    // MARK: Fn Hold
+
+    private func startFnHold() {
+        cancelFnHold()
+        let duration = WindowManager.shared.store.quickKeyHoldDuration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.isFnDown else { return }
+            self.cancelFnHold()
+            self.fireRestore(triggerSubtitle: "fn")
+        }
+        fnHoldWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
+    }
+
+    private func cancelFnHold() {
+        fnHoldWorkItem?.cancel()
+        fnHoldWorkItem = nil
+    }
+
+    // MARK: Caps Lock Double-Tap
+
+    private func handleCapsLockTap() {
+        let now = Date()
+        if let last = lastCapsLockTapTime, now.timeIntervalSince(last) < 0.65 {
+            // Double-tap succeeded!
+            lastCapsLockTapTime = nil
+            capsLockResetTimer?.invalidate()
+            capsLockResetTimer = nil
+
+            // Reset Caps Lock state to OFF
+            resetCapsLockStateIfNeeded()
+            fireRestore(triggerSubtitle: "⇪⇪")
+        } else {
+            // First tap: start timeout window
+            lastCapsLockTapTime = now
+            capsLockResetTimer?.invalidate()
+            capsLockResetTimer = Timer.scheduledTimer(withTimeInterval: 0.65, repeats: false) { [weak self] _ in
+                self?.lastCapsLockTapTime = nil
+            }
+        }
+    }
+
+    private func resetCapsLockStateIfNeeded() {
+        if NSEvent.modifierFlags.contains(.capsLock) {
+            let src = CGEventSource(stateID: .hidSystemState)
+            let down = CGEvent(keyboardEventSource: src, virtualKey: 0x39, keyDown: true)
+            let up = CGEvent(keyboardEventSource: src, virtualKey: 0x39, keyDown: false)
+            down?.post(tap: .cghidEventTap)
+            up?.post(tap: .cghidEventTap)
+        }
+    }
+
+    // MARK: Restore Action
+
+    private func fireRestore(triggerSubtitle: String? = nil) {
+        guard !WindowManager.shared.isScreenLocked else { return }
+        guard WindowManager.shared.store.quickKeyRestoreEnabled else { return }
+
+        let mode = WindowManager.shared.store.quickKeyRestoreMode
+        WindowManager.shared.log("🚀 Quick Key Restore fired! Mode: \(mode.rawValue)", level: LogLevel.necessary, type: EventType.restore)
+        MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
+
+        switch mode {
+        case .fullRestore:
+            WindowManager.shared.restoreNow(triggerSubtitle: triggerSubtitle)
+
+        case .frontAppRestore:
+            let frontApp = NSWorkspace.shared.frontmostApplication
+            let frontAppID = frontApp?.bundleIdentifier
+            let frontAppName = frontApp?.localizedName ?? (frontAppID ?? "App")
+            let ourBundleID = Bundle.main.bundleIdentifier
+
+            let targetAppID: String? = (frontAppID != nil && frontAppID != ourBundleID) ? frontAppID : nil
+
+            guard let snap = WindowManager.shared.currentApplicableSnapshot else {
+                WindowManager.shared.showNotchNotificationPublic(
+                    title: String(format: lz("%@ is not in this layout"), frontAppName),
+                    subtitle: triggerSubtitle ?? "",
+                    isCompact: true,
+                    bundleID: targetAppID
+                )
+                DispatchQueue.main.async {
+                    (NSApp.delegate as? AppDelegate)?.openMenuDropdown(forAppID: targetAppID)
+                }
+                return
+            }
+
+            if let targetID = targetAppID, snap.records.contains(where: { $0.windowID.appBundleID == targetID }) {
+                WindowManager.shared.restore(
+                    snapshot: snap,
+                    specificAppBundleID: targetID,
+                    showNotification: true,
+                    skipCommandSend: false,
+                    triggerSubtitle: triggerSubtitle
+                )
+            } else {
+                // Frontmost app is not in the active snapshot -> notify and open menu bar list
+                WindowManager.shared.showNotchNotificationPublic(
+                    title: String(format: lz("%@ is not in this layout"), frontAppName),
+                    subtitle: triggerSubtitle ?? "",
+                    isCompact: true,
+                    bundleID: targetAppID
+                )
+                DispatchQueue.main.async {
+                    (NSApp.delegate as? AppDelegate)?.openMenuDropdown(forAppID: targetAppID)
+                }
+            }
+        }
+    }
+}
+
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
+    private var lastFrontmostAppID: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Enforce single instance: If another copy of RememberMyWindows is already running, activate it and terminate this new instance
+        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.netanel.remembermywindows")
+        if runningApps.count > 1 {
+            if let existingApp = runningApps.first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+                existingApp.activate(options: [.activateIgnoringOtherApps])
+                if let url = URL(string: "remembermywindows://main") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            NSApp.terminate(nil)
+            return
+        }
+
         _ = DesktopToggleManager.shared
         WindowManager.shared.startTracking()
+
+        // Start Quick Key restore tap if enabled
+        if WindowManager.shared.store.quickKeyRestoreEnabled {
+            QuickKeyRestoreManager.shared.setup()
+        }
+        // Re-configure tap whenever the setting is toggled from Settings
+        NotificationCenter.default.addObserver(
+            forName: .quickKeyRestoreSettingChanged,
+            object: nil,
+            queue: .main
+        ) { _ in
+            if WindowManager.shared.store.quickKeyRestoreEnabled {
+                QuickKeyRestoreManager.shared.setup()
+            } else {
+                QuickKeyRestoreManager.shared.teardown()
+            }
+        }
+
         
         // Determine if launched by user (active) or by system login item (inactive)
-        // We must check this before changing activation policy.
+        // For new users who haven't completed onboarding, always show the UI
         let isUserLaunch = NSApp.isActive
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+        let shouldShowUI = isUserLaunch || !hasCompletedOnboarding
         
-        // Start as background accessory (no Dock icon)
-        NSApp.setActivationPolicy(.accessory)
+        if shouldShowUI {
+            NSApp.setActivationPolicy(.regular)
+        } else {
+            NSApp.setActivationPolicy(.accessory)
+        }
         setupStatusItem()
         setupWindowObservers()
 
         // Capture the SwiftUI window as soon as it is created.
         // SwiftUI always opens the WindowGroup window at launch.
         DispatchQueue.main.async {
-            if isUserLaunch {
+            if shouldShowUI {
                 self.showMainWindow()
             } else {
                 // Hide immediately so the window doesn't flash for background launches
@@ -148,11 +429,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            if let img = NSImage(systemSymbolName: "macwindow.on.rectangle", accessibilityDescription: "RememberMyWindows") {
-                button.image = img
-            } else {
-                button.title = "RMW"
-            }
+            MenuBarIconManager.shared.bind(button: button)
             button.target = self
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -166,16 +443,89 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let isRightClick = event?.type == .rightMouseUp || (NSEvent.modifierFlags.contains(.control))
 
         if isRightClick {
-            // Right-click: show context menu
-            setupMenu()
-            statusItem?.menu = menu
-            menu?.delegate = self
-            statusItem?.button?.performClick(nil)
-        } else {
-            // Left-click: restore layout
+            // Right-click: native menu bar highlight + white tint, then restore full layout
+            animateRightClickStatusButton()
+            MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
             WindowManager.shared.restoreNow()
+        } else {
+            // Left-click sequence:
+            // 1. Trigger dynamic action state
+            MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
+            
+            let restoreOnLeftClick = UserDefaults.standard.object(forKey: "restoreFocusedAppOnLeftClick") as? Bool ?? true
+            let frontmostAppID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            if let appID = frontmostAppID, appID != "com.netanel.remembermywindows" {
+                self.lastFrontmostAppID = appID
+            }
+            
+            if restoreOnLeftClick,
+               let appID = lastFrontmostAppID,
+               let snap = WindowManager.shared.currentApplicableSnapshot,
+               snap.records.contains(where: { $0.windowID.appBundleID == appID }) {
+                
+                let hasCommandShortcut = snap.commandExcludedBundleIDs.contains(appID)
+                
+                if hasCommandShortcut {
+                    // When ⌘⇧R is enabled for this app:
+                    // Maintain sequential restore to ensure ⌘⇧R lands on the app before menu steals focus.
+                    WindowManager.shared.restore(
+                        snapshot: snap,
+                        animated: false,
+                        specificAppBundleID: appID,
+                        showNotification: true,
+                        skipCommandSend: false,
+                        completion: { [weak self] in
+                            self?.openMenuDropdown(forAppID: appID)
+                        }
+                    )
+                    return
+                } else {
+                    // When ⌘⇧R is toggled off:
+                    // Reposition window in background and pop up menu instantaneously (0ms delay)!
+                    WindowManager.shared.restore(
+                        snapshot: snap,
+                        animated: false,
+                        specificAppBundleID: appID,
+                        showNotification: true,
+                        skipCommandSend: true
+                    )
+                    openMenuDropdown(forAppID: appID)
+                    return
+                }
+            }
+            
+            // Default fallback: open menu list instantly if no saved record matches or left-click restore is off
+            openMenuDropdown(forAppID: lastFrontmostAppID)
         }
     }
+
+    /// Configures and opens the status bar dropdown menu.
+    func openMenuDropdown(forAppID appID: String? = nil) {
+        if let appID = appID {
+            self.lastFrontmostAppID = appID
+        }
+        setupMenu()
+        guard let menu = self.menu else { return }
+        menu.delegate = self
+        statusItem?.menu = menu
+
+        // Activate app and open menu dropdown instantly
+        NSApp.activate(ignoringOtherApps: true)
+        self.statusItem?.popUpMenu(menu)
+    }
+
+    /// Tints and animates the menu bar button on left-click restore.
+    private func flashStatusButton() {
+        guard let button = statusItem?.button else { return }
+        button.contentTintColor = NSColor.controlAccentColor
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            button.contentTintColor = nil
+        }
+    }
+
+
+
+
 
     // Called right after the menu closes so we can detach it
     func menuDidClose(_ menu: NSMenu) {
@@ -192,26 +542,76 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: lz("Open RememberMyWindows"), action: #selector(openMainWindow), keyEquivalent: "o")
         menu.addItem(NSMenuItem.separator())
 
-        let saveTitle = lz(WindowManager.shared.willUpdateSession ? "Update Layout" : "Save Layout")
-        let saveItem = menu.addItem(withTitle: saveTitle, action: #selector(saveLayout), keyEquivalent: "s")
-        saveItem.isEnabled = !WindowManager.shared.isUpdateRestricted
-
         if let snap = WindowManager.shared.currentApplicableSnapshot {
-            menu.addItem(withTitle: "\(lz("Restore")) '\(snap.displayName)'", action: #selector(restoreNow), keyEquivalent: "r")
+            let restoreTitle = String(format: lz("Full Restore '%@'"), snap.displayName)
+            menu.addItem(withTitle: restoreTitle, action: #selector(restoreNow), keyEquivalent: "r")
+
+            let updateTitle = String(format: lz("Update Full Layout '%@'"), snap.displayName)
+            let updateItem = menu.addItem(withTitle: updateTitle, action: #selector(saveLayout), keyEquivalent: "s")
+            updateItem.isEnabled = !WindowManager.shared.isUpdateRestricted
             
-            if !snap.records.isEmpty {
+            // Native Single App Add / Update Menu Item
+            let activeAppID = lastFrontmostAppID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            if let appID = activeAppID, appID != "com.netanel.remembermywindows" {
+                let appName = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == appID })?.localizedName ?? appID
+                let isSaved = snap.records.contains { $0.windowID.appBundleID == appID }
+                
+                let itemTitle = isSaved
+                    ? String(format: lz("Update '%@' position"), appName)
+                    : String(format: lz("Add '%@' to '%@'"), appName, snap.displayName)
+                
+                let singleAppItem = menu.addItem(withTitle: itemTitle, action: #selector(updateOrAddFrontmostApp), keyEquivalent: "")
+            }
+            
+            let groupSubmenu = WindowManager.shared.store.groupOtherAppsInSubmenu
+            let frontmostRecords = snap.records.filter { $0.windowID.appBundleID == activeAppID }
+            let activeRecords = groupSubmenu ? frontmostRecords : snap.records
+            let otherRecords = groupSubmenu
+                ? snap.records.filter { rec in !activeRecords.contains { $0.id == rec.id } }
+                : []
+
+            if !activeRecords.isEmpty {
                 let listViewItem = NSMenuItem()
-                let hostingView = NSHostingView(rootView: MenuWindowListView(snapshot: snap).environment(\.locale, currentLocale))
+                let displayRecords = activeRecords
+                let hostingView = NSHostingView(rootView: MenuWindowListView(snapshot: snap, activeBundleID: lastFrontmostAppID, specificRecords: displayRecords)
+                    .environmentObject(WindowManager.shared)
+                    .environment(\.locale, currentLocale))
+                hostingView.wantsLayer = true
                 hostingView.layout()
                 let size = hostingView.fittingSize
-                // Fallback height if fittingSize evaluates to 0
-                let viewHeight = size.height > 0 ? size.height : CGFloat(snap.records.count * 36 + 12)
+                let viewHeight = size.height > 0 ? size.height : CGFloat(displayRecords.count * 36 + 12)
                 hostingView.frame = CGRect(x: 0, y: 0, width: 280, height: viewHeight)
+                hostingView.autoresizingMask = .width
                 listViewItem.view = hostingView
                 menu.addItem(listViewItem)
             }
+
+            if groupSubmenu && !otherRecords.isEmpty {
+                let otherAppsMenu = NSMenu()
+                let otherAppsItem = NSMenuItem(title: lz("Others Saved in your session"), action: nil, keyEquivalent: "")
+                otherAppsItem.submenu = otherAppsMenu
+
+                let submenuItem = NSMenuItem()
+                let subHostingView = NSHostingView(rootView: MenuWindowListView(snapshot: snap, activeBundleID: lastFrontmostAppID, specificRecords: otherRecords)
+                    .environmentObject(WindowManager.shared)
+                    .environment(\.locale, currentLocale))
+                subHostingView.wantsLayer = true
+                subHostingView.layout()
+                let subSize = subHostingView.fittingSize
+                let subViewHeight = subSize.height > 0 ? subSize.height : CGFloat(otherRecords.count * 36 + 12)
+                subHostingView.frame = CGRect(x: 0, y: 0, width: 280, height: subViewHeight)
+                subHostingView.autoresizingMask = .width
+                submenuItem.view = subHostingView
+                otherAppsMenu.addItem(submenuItem)
+
+                menu.addItem(otherAppsItem)
+            }
         } else {
-            menu.addItem(withTitle: lz("Restore Default Layout"), action: #selector(restoreNow), keyEquivalent: "r")
+            let updateTitle = lz("Update Full Layout")
+            let updateItem = menu.addItem(withTitle: updateTitle, action: #selector(saveLayout), keyEquivalent: "s")
+            updateItem.isEnabled = !WindowManager.shared.isUpdateRestricted
+            
+            menu.addItem(withTitle: lz("Full Restore Default Layout"), action: #selector(restoreNow), keyEquivalent: "r")
         }
 
         // Saved sessions submenu
@@ -226,9 +626,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if savedSnapshots.isEmpty {
             savedMenu.addItem(withTitle: lz("No saved sessions"), action: nil, keyEquivalent: "")
         } else {
+            let currentSnap = WindowManager.shared.currentApplicableSnapshot
+            let themeStr = UserDefaults.standard.string(forKey: "themeColor") ?? "Default"
+            let currentTheme = ThemeColor(rawValue: themeStr) ?? .default
+
             for snap in savedSnapshots {
+                let isApplicable = (currentSnap?.id == snap.id)
+                let itemTint = isApplicable ? currentTheme.color(seed: 0) : Color.primary
                 let item = NSMenuItem(title: snap.displayName, action: #selector(restoreSpecificSnapshot(_:)), keyEquivalent: "")
                 item.representedObject = snap.id.uuidString
+                if let thumb = ScreenLayoutThumbnail.renderImage(screenKey: snap.screenKey, tint: itemTint, isLive: isApplicable) {
+                    item.image = thumb
+                }
                 savedMenu.addItem(item)
             }
         }
@@ -238,9 +647,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: lz("Quit"), action: #selector(quitApp), keyEquivalent: "q")
     }
 
+    /// Native macOS menu bar item background highlight + white icon tint for 0.3s on right-click restore.
+    private func animateRightClickStatusButton() {
+        guard let button = statusItem?.button else { return }
+        
+        button.isHighlighted = true
+        button.contentTintColor = .white
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            button.isHighlighted = false
+            button.contentTintColor = nil
+        }
+    }
+
     // MARK: - Actions
 
     @objc private func openMainWindow() {
+        let manager = WindowManager.shared
+        manager.selectedAppBundleID = nil
+        if let snapshot = manager.currentApplicableSnapshot,
+           let key = manager.store.snapshots.first(where: { $0.value.id == snapshot.id })?.key {
+            manager.selectedSnapshotKey = key
+            let currentAppID = lastFrontmostAppID
+            manager.selectedAppBundleID = snapshot.records.contains { $0.windowID.appBundleID == currentAppID }
+                ? currentAppID
+                : nil
+        }
         showMainWindow()
     }
 
@@ -257,6 +689,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    // Holds a strong reference to the position HUD while it's shown
+    private var positionHUD: NotchPositionHUDWindow?
+
+    @objc private func updateOrAddFrontmostApp() {
+        let activeAppID = lastFrontmostAppID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        guard let appID = activeAppID else { return }
+
+        let appName = NSWorkspace.shared.runningApplications
+            .first(where: { $0.bundleIdentifier == appID })?
+            .localizedName ?? appID
+
+        // Dismiss any existing HUD before showing a new one
+        positionHUD?.close()
+        positionHUD = nil
+
+        let hud = NotchPositionHUDWindow(appName: appName, bundleID: appID)
+        hud.onDone = { [weak self] in
+            WindowManager.shared.updateOrAddAppInActiveSnapshot(bundleID: appID)
+            self?.positionHUD = nil
+        }
+        hud.onCancel = { [weak self] in
+            self?.positionHUD = nil
+        }
+        hud.show()
+        positionHUD = hud
     }
 
     @objc private func saveLayout() {
@@ -282,11 +741,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-
+    @objc private func restoreSpecificApp(_ sender: NSMenuItem) {
+        guard let bundleID = sender.representedObject as? String,
+              let snap = WindowManager.shared.currentApplicableSnapshot else { return }
+        WindowManager.shared.restore(snapshot: snap, specificAppBundleID: bundleID)
+    }
 
     @objc private func quitApp() {
         NSApplication.shared.terminate(nil)
     }
 }
 
+// MARK: - Notification Names
 
+extension Notification.Name {
+    static let quickKeyRestoreSettingChanged = Notification.Name("quickKeyRestoreSettingChanged")
+    static let capsLockRestoreSettingChanged = Notification.Name("quickKeyRestoreSettingChanged")
+}

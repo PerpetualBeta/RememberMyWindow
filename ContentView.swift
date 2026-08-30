@@ -1,8 +1,9 @@
+//this file is the main view of the app
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var manager: WindowManager
-    @AppStorage("isLiquidGlass") private var isLiquidGlass: Bool = true
+    @Environment(\.openSettings) private var openSettings
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -13,39 +14,65 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             // Sidebar: Snapshot List
             SnapshotListView()
-                .frame(minWidth: 250)
+                .navigationSplitViewColumnWidth(min: 260, ideal: 285, max: 360)
                 .background {
-                    if !isLiquidGlass {
-                        VisualEffectView(material: .sidebar, blendingMode: .withinWindow)
+                    if themeColor.isGalaxy {
+                        ZStack {
+                            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
+                            Color(red: 0.02, green: 0.04, blue: 0.12).opacity(0.68)
+                        }
+                        .ignoresSafeArea()
+                    } else {
+                        VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
                             .ignoresSafeArea()
                     }
+                }
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(themeColor.isGalaxy ? Color.white.opacity(0.18) : Color.primary.opacity(0.12))
+                        .frame(width: 1)
+                        .ignoresSafeArea()
                 }
         } content: {
             // Content: Selected Snapshot Detail
             LayoutsView()
                 .navigationSplitViewColumnWidth(min: 400, ideal: 500)
                 .background {
-                    if !isLiquidGlass {
-                        VisualEffectView(material: .windowBackground, blendingMode: .withinWindow)
+                    if themeColor.isGalaxy {
+                        ZStack {
+                            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
+                            Color(red: 0.02, green: 0.04, blue: 0.12).opacity(0.60)
+                        }
+                        .ignoresSafeArea()
+                    } else {
+                        VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
+                            .ignoresSafeArea()
+                    }
+                }
+                .overlay(alignment: .trailing) {
+                    if themeColor.isGalaxy {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.14))
+                            .frame(width: 1)
                             .ignoresSafeArea()
                     }
                 }
         } detail: {
             // Detail (Inspector): Actions + Preview + Activity
             inspectorColumn
-                .navigationSplitViewColumnWidth(min: 280, ideal: 300, max: 350)
+                .navigationSplitViewColumnWidth(min: 280, ideal: 350, max: 350)
                 .background {
-                    if !isLiquidGlass {
-                        VisualEffectView(material: .sidebar, blendingMode: .withinWindow)
+                    if themeColor.isGalaxy {
+                        ZStack {
+                            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
+                            Color(red: 0.02, green: 0.04, blue: 0.12).opacity(0.68)
+                        }
+                        .ignoresSafeArea()
+                    } else {
+                        VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
                             .ignoresSafeArea()
                     }
                 }
-        }
-        .background {
-            if isLiquidGlass {
-                VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow)
-                    .ignoresSafeArea()
-            }
         }
         .overlay(alignment: .top) {
             if !manager.hasAccessibilityPermission && !hidePermissionBanner {
@@ -70,8 +97,23 @@ struct ContentView: View {
                         Text((manager.willUpdateSession ? "Update Layout" : "Save Layout").localized(appLanguage))
                     }
                 }
-                .help(manager.isUpdateRestricted ? "Cannot update/save while a restricted or mismatched session is selected" : (manager.willUpdateSession ? "Update current layout" : "Save current window positions"))
-                .disabled(manager.isUpdateRestricted)
+                .help({
+                    if manager.isUpdateRestricted { return "Cannot update/save while a restricted or mismatched session is selected" }
+                    if let key = manager.selectedSnapshotKey, key != WindowManager.liveKey,
+                       let snapshot = manager.store.snapshots[key],
+                       !manager.canRestore(snapshot: snapshot) {
+                        return "Connect the required displays to update this session"
+                    }
+                    return manager.willUpdateSession ? "Update current layout" : "Save current window positions"
+                }())
+                .disabled({
+                    if manager.isUpdateRestricted { return true }
+                    if let key = manager.selectedSnapshotKey, key != WindowManager.liveKey,
+                       let snapshot = manager.store.snapshots[key] {
+                        return !manager.canRestore(snapshot: snapshot)
+                    }
+                    return false
+                }())
 
                 Button {
                     if let key = manager.selectedSnapshotKey, key != WindowManager.liveKey {
@@ -94,6 +136,13 @@ struct ContentView: View {
                     }
                     return false
                 }())
+
+                Button {
+                    openSettings()
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .help("Settings".localized(appLanguage))
             }
         }
         .onOpenURL { url in
@@ -101,6 +150,12 @@ struct ContentView: View {
                 DesktopToggleManager.shared.toggleDesktop()
             }
         }
+        .background {
+            if themeColor.isGalaxy {
+                GalaxyCosmicBackgroundView()
+            }
+        }
+        .background(WindowTransparencyAccessor())
     }
 
     // MARK: - Inspector Column
@@ -133,7 +188,7 @@ struct ContentView: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
 
-                    LayoutPreviewView(snapshot: snapshot, selectedRecordID: nil, tint: themeColor.color ?? .accentColor)
+                    LayoutPreviewView(snapshot: snapshot, selectedRecordID: nil, tint: themeColor.color(seed: 2))
                         .frame(height: 160)
                         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snapshot.records.count)
                 }
@@ -146,12 +201,6 @@ struct ContentView: View {
             ActivityView()
                 .frame(maxHeight: .infinity)
         }
-        .background {
-            if !isLiquidGlass {
-                VisualEffectView(material: .sidebar, blendingMode: .withinWindow)
-                    .ignoresSafeArea()
-            }
-        }
     }
 
     private var permissionBanner: some View {
@@ -163,15 +212,21 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Accessibility Permission Required".localized(appLanguage))
                     .font(.headline)
-                Text("To track and restore windows from other apps, please enable RememberMyWindows in System Settings.".localized(appLanguage))
+                Text("To track and restore windows from other apps, please enable RememberMyWindows in System Settings. If already ON, toggle it OFF and ON to refresh macOS cache.".localized(appLanguage))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             
             Spacer()
+
+            Button("Re-check".localized(appLanguage)) {
+                manager.checkAccessibilityPermissionManually()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
             
             Button("Open System Settings".localized(appLanguage)) {
-                manager.requestAccessibilityPermission()
+                manager.openAccessibilitySettings()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
