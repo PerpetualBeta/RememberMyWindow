@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-cd /Applications/RememberMyWindows
 set -euo pipefail
 
 # dmg.sh - Build the app and package it into a shareable DMG
@@ -8,12 +7,9 @@ APP_NAME="RememberMyWindows"
 DMG_NAME="${APP_NAME}.dmg"
 TEMP_DMG_DIR="temp_dmg"
 
-echo "Step 1: Building a fresh version of the app..."
-# We call build.sh but we don't want it to launch the app at the end
-# So we run the compilation and packaging logic manually or use a flag if we had one.
-# For simplicity, we'll just run the core build logic here.
-
 cd "$(dirname "$0")"
+
+echo "Step 1: Building a fresh version of the app..."
 
 APP_DIR="${APP_NAME}.app"
 MACOS_DIR="${APP_DIR}/Contents/MacOS"
@@ -90,15 +86,22 @@ cat <<EOF > "${APP_DIR}/Contents/Info.plist"
 </plist>
 EOF
 
+echo "  - Copying icon..."
+if [ -f "WindowLayout/AppIcon.icns" ]; then
+    cp "WindowLayout/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
+fi
+
 echo "  - Copying localizations..."
 if [ -d "WindowLayout/he.lproj" ]; then
     cp -R "WindowLayout/he.lproj" "${RESOURCES_DIR}/"
 fi
+if [ -d "WindowLayout/en.lproj" ]; then
+    cp -R "WindowLayout/en.lproj" "${RESOURCES_DIR}/"
+fi
 
-
-echo "  - Copying icon..."
-if [ -f "AppIcon.icns" ]; then
-    cp "WindowLayout/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
+echo "  - Copying bundled sounds..."
+if [ -d "WindowLayout/Sounds" ]; then
+    cp WindowLayout/Sounds/*.m4a "${RESOURCES_DIR}/" 2>/dev/null || true
 fi
 
 echo "  - Code signing (Ad-hoc with stable designated requirement)..."

@@ -1,0 +1,30 @@
+name: Build & Release DMG
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build DMG & Create Release
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build and Package DMG
+        run: |
+          chmod +x DMG-BuildandPackage.sh
+          ./DMG-BuildandPackage.sh
+
+      - name: Upload DMG to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: RememberMyWindows.dmg
+          generate_release_notes: true

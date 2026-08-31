@@ -34,7 +34,7 @@ func lz(_ key: String) -> String {
 func normalizeToEnglish(_ name: String) -> String {
     // If it's a Hebrew name in our reverse dict, map it back to English.
     // Also handle prefixes like 'צג Retina מובנה'.
-    var target = name
+    let target = name
     if target.contains("מובנה") {
         return "Built-in Retina Display"
     }
