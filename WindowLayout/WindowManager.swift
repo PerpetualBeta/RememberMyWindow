@@ -74,6 +74,19 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var pendingCapturedWindows: [WindowRecord]? = nil
     private var pendingFP: ScreenFingerprint? = nil
     private var isWaitingForLocationPermission: Bool = false
+    /// Backstop for the two points where a save parks waiting on CoreLocation.
+    /// Without it a callback that never arrives loses the save outright: the
+    /// pending state stays set, the status line reads "Waiting for location
+    /// permission…" forever, and pressing Save again does not help, because the
+    /// authorization status never changes. Dismissing the system prompt without
+    /// choosing does exactly that.
+    private var locationWaitTimer: Timer?
+    /// Set when a backstop has fired, so the save it resumes does not park again.
+    private var locationWaitGaveUp = false
+    /// How long a save waits on the system permission prompt before giving up.
+    private static let locationPermissionWaitLimit: TimeInterval = 30
+    /// How long a save waits on a fresh fix before giving up.
+    private static let locationFixWaitLimit: TimeInterval = 15
     private var isWaitingForLocationUpdate: Bool = false
     private var lastLocationTimestamp: Date? = nil
     /// Tracks window count across consecutive captures to detect sudden anomalous drops.
@@ -303,6 +316,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     func saveNow(named snapshotName: String? = nil) {
+        // A fresh press is entitled to try for a location again.
+        locationWaitGaveUp = false
+        cancelLocationWaitBackstop()
+
         guard store.saveLocationEnabled else {
             performSave(named: snapshotName)
             return
@@ -315,6 +332,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             locationManager.requestWhenInUseAuthorization()
             log("Waiting for location permission before saving...", level: .moderate, type: .system)
             statusMessage = "Waiting for location permission…"
+            armLocationWaitBackstop(Self.locationPermissionWaitLimit, reason: "location permission")
             return
         }
         
@@ -345,7 +363,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let status = locationManager.authorizationStatus
         let isAuthorized = store.saveLocationEnabled && status != .notDetermined && status != .denied && status != .restricted
         
-        if isAuthorized && !isWaitingForLocationUpdate {
+        if isAuthorized && !isWaitingForLocationUpdate && !locationWaitGaveUp {
             // If location is nil OR older than 60 seconds, request a fresh one for manual save
             let isStale = currentLocation == nil || (lastLocationTimestamp?.timeIntervalSinceNow ?? -1000) < -60
             
@@ -362,6 +380,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 locationManager.requestLocation()
                 log("📍 Requesting fresh location before saving...", level: .moderate, type: .system)
                 statusMessage = "Locating…"
+                armLocationWaitBackstop(Self.locationFixWaitLimit, reason: "a location fix")
                 return
             }
         }
@@ -370,6 +389,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         isWaitingForLocationUpdate = false
         pendingCapturedWindows = nil
         pendingFP = nil
+        // This save is past the point where it could park, so the suppression
+        // has done its job and must not leak into the next one.
+        locationWaitGaveUp = false
+        cancelLocationWaitBackstop()
 
         // ── Check for an existing saved session for this EXACT screen config ────
         let existingEntry = store.snapshots
@@ -3782,6 +3805,44 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
     }
 
+    // MARK: - Location wait backstop
+
+    /// Only ever armed from the two save park points, so a fired backstop always
+    /// has a save to complete. `requestLocationPermission()` deliberately does
+    /// not arm one: no save is waiting on it, and completing one there would
+    /// write a layout the user never asked for.
+    private func armLocationWaitBackstop(_ limit: TimeInterval, reason: String) {
+        locationWaitTimer?.invalidate()
+        locationWaitTimer = Timer.scheduledTimer(withTimeInterval: limit, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.locationWaitDidTimeOut(after: limit, reason: reason) }
+        }
+    }
+
+    private func cancelLocationWaitBackstop() {
+        locationWaitTimer?.invalidate()
+        locationWaitTimer = nil
+    }
+
+    private func locationWaitDidTimeOut(after limit: TimeInterval, reason: String) {
+        locationWaitTimer = nil
+        guard isWaitingForLocationPermission || isWaitingForLocationUpdate else { return }
+
+        isWaitingForLocationPermission = false
+        isWaitingForLocationUpdate = false
+        locationWaitGaveUp = true
+
+        log(
+            "Gave up waiting for \(reason) after \(Int(limit))s. Saving without the location tag.",
+            level: .necessary,
+            type: .system
+        )
+
+        // The annotation is decorative. The layout is not.
+        let name = pendingSaveName
+        pendingSaveName = nil
+        performSave(named: name)
+    }
+
     // MARK: - CLLocationManagerDelegate
     
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -3791,6 +3852,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             
             if isWaitingForLocationUpdate {
                 isWaitingForLocationUpdate = false
+                cancelLocationWaitBackstop()
                 log("📍 Location received. Completing save...", level: .moderate, type: .system)
                 performSave(named: pendingSaveName)
                 pendingSaveName = nil
@@ -3803,6 +3865,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             log("Location error: \(error.localizedDescription)", type: .system)
             if isWaitingForLocationUpdate {
                 isWaitingForLocationUpdate = false
+                cancelLocationWaitBackstop()
                 log("⚠️ Location update failed. Proceeding with save anyway.", type: .system)
                 performSave(named: pendingSaveName)
                 pendingSaveName = nil
@@ -3822,6 +3885,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             
             if isWaitingForLocationPermission && status != .notDetermined {
                 isWaitingForLocationPermission = false
+                cancelLocationWaitBackstop()
                 let isAuthorized = status != .denied && status != .restricted
                 log("Location permission updated (\(isAuthorized ? "authorized" : "denied")). Resuming save.", type: .system)
                 performSave(named: pendingSaveName)
