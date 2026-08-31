@@ -2,19 +2,18 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
-## [1.0.0] — 2026-08-31
+## [v11.0] — 2026-08-31
 
-### 🎉 Initial Public Release
+### 🚀 The Open Source & Automation Release
 
-- Native macOS SwiftUI app (macOS 15+ / Sequoia)
-- Screen fingerprinting — layouts tied to exact physical monitor hardware IDs
-- Auto-save window positions with 800ms debounce
-- Auto-restore on display reconnect
-- Named layouts per screen configuration
-- Quick restore keyboard shortcut (Cmd+D)
-- Notch-style notification system
-- Live activity log
-- Full dark mode and theme support
-- Hebrew and English localisation
-- Menu bar integration
-- GPLv3 open-source licence
+- **GPLv3 Licensing**: Project is now fully open-source under the GNU General Public License v3.
+- **Automated Cloud Releases**: Added GitHub Actions workflow to build, package DMG, and release automatically.
+- **Cleaned Compiler Warnings**: Replaced deprecated `activateIgnoringOtherApps` and updated SwiftUI `.onChange` handlers.
+- **Improved Packaging**: DMG packaging script now includes all sound assets and localized strings automatically.
+- **Repository Structure**: Cleaned up build files and established standard project hierarchy.
+
+---
+
+## [v10.0] — 2026-08-30
+
+- Look Ma, No Hands! automation and window management updates.
