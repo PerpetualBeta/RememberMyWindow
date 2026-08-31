@@ -23,8 +23,13 @@ jobs:
           chmod +x DMG-BuildandPackage.sh
           ./DMG-BuildandPackage.sh
 
+      - name: Extract Release Notes from CHANGELOG
+        run: |
+          awk '/^## /{if (found) exit; found=1} found' CHANGELOG.md > release_notes.md
+          cat release_notes.md
+
       - name: Upload DMG to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: RememberMyWindows.dmg
-          generate_release_notes: true
+          body_path: release_notes.md
