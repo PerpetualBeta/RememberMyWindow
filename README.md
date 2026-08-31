@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="WindowLayout/AppIcon.icns" width="128" height="128" alt="RememberMyWindow Icon"/>
+<img src="AppIcon.png" width="128" height="128" alt="RememberMyWindows Icon"/>
 
 # RememberMyWindows
 
