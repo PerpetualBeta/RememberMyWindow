@@ -45,11 +45,32 @@ final class DesktopToggleManager: ObservableObject {
 
     private let hotkeys = HotkeyManager()
 
-    // Toggle state
-    private var isDesktopHidden = false
-    private var previouslyVisibleApps: Set<String> = []
-    private var previousFrontmostAppBundleID: String?
-    private var finderHadWindows = false
+    // Toggle state. Persisted, because losing it strands whatever was hidden.
+    // Quit or restart while the desktop is hidden and isDesktopHidden comes back
+    // false, so the next press hides more apps instead of restoring the ones
+    // already gone. There is no way back from inside the app: recovery means
+    // clicking every Dock icon. It presents as the toggle working on fewer and
+    // fewer windows, because the !app.isHidden test skips the already-hidden
+    // ones, so the visible set drains a little further with every restart.
+    private var isDesktopHidden = false {
+        didSet { UserDefaults.standard.set(isDesktopHidden, forKey: Keys.isHidden) }
+    }
+    private var previouslyVisibleApps: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(previouslyVisibleApps), forKey: Keys.previouslyVisibleApps) }
+    }
+    private var previousFrontmostAppBundleID: String? {
+        didSet { UserDefaults.standard.set(previousFrontmostAppBundleID, forKey: Keys.previousFrontmostApp) }
+    }
+    private var finderHadWindows = false {
+        didSet { UserDefaults.standard.set(finderHadWindows, forKey: Keys.finderHadWindows) }
+    }
+
+    private enum Keys {
+        static let isHidden = "desktopToggleIsHidden"
+        static let previouslyVisibleApps = "desktopTogglePreviouslyVisibleApps"
+        static let previousFrontmostApp = "desktopTogglePreviousFrontmostApp"
+        static let finderHadWindows = "desktopToggleFinderHadWindows"
+    }
 
     private init() {
         UserDefaults.standard.register(defaults: [
@@ -85,6 +106,22 @@ final class DesktopToggleManager: ObservableObject {
         // Persist immediately so the binding is stable from here on, whichever
         // branch produced it.
         self.hotkey.save(HotkeyKeys.desktopToggle)
+
+        // Property observers do not fire for assignments made inside an
+        // initialiser, so reading the state back here does not rewrite it.
+        self.isDesktopHidden = UserDefaults.standard.bool(forKey: Keys.isHidden)
+        self.previouslyVisibleApps = Set(UserDefaults.standard.stringArray(forKey: Keys.previouslyVisibleApps) ?? [])
+        self.previousFrontmostAppBundleID = UserDefaults.standard.string(forKey: Keys.previousFrontmostApp)
+        self.finderHadWindows = UserDefaults.standard.bool(forKey: Keys.finderHadWindows)
+
+        if self.isDesktopHidden {
+            // .necessary, because resuming mid-hide changes what the next press
+            // does. The user should be able to read that, not infer it.
+            WindowManager.shared.log(
+                "Resumed with the desktop hidden. \(self.previouslyVisibleApps.count) app(s) to restore on the next press.",
+                level: .necessary
+            )
+        }
 
         if self.isEnabled { start() }
     }
