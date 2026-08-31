@@ -20,6 +20,8 @@ Every time you plug in a monitor, disconnect from a dock, or rearrange your disp
 
 It silently tracks your window positions in the background, and the moment it recognises your display setup, it puts every window exactly where you left it.
 
+<img width="1419" height="893" alt="image" src="https://github.com/user-attachments/assets/4fcaa48b-c658-46eb-afff-776e05e02ebd" />
+
 ---
 
 ## 🚀 Features
