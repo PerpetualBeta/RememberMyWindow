@@ -534,26 +534,65 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Menu
 
+    private func menuSymbolImage(_ symbolName: String) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        guard let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?.withSymbolConfiguration(config) else {
+            return nil
+        }
+        let targetSize = NSSize(width: 16, height: 16)
+        let img = NSImage(size: targetSize, flipped: false) { rect in
+            let bSize = base.size
+            if bSize.width > 0 && bSize.height > 0 {
+                let scale = min(targetSize.width / bSize.width, targetSize.height / bSize.height)
+                let w = bSize.width * scale
+                let h = bSize.height * scale
+                let x = (targetSize.width - w) / 2
+                let y = (targetSize.height - h) / 2
+                base.draw(in: NSRect(x: x, y: y, width: w, height: h))
+            } else {
+                base.draw(in: rect)
+            }
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }
+
     private func setupMenu() {
         let menu = NSMenu()
         self.menu = menu
         menu.delegate = self
 
-        menu.addItem(withTitle: lz("Open RememberMyWindows"), action: #selector(openMainWindow), keyEquivalent: "o")
+        let activeAppID = lastFrontmostAppID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let activeAppName: String? = {
+            guard let appID = activeAppID, appID != "com.netanel.remembermywindows" else { return nil }
+            return NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == appID })?.localizedName ?? appID
+        }()
+
+        let openTitle: String
+        if let appName = activeAppName {
+            openTitle = String(format: lz("Open RememberMyWindows (%@)"), appName)
+        } else {
+            openTitle = lz("Open RememberMyWindows")
+        }
+
+        let openItem = menu.addItem(withTitle: openTitle, action: #selector(openMainWindow), keyEquivalent: "o")
+        openItem.image = menuSymbolImage("macwindow.on.rectangle")
         menu.addItem(NSMenuItem.separator())
 
         if let snap = WindowManager.shared.currentApplicableSnapshot {
             let restoreTitle = String(format: lz("Full Restore '%@'"), snap.displayName)
-            menu.addItem(withTitle: restoreTitle, action: #selector(restoreNow), keyEquivalent: "r")
+            let restoreItem = menu.addItem(withTitle: restoreTitle, action: #selector(restoreNow), keyEquivalent: "r")
+            restoreItem.image = menuSymbolImage("arrow.counterclockwise")
 
             let updateTitle = String(format: lz("Update Full Layout '%@'"), snap.displayName)
             let updateItem = menu.addItem(withTitle: updateTitle, action: #selector(saveLayout), keyEquivalent: "s")
             updateItem.isEnabled = !WindowManager.shared.isUpdateRestricted
+            updateItem.image = menuSymbolImage("arrow.triangle.2.circlepath")
             
             // Native Single App Add / Update Menu Item
-            let activeAppID = lastFrontmostAppID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
             if let appID = activeAppID, appID != "com.netanel.remembermywindows" {
-                let appName = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == appID })?.localizedName ?? appID
+                let appName = activeAppName ?? appID
                 let isSaved = snap.records.contains { $0.windowID.appBundleID == appID }
                 
                 let itemTitle = isSaved
@@ -561,6 +600,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     : String(format: lz("Add '%@' to '%@'"), appName, snap.displayName)
                 
                 let singleAppItem = menu.addItem(withTitle: itemTitle, action: #selector(updateOrAddFrontmostApp), keyEquivalent: "")
+                singleAppItem.image = menuSymbolImage(isSaved ? "arrow.clockwise" : "plus")
             }
             
             let groupSubmenu = WindowManager.shared.store.groupOtherAppsInSubmenu
@@ -589,6 +629,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if groupSubmenu && !otherRecords.isEmpty {
                 let otherAppsMenu = NSMenu()
                 let otherAppsItem = NSMenuItem(title: lz("Others Saved in your session"), action: nil, keyEquivalent: "")
+                otherAppsItem.image = menuSymbolImage("square.stack.3d.up")
                 otherAppsItem.submenu = otherAppsMenu
 
                 let submenuItem = NSMenuItem()
@@ -610,13 +651,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let updateTitle = lz("Update Full Layout")
             let updateItem = menu.addItem(withTitle: updateTitle, action: #selector(saveLayout), keyEquivalent: "s")
             updateItem.isEnabled = !WindowManager.shared.isUpdateRestricted
+            updateItem.image = menuSymbolImage("arrow.triangle.2.circlepath")
             
-            menu.addItem(withTitle: lz("Full Restore Default Layout"), action: #selector(restoreNow), keyEquivalent: "r")
+            let restoreItem = menu.addItem(withTitle: lz("Full Restore Default Layout"), action: #selector(restoreNow), keyEquivalent: "r")
+            restoreItem.image = menuSymbolImage("arrow.counterclockwise")
         }
 
         // Saved sessions submenu
         let savedMenu = NSMenu()
         let savedItem = NSMenuItem(title: lz("Saved Sessions"), action: nil, keyEquivalent: "")
+        savedItem.image = menuSymbolImage("folder")
         savedItem.submenu = savedMenu
 
         let savedSnapshots = WindowManager.shared.store.snapshots.values
@@ -644,7 +688,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(savedItem)
 
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(withTitle: lz("Quit"), action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = menu.addItem(withTitle: lz("Quit"), action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.image = menuSymbolImage("power")
     }
 
     /// Native macOS menu bar item background highlight + white icon tint for 0.3s on right-click restore.

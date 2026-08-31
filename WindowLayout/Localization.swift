@@ -413,6 +413,7 @@ private let translationDict: [String: String] = [
     "History is empty": "ההיסטוריה ריקה",
     // Menu
     "Open RememberMyWindows": "פתח את RememberMyWindows",
+    "Open RememberMyWindows (%@)": "פתח את RememberMyWindows (%@)",
     "Restore Default Layout": "שחזר סידור ברירת מחדל",
     "%@ needs attention": "%@ דורש תשומת לב",
     "%@ window(s) could not be confirmed": "לא ניתן לאשר %@ חלון/חלונות",
