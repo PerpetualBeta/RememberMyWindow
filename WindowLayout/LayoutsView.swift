@@ -363,7 +363,7 @@ struct SnapshotDetailView: View {
                 .onAppear {
                     scrollToCurrentApp(using: proxy)
                 }
-                .onChange(of: manager.selectedAppBundleID) { _ in
+                .onChange(of: manager.selectedAppBundleID) { _, _ in
                     scrollToCurrentApp(using: proxy)
                 }
             }

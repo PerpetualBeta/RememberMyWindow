@@ -161,7 +161,7 @@ final class DesktopToggleManager: ObservableObject {
             WindowManager.shared.log("Desktop already hidden, ensuring space switch", level: .verbose)
             if isCurrentSpaceFullScreen() {
                 if let finder = workspace.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.finder" }) {
-                    finder.activate(options: .activateIgnoringOtherApps)
+                    finder.activate()
                 }
             }
             return
@@ -176,7 +176,7 @@ final class DesktopToggleManager: ObservableObject {
             WindowManager.shared.log("Full-screen state detected — forcing space switch", type: .system)
             if let finder = workspace.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.finder" }) {
                 // 1. Standard activation
-                finder.activate(options: .activateIgnoringOtherApps)
+                finder.activate()
                 
                 // 2. AppleScript activation (more forceful)
                 _ = executeAppleScript("tell application \"Finder\" to activate")
@@ -264,7 +264,7 @@ final class DesktopToggleManager: ObservableObject {
         if let bundleID = targetBundleID,
            let app = workspace.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
             WindowManager.shared.log("Re-activating: \(app.localizedName ?? bundleID)", level: .verbose)
-            app.activate(options: .activateIgnoringOtherApps)
+            app.activate()
         }
 
         isDesktopHidden = false

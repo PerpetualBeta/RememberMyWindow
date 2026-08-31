@@ -106,7 +106,7 @@ struct ActivityView: View {
                     .padding(.bottom, 12)
                 }
             }
-            .onChange(of: manager.recentEvents.first?.id) { _ in
+            .onChange(of: manager.recentEvents.first?.id) { _, _ in
                 if let newest = manager.recentEvents.first {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                         proxy.scrollTo(newest.id, anchor: .bottom)

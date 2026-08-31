@@ -293,7 +293,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.netanel.remembermywindows")
         if runningApps.count > 1 {
             if let existingApp = runningApps.first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
-                existingApp.activate(options: [.activateIgnoringOtherApps])
+                existingApp.activate()
                 if let url = URL(string: "remembermywindows://main") {
                     NSWorkspace.shared.open(url)
                 }
