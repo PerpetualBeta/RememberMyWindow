@@ -312,7 +312,11 @@ struct NotchNotificationView: View {
             .offset(y: appeared ? 0 : -6)
         }
         .frame(width: pillWidth, height: pillHeight, alignment: .top)
-        .shadow(color: .black.opacity(appeared ? 0.55 : 0), radius: appeared ? 14 : 0, x: 0, y: 5)
+        // No drop shadow. The pill hangs off the top of the screen, so a blur has
+        // nowhere to land except around the two bottom corners, where it compounds
+        // from the bottom edge and the side edge at once and reads as a dirty
+        // corner rather than as depth. The pill is meant to look like the notch,
+        // and hardware does not float.
         .opacity(appeared ? 1.0 : 0.0)
         .scaleEffect(x: appeared ? 1.0 : 0.88, y: appeared ? 1.0 : 0.01, anchor: .top)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: appeared)
@@ -384,7 +388,7 @@ final class NotchPositionHUDWindow: NSPanel {
         let sf         = screen.frame
         let notchDepth = screen.safeAreaInsets.top > 0 ? screen.safeAreaInsets.top : 24.0
         pillH = notchDepth + 52.0   // notch area + content row
-        winH  = pillH + 20.0        // extra space for shadow & slide-in animation
+        winH  = pillH + 20.0        // extra space for the slide-in animation
 
         // Centre horizontally, clamped to screen bounds
         let x = max(sf.minX, min(sf.midX - pillW / 2, sf.maxX - pillW))
@@ -550,7 +554,6 @@ struct NotchPositionHUDView: View {
             .offset(y: appeared ? 0 : -6)
         }
         .frame(width: pillWidth, height: pillHeight, alignment: .top)
-        .shadow(color: .black.opacity(appeared ? 0.55 : 0), radius: appeared ? 14 : 0, x: 0, y: 5)
         .opacity(appeared ? 1.0 : 0.0)
         .scaleEffect(x: appeared ? 1.0 : 0.88, y: appeared ? 1.0 : 0.01, anchor: .top)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: appeared)
