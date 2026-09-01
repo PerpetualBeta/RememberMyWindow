@@ -2419,6 +2419,24 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     continue
                 }
 
+                // Skip if app is already full-screen on the correct screen in the live layout
+                if (record.isNativeFullScreen || record.isFullScreenMode) {
+                    let liveRecord = liveRecords.first { lr in
+                        lr.windowID.appBundleID == record.windowID.appBundleID &&
+                        (record.windowID.windowTitle.isEmpty ? lr.windowID.appWindowIndex == record.windowID.appWindowIndex : lr.windowID.windowTitle == record.windowID.windowTitle)
+                    }
+                    if let liveRecord = liveRecord, liveRecord.isNativeFullScreen || liveRecord.isFullScreenMode {
+                        let sameScreen = liveRecord.screenName == record.screenName ||
+                                         (liveRecord.screenFrame != nil && record.screenFrame != nil &&
+                                          abs(liveRecord.screenFrame!.origin.x - record.screenFrame!.origin.x) < 5 &&
+                                          abs(liveRecord.screenFrame!.origin.y - record.screenFrame!.origin.y) < 5)
+                        if sameScreen {
+                            self.log("ℹ️ Skipping '\(appName)' — already full-screen on target display", level: .verbose, type: .restore)
+                            continue
+                        }
+                    }
+                }
+
                 // ---------- Our own windows: use NSWindow directly ----------
                 if appName == Bundle.main.bundleIdentifier || appName == ownProcessName {
                     let success = await MainActor.run { [weak self] in
