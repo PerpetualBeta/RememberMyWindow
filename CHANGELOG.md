@@ -2,6 +2,25 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v13.2] — 2026-09-01
+
+### 🔕 "When I Turn Off Notifications, I Mean Disappear"
+
+#### 🔔 Master Notification Disappearing Act
+- **Total Eclipse of the Settings**: When you switch off the master **Notifications** toggle, the app takes the hint and vaporizes the **Notification Sounds** toggle, **Sound Library**, and all channel navigation rows into thin air. No ghost toggles left behind!
+- **Sound Library Jukebox**: Replaced the redundant "Default Sound" row with a new **Sound Library** browser right in the notification panel. Now you can spam-click *Vine Boom*, *Anime Wow*, and *Wilhelm Scream* to your heart's content without messing up individual event sounds.
+- **Bilingual Euphoria**: English & Hebrew translations (`ספריית צלילים`) for all fresh sound library copy.
+
+#### ⌨️ Configurable Desktop Hotkey & Stability
+- **Carbon-Powered Shortcut**: Swapped the fickle event-tap for a rock-solid Carbon `RegisterEventHotKey`. Customize your Desktop Toggle hotkey to any key combination you like (defaulting to `⌃⌥D`).
+- **No More Safari Drama**: Kept shortcuts from interfering with Safari or hanging silently when macOS gets grumpy.
+
+#### 🔮 Notch Glow & Privacy Honesty
+- **Persistent Notch Pulse**: Rebalanced the notch indicator halo and ripple geometry so the fallback glow stays silky-smooth and visible through the entire pulse cycle.
+- **Transparent Privacy**: Clarified reverse-geocoding privacy disclosures.
+
+---
+
 ## [v13.1] — 2026-09-01
 
 ### 🛠️ Fixes for Previous Release

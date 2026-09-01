@@ -1235,8 +1235,100 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     private var notchWindow: NotchNotificationWindow?
 
+
     func showNotchNotificationPublic(title: String, subtitle: String, isCompact: Bool = false, bundleID: String? = nil, appIcon: NSImage? = nil, triggerKey: String? = nil) {
         deliverNotification(type: .singleRestore, title: title, subtitle: subtitle, isCompact: isCompact, bundleID: bundleID, appIcon: appIcon, triggerKey: triggerKey)
+    }
+
+    /// Settings hover-preview: fires only the specified channel with realistic notification text and icons.
+    func previewChannelNotification(channel: NotificationChannel, eventType: NotificationEventType) {
+        let (title, subtitle, isCompact, bundleID): (String, String, Bool, String?) = {
+            switch eventType {
+            case .fullRestore:
+                let snapName = self.store.snapshots.values.first?.name ?? "Home"
+                let count = self.store.snapshots.values.first?.records.count ?? 5
+                return ("Layout Restored", "\(snapName) · \(count)/\(count) windows", false, nil)
+            case .singleRestore:
+                return ("Safari Restored", "", true, "com.apple.Safari")
+            case .displayChange:
+                return ("Display Connected", "Restoring layout...", false, nil)
+            case .snapshotUpdate:
+                let snapName = self.store.snapshots.values.first?.name ?? "Home"
+                return ("Safari Saved", snapName, true, "com.apple.Safari")
+            case .desktopToggle:
+                return ("Desktop Clean", "All windows hidden", true, "com.apple.finder")
+            case .permissionWarning:
+                return ("RememberMyWindows", "Permission required", false, nil)
+            }
+        }()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if channel == .notch {
+                // Force notch only — bypass showSystemNotification check
+                guard !self.isScreenLocked else { return }
+                self.notchWindow?.dismiss()
+                let window = NotchNotificationWindow(title: title, subtitle: subtitle, isCompact: isCompact, bundleID: bundleID, appIcon: nil)
+                self.notchWindow = window
+                window.show()
+                // Also play the correct per-event sound for the notch channel
+                let soundEnabled: Bool
+                let soundName: String
+                switch eventType {
+                case .fullRestore:
+                    soundEnabled = self.store.notchSoundOnFullRestore
+                    soundName = self.store.notchSoundNameFullRestore
+                case .singleRestore:
+                    soundEnabled = self.store.notchSoundOnSingleRestore
+                    soundName = self.store.notchSoundNameSingleRestore
+                case .displayChange:
+                    soundEnabled = self.store.notchSoundOnDisplayChange
+                    soundName = self.store.notchSoundNameDisplayChange
+                case .snapshotUpdate:
+                    soundEnabled = self.store.notchSoundOnSnapshotUpdate
+                    soundName = self.store.notchSoundNameSnapshotUpdate
+                case .desktopToggle:
+                    soundEnabled = self.store.notchSoundOnDesktopToggle
+                    soundName = self.store.notchSoundNameDesktopToggle
+                case .permissionWarning:
+                    soundEnabled = true
+                    soundName = self.store.defaultNotificationSound
+                }
+                if soundEnabled { SystemSound.playSound(named: soundName) }
+            } else {
+                // Force system notification only — bypass showNotchNotification check
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = subtitle
+                // Play the correct per-event sound for the system channel
+                let soundEnabled: Bool
+                let soundName: String
+                switch eventType {
+                case .fullRestore:
+                    soundEnabled = self.store.systemSoundOnFullRestore
+                    soundName = self.store.systemSoundNameFullRestore
+                case .singleRestore:
+                    soundEnabled = self.store.systemSoundOnSingleRestore
+                    soundName = self.store.systemSoundNameSingleRestore
+                case .displayChange:
+                    soundEnabled = self.store.systemSoundOnDisplayChange
+                    soundName = self.store.systemSoundNameDisplayChange
+                case .snapshotUpdate:
+                    soundEnabled = self.store.systemSoundOnSnapshotUpdate
+                    soundName = self.store.systemSoundNameSnapshotUpdate
+                case .desktopToggle:
+                    soundEnabled = self.store.systemSoundOnDesktopToggle
+                    soundName = self.store.systemSoundNameDesktopToggle
+                case .permissionWarning:
+                    soundEnabled = true
+                    soundName = self.store.defaultNotificationSound
+                }
+                content.sound = soundEnabled ? .default : nil
+                if soundEnabled { SystemSound.playSound(named: soundName) }
+                let request = UNNotificationRequest(identifier: "preview-\(UUID().uuidString)", content: content, trigger: nil)
+                UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+            }
+        }
     }
 
     func deliverNotification(

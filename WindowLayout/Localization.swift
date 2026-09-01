@@ -110,6 +110,8 @@ private let translationDict: [String: String] = [
     "Play a subtle sound when layout restore alerts or notifications appear": "השמע צליל עדין בעת הופעת התראות שחזור סידור או הודעות",
     "Default Sound": "צליל ברירת מחדל",
     "Default notification alert sound when not overridden": "צליל התראה ברירת מחדל כאשר לא הוגדר צליל ייעודי",
+    "Sound Library": "ספריית צלילים",
+    "Browse and preview available alert tones": "עיון והשמעת צלילי התראה זמינים",
     "Select Sound": "בחר צליל",
     "Sound": "צליל",
     "Sound on for this event": "השמעת צליל מופעלת לאירוע זה",
