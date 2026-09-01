@@ -163,6 +163,7 @@ public final class WebAppDetector {
     /// Scans the app's top-level accessibility window elements for an AXWebArea role.
     private func hasAXWebArea(pid: pid_t) -> Bool {
         let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, 0.15)
         var windowsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
               let windows = windowsRef as? [AXUIElement] else {

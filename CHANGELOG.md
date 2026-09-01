@@ -2,6 +2,27 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v13.0] — 2026-09-01
+
+### 🧠💨 "The App Was Thinking, It Just Needed a Coffee"
+
+#### 🚀 Performance
+- **Instant launch, no more frozen beach ball**: App now shows the menu bar icon and main window immediately at startup. AX observer registration for all running apps is deferred to a cooperative background task instead of blocking the main thread.
+- **150ms AX IPC timeout everywhere**: All Accessibility API calls now have a hard 150ms timeout (`AXUIElementSetMessagingTimeout`). If any app is slow or unresponsive, we move on instead of hanging for macOS's default 6-second wait — eliminating the `(Not Responding)` state seen in Activity Monitor on cold launches.
+- **Safe AX element factory**: Centralised `WindowManager.createAXElement(for:)` helper ensures every AX handle is timeout-guarded across `WindowManager`, `DesktopToggleManager`, `CommandOverlayManager`, and `WebAppDetector`.
+
+#### 🎵 Meme & Fun Sounds
+- **21 new notification sounds** in a brand-new "Meme & Fun" category: Vine Boom, Bruh, OOF (Roblox), Windows Error, Emotional Damage, Wilhelm Scream, What The Dog Doin, Mario 1-Up / Power-Up / Jump / Pipe, Illuminati (X-Files), Directed by (Curb Your Enthusiasm), Huh? (Cat), Taco Bell Bong, Quack, Sheesh, Yeet, Anime Wow, Ta-Da, and more.
+- **Sound picker redesign**: Stepper chevrons (‹ ›) + searchable dropdown menu + shuffle button for every notification sound slot in Settings. No more scrolling an infinite flat list.
+- **Full Hebrew translations** for all new sounds and picker UI strings.
+
+#### 🎯 Menu Bar Polish
+- **App icon on the single-app action item**: The "Update 'App' position" / "Add 'App' to session" item now shows the frontmost app's real 16×16 icon instead of a generic SF Symbol.
+- **Smarter "Open RememberMyWindows" title**: The app name is only appended (e.g. `Open RememberMyWindows (Antigravity IDE)`) when that app is actually saved in the current session — no more misleading labels when the frontmost app isn't tracked.
+- **Window activation fix**: `showMainWindow()` now brings an existing window to front directly (`makeKeyAndOrderFront`) instead of routing through the LaunchServices URL dispatch, shaving off extra IPC latency on every open.
+
+---
+
 ## [v12.0] — 2026-09-01
 
 ### 🎨✨ The "Lookin' Sharp & SF-licious" Menu Glow-Up

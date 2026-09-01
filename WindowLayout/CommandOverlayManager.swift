@@ -97,6 +97,7 @@ final class CommandOverlayManager {
     /// Helper to find target window bounds using AXUIElement or fallback to main screen center.
     private func findTargetWindowBounds(for app: NSRunningApplication) -> CGRect {
         let appAX = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appAX, 0.15)
         var windowRef: CFTypeRef?
         
         // Try focused window first, then main window

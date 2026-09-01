@@ -302,6 +302,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        // Determine if launched by user (active) or by system login item (inactive)
+        // For new users who haven't completed onboarding, always show the UI
+        let isUserLaunch = NSApp.isActive
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+        let shouldShowUI = isUserLaunch || !hasCompletedOnboarding
+        
+        if shouldShowUI {
+            NSApp.setActivationPolicy(.regular)
+        } else {
+            NSApp.setActivationPolicy(.accessory)
+        }
+        setupStatusItem()
+        setupWindowObservers()
+
+        // Capture/show the SwiftUI window immediately so the UI is responsive
+        DispatchQueue.main.async {
+            if shouldShowUI {
+                self.showMainWindow()
+            } else {
+                self.captureAndHideMainWindow()
+            }
+        }
+
+        // Start background managers & tracking asynchronously
         _ = DesktopToggleManager.shared
         WindowManager.shared.startTracking()
 
@@ -319,32 +343,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 QuickKeyRestoreManager.shared.setup()
             } else {
                 QuickKeyRestoreManager.shared.teardown()
-            }
-        }
-
-        
-        // Determine if launched by user (active) or by system login item (inactive)
-        // For new users who haven't completed onboarding, always show the UI
-        let isUserLaunch = NSApp.isActive
-        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-        let shouldShowUI = isUserLaunch || !hasCompletedOnboarding
-        
-        if shouldShowUI {
-            NSApp.setActivationPolicy(.regular)
-        } else {
-            NSApp.setActivationPolicy(.accessory)
-        }
-        setupStatusItem()
-        setupWindowObservers()
-
-        // Capture the SwiftUI window as soon as it is created.
-        // SwiftUI always opens the WindowGroup window at launch.
-        DispatchQueue.main.async {
-            if shouldShowUI {
-                self.showMainWindow()
-            } else {
-                // Hide immediately so the window doesn't flash for background launches
-                self.captureAndHideMainWindow()
             }
         }
     }
@@ -569,8 +567,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == appID })?.localizedName ?? appID
         }()
 
+        // Only show app name in the title when that app is actually saved in the current session
+        let activeAppIsSaved: Bool = {
+            guard let appID = activeAppID,
+                  let snap = WindowManager.shared.currentApplicableSnapshot else { return false }
+            return snap.records.contains { $0.windowID.appBundleID == appID }
+        }()
+
         let openTitle: String
-        if let appName = activeAppName {
+        if let appName = activeAppName, activeAppIsSaved {
             openTitle = String(format: lz("Open RememberMyWindows (%@)"), appName)
         } else {
             openTitle = lz("Open RememberMyWindows")
@@ -600,7 +605,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     : String(format: lz("Add '%@' to '%@'"), appName, snap.displayName)
                 
                 let singleAppItem = menu.addItem(withTitle: itemTitle, action: #selector(updateOrAddFrontmostApp), keyEquivalent: "")
-                singleAppItem.image = menuSymbolImage(isSaved ? "arrow.clockwise" : "plus")
+
+                // Show the frontmost app's real icon at 16×16 instead of an SF Symbol
+                let appIcon: NSImage? = NSWorkspace.shared.runningApplications
+                    .first(where: { $0.bundleIdentifier == appID })?.icon
+                if let icon = appIcon {
+                    let scaled = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+                        icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+                        return true
+                    }
+                    singleAppItem.image = scaled
+                } else {
+                    singleAppItem.image = menuSymbolImage(isSaved ? "arrow.clockwise" : "plus")
+                }
             }
             
             let groupSubmenu = WindowManager.shared.store.groupOtherAppsInSubmenu
@@ -725,8 +742,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Just ensure activation policy is correct; updateActivationPolicy will handle it too
         NSApp.setActivationPolicy(.regular)
 
-        // Use the URL scheme to trigger SwiftUI's Window handling.
-        // This is much more reliable than searching NSApp.windows manually if the window was destroyed (e.g. after restart/login item launch).
+        if let existingWindow = NSApp.windows.first(where: { isMainWindow($0) }) {
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        // Use the URL scheme to trigger SwiftUI's Window handling if window was destroyed.
         if let url = URL(string: "remembermywindows://main") {
             NSWorkspace.shared.open(url)
         }

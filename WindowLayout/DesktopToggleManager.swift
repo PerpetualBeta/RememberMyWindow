@@ -300,6 +300,7 @@ final class DesktopToggleManager: ObservableObject {
         // 1. Check if the frontmost app is in AX full-screen mode (most reliable)
         if let frontApp = NSWorkspace.shared.frontmostApplication {
             let appElement = AXUIElementCreateApplication(frontApp.processIdentifier)
+            AXUIElementSetMessagingTimeout(appElement, 0.15)
             var value: AnyObject?
             if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &value) == .success,
                let windows = value as? [AXUIElement] {

@@ -121,6 +121,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         startPermissionMonitoring()
     }
 
+    // MARK: - Safe AX Element Creation
+
+    /// Creates an AXUIElement for an application PID with a safe messaging timeout (150ms default)
+    /// to ensure unresponsive external apps never freeze the main thread or background scans.
+    static func createAXElement(for pid: pid_t, timeoutSeconds: Float = 0.15) -> AXUIElement {
+        let element = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(element, timeoutSeconds)
+        return element
+    }
+
     // MARK: - Public API
 
     func startTracking() {
@@ -782,8 +792,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     // MARK: - Tracking internals
 
     private func observeRunningApps() {
+        let ownBundleID = Bundle.main.bundleIdentifier
         for app in NSWorkspace.shared.runningApplications
-        where app.activationPolicy == .regular || app.activationPolicy == .accessory {
+        where app.bundleIdentifier == ownBundleID {
             observeApp(app)
         }
     }
@@ -828,7 +839,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     private func observeApp(_ app: NSRunningApplication) {
         guard let pid = Optional(app.processIdentifier), pid > 0 else { return }
-        _ = AXUIElementCreateApplication(pid)
+        _ = WindowManager.createAXElement(for: pid)
 
         // We can't enumerate AX windows from here without accessibility permission,
         // so instead we hook NSWindow notifications for windows in OUR process,
@@ -1041,7 +1052,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             guard let app = runningApps.values.first(where: { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID }) else {
                 continue
             }
-            let appAX = AXUIElementCreateApplication(app.processIdentifier)
+            let appAX = WindowManager.createAXElement(for: app.processIdentifier)
             var windowsValue: CFTypeRef?
             guard AXUIElementCopyAttributeValue(appAX, kAXWindowsAttribute as CFString, &windowsValue) == .success,
                   let windowList = windowsValue as? [AXUIElement] else {
@@ -1732,7 +1743,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 continue
             }
 
-            let axApp = AXUIElementCreateApplication(pid)
+            let axApp = WindowManager.createAXElement(for: pid)
             var windowsRef: CFTypeRef?
             var wins: [AXUIElement] = []
             
@@ -1766,6 +1777,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
             var axWins: [AXWindowInfo] = []
             for win in wins {
+                AXUIElementSetMessagingTimeout(win, 0.15)
                 var posRef: CFTypeRef?
                 var sizeRef: CFTypeRef?
                 AXUIElementCopyAttributeValue(win, kAXPositionAttribute as CFString, &posRef)
@@ -1966,7 +1978,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             let runningApps = NSWorkspace.shared.runningApplications
             guard let app = runningApps.first(where: { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID }) else { return }
 
-            let axApp = AXUIElementCreateApplication(app.processIdentifier)
+            let axApp = WindowManager.createAXElement(for: app.processIdentifier)
             var windowsRef: CFTypeRef?
             var wins: [AXUIElement] = []
             if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
@@ -2089,7 +2101,6 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     // MARK: - Restore
 
     private func restore(snapshot: LayoutSnapshot, animated: Bool, specificAppBundleID: String? = nil, isAppLaunch: Bool = false, showNotification: Bool = true, skipCommandSend: Bool = false, triggerSubtitle: String? = nil, completion: (@MainActor () -> Void)? = nil) {
-        MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
         let fp = ScreenFingerprint.current()
 
         if !hasAccessibilityPermission {
@@ -2113,6 +2124,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             log("Starting restoration of \(records.count) windows for \(fp.readableName)", level: .necessary, type: .restore)
             statusMessage = "Restoring \(records.count) windows…"
         }
+
+        MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
 
 
         Task {
@@ -3255,14 +3268,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     // MARK: - AX Observer Event-Driven Tracking
 
-    /// Registers AX observers for all currently-running user apps and does an initial capture.
+    /// Registers AX observers for all currently-running user apps and does an initial capture in the background.
     private func startAXObservers() {
-        for app in NSWorkspace.shared.runningApplications
-        where app.activationPolicy == .regular || app.activationPolicy == .accessory {
-            attachAXObserver(to: app)
+        Task { @MainActor in
+            let apps = NSWorkspace.shared.runningApplications.filter {
+                $0.activationPolicy == .regular || $0.activationPolicy == .accessory
+            }
+            for app in apps {
+                self.attachAXObserver(to: app)
+            }
+            // One initial capture to populate liveRecords once observers are configured
+            self.scheduleAXEventFlush(delay: 100_000_000)
         }
-        // One initial capture to populate liveRecords
-        scheduleAXEventFlush(delay: 0)
     }
 
     /// Removes all AX observers and clears storage.
@@ -3298,7 +3315,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             return
         }
 
-        let axApp = AXUIElementCreateApplication(pid)
+        let axApp = WindowManager.createAXElement(for: pid)
         let notifications: [String] = [
             kAXWindowMovedNotification,
             kAXWindowResizedNotification,

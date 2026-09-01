@@ -1130,39 +1130,17 @@ struct SettingsView: View {
 
                     Spacer()
 
-                    Menu {
-                        ForEach(SystemSoundCategory.allCases) { category in
-                            Section(category.rawValue.localized(appLanguage)) {
-                                ForEach(SystemSound.allCases.filter { $0.category == category }) { sound in
-                                    Button {
-                                        manager.store.defaultNotificationSound = sound.rawValue
-                                        manager.persist()
-                                        sound.play()
-                                    } label: {
-                                        HStack {
-                                            Text(sound.displayName.localized(appLanguage))
-                                            if manager.store.defaultNotificationSound == sound.rawValue {
-                                                Image(systemName: "checkmark")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(manager.store.defaultNotificationSound.localized(appLanguage))
-                                .font(.system(size: 12, weight: .medium))
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
+                    SoundPickerButton(
+                        selectedSoundName: Binding(
+                            get: { manager.store.defaultNotificationSound },
+                            set: { manager.store.defaultNotificationSound = $0; manager.persist() }
+                        ),
+                        appLanguage: appLanguage,
+                        fontSize: 12,
+                        horizontalPadding: 8,
+                        verticalPadding: 4,
+                        cornerRadius: 6
+                    )
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -2019,38 +1997,14 @@ struct NotificationEventCheckbox: View {
             if let soundBinding = soundIsOn {
                 HStack(spacing: 4) {
                     if let nameBinding = soundName, soundBinding.wrappedValue && isOn {
-                        Menu {
-                            ForEach(SystemSoundCategory.allCases) { category in
-                                Section(category.rawValue.localized(appLanguage)) {
-                                    ForEach(SystemSound.allCases.filter { $0.category == category }) { sound in
-                                        Button {
-                                            nameBinding.wrappedValue = sound.rawValue
-                                            sound.play()
-                                        } label: {
-                                            HStack {
-                                                Text(sound.displayName.localized(appLanguage))
-                                                if nameBinding.wrappedValue == sound.rawValue {
-                                                    Image(systemName: "checkmark")
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 3) {
-                                Text(nameBinding.wrappedValue.localized(appLanguage))
-                                    .font(.system(size: 10.5, weight: .medium))
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.system(size: 8, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
-                        }
-                        .menuStyle(.borderlessButton)
-                        .fixedSize()
+                        SoundPickerButton(
+                            selectedSoundName: nameBinding,
+                            appLanguage: appLanguage,
+                            fontSize: 10.5,
+                            horizontalPadding: 6,
+                            verticalPadding: 3,
+                            cornerRadius: 5
+                        )
                         .help("Select Sound".localized(appLanguage))
                     }
 
@@ -2464,6 +2418,108 @@ struct MenuBarIconSettingsSection: View {
             .padding(.leading, 28)
         }
         .padding(12)
+    }
+}
+
+// MARK: - Sound Picker Components
+
+struct SoundPickerButton: View {
+    @Binding var selectedSoundName: String
+    let appLanguage: AppLanguage
+    var fontSize: CGFloat = 12
+    var horizontalPadding: CGFloat = 8
+    var verticalPadding: CGFloat = 4
+    var cornerRadius: CGFloat = 6
+    var onSelected: ((SystemSound) -> Void)? = nil
+
+    private func stepSound(delta: Int) {
+        let all = SystemSound.allCases
+        guard !all.isEmpty else { return }
+        let currentIndex = all.firstIndex(where: { $0.rawValue == selectedSoundName }) ?? 0
+        let newIndex = (currentIndex + delta + all.count) % all.count
+        let nextSound = all[newIndex]
+        selectedSoundName = nextSound.rawValue
+        onSelected?(nextSound)
+        nextSound.play()
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            // Previous Sound Stepper
+            Button {
+                stepSound(delta: -1)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: max(8, fontSize - 3), weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: fontSize + 4, height: fontSize + 8)
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 4))
+            }
+            .buttonStyle(.plain)
+            .help("Previous sound (‹)".localized(appLanguage))
+
+            // Main Sound Selector & Dropdown Menu
+            Menu {
+                ForEach(SystemSoundCategory.allCases) { category in
+                    Section(category.rawValue.localized(appLanguage)) {
+                        ForEach(SystemSound.allCases.filter { $0.category == category }) { sound in
+                            Button {
+                                selectedSoundName = sound.rawValue
+                                onSelected?(sound)
+                                sound.play()
+                            } label: {
+                                HStack {
+                                    Text(sound.displayName.localized(appLanguage))
+                                    if selectedSoundName == sound.rawValue {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.system(size: max(8, fontSize - 3), weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+
+                    let display = (SystemSound(rawValue: selectedSoundName)?.displayName ?? selectedSoundName).localized(appLanguage)
+                    Text(display)
+                        .font(.system(size: fontSize, weight: .medium))
+                        .lineLimit(1)
+
+                    Spacer(minLength: 4)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: max(7.5, fontSize - 3.5), weight: .semibold))
+                        .foregroundStyle(.secondary.opacity(0.8))
+                }
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, verticalPadding)
+                .frame(width: 165)
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(Color.primary.opacity(0.06))
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 165)
+
+            // Next Sound Stepper
+            Button {
+                stepSound(delta: 1)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: max(8, fontSize - 3), weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: fontSize + 4, height: fontSize + 8)
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 4))
+            }
+            .buttonStyle(.plain)
+            .help("Next sound (›)".localized(appLanguage))
+        }
+        .frame(width: 215, alignment: .trailing)
     }
 }
 

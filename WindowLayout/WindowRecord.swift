@@ -165,12 +165,13 @@ struct LayoutSnapshot: Codable, Identifiable {
 enum SystemSoundCategory: String, CaseIterable, Identifiable {
     case encore  = "Encore Tones"
     case melodic = "Melodic & Ambient"
+    case meme    = "Meme & Fun"
     case classic = "Classic Alert Sounds"
 
     var id: String { rawValue }
 }
 
-/// Available macOS native notification alert sounds including longer Apple tones.
+/// Available macOS native notification alert sounds including longer Apple tones and meme sounds.
 enum SystemSound: String, Codable, CaseIterable, Identifiable {
     // 1. Encore Tones (1.5s – 3.8s)
     case welcome   = "Welcome"
@@ -189,7 +190,30 @@ enum SystemSound: String, Codable, CaseIterable, Identifiable {
     case crystals   = "Crystals"
     case cosmic     = "Cosmic"
 
-    // 3. Classic Alerts (0.5s – 1.8s)
+    // 3. Meme & Fun (0.5s – 2.0s)
+    case emotionalDamage = "EmotionalDamage"
+    case faah            = "Faah"
+    case vineBoom        = "VineBoom"
+    case bruh            = "Bruh"
+    case robloxOof       = "RobloxOof"
+    case windowsError    = "WindowsError"
+    case whatTheDogDoin  = "WhatTheDogDoin"
+    case mario1Up        = "Mario1Up"
+    case marioPowerUp    = "MarioPowerUp"
+    case marioJump       = "MarioJump"
+    case marioPipe       = "MarioPipe"
+    case illuminati      = "Illuminati"
+    case directedBy      = "DirectedBy"
+    case huhCat          = "HuhCat"
+    case wilhelm         = "Wilhelm"
+    case tacoBell        = "TacoBell"
+    case quack           = "Quack"
+    case sheesh          = "Sheesh"
+    case yeet            = "Yeet"
+    case animeWow        = "AnimeWow"
+    case tada            = "Tada"
+
+    // 4. Classic Alerts (0.5s – 1.8s)
     case glass     = "Glass"
     case hero      = "Hero"
     case pop       = "Pop"
@@ -204,7 +228,30 @@ enum SystemSound: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var displayName: String {
-        rawValue
+        switch self {
+        case .emotionalDamage: return "Emotional Damage"
+        case .faah:            return "Faah"
+        case .vineBoom:        return "Vine Boom"
+        case .bruh:            return "Bruh"
+        case .robloxOof:       return "OOF (Roblox)"
+        case .windowsError:    return "Windows Error"
+        case .whatTheDogDoin:  return "What The Dog Doin"
+        case .mario1Up:        return "Mario 1-Up"
+        case .marioPowerUp:    return "Mario Power-Up"
+        case .marioJump:       return "Mario Jump"
+        case .marioPipe:       return "Mario Pipe"
+        case .illuminati:      return "Illuminati (X-Files)"
+        case .directedBy:      return "Directed by (Curb)"
+        case .huhCat:          return "Huh? (Cat)"
+        case .wilhelm:         return "Wilhelm Scream"
+        case .tacoBell:        return "Taco Bell Bong"
+        case .quack:           return "Quack"
+        case .sheesh:          return "Sheesh"
+        case .yeet:            return "Yeet"
+        case .animeWow:        return "Anime Wow"
+        case .tada:            return "Ta-Da"
+        default:               return rawValue
+        }
     }
 
     var category: SystemSoundCategory {
@@ -213,6 +260,8 @@ enum SystemSound: String, Codable, CaseIterable, Identifiable {
             return .encore
         case .stargaze, .illuminate, .crystals, .cosmic:
             return .melodic
+        case .emotionalDamage, .faah, .vineBoom, .bruh, .robloxOof, .windowsError, .whatTheDogDoin, .mario1Up, .marioPowerUp, .marioJump, .marioPipe, .illuminati, .directedBy, .huhCat, .wilhelm, .tacoBell, .quack, .sheesh, .yeet, .animeWow, .tada:
+            return .meme
         case .glass, .hero, .pop, .ping, .tink, .submarine, .funk, .morse, .purr, .frog:
             return .classic
         }
@@ -233,6 +282,8 @@ enum SystemSound: String, Codable, CaseIterable, Identifiable {
         case .melodic:
             let path = "\(toneLib)/Ringtones/\(rawValue).m4r"
             if FileManager.default.fileExists(atPath: path) { return URL(fileURLWithPath: path) }
+        case .meme:
+            break
         case .classic:
             let path = "/System/Library/Sounds/\(rawValue).aiff"
             if FileManager.default.fileExists(atPath: path) { return URL(fileURLWithPath: path) }
