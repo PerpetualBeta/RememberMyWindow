@@ -2209,6 +2209,26 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     self.log("⏭️ Skipping '\(bundleID)' — app is not running", level: .verbose, type: .restore)
                     continue
                 }
+
+                // If all records for this app are already full-screen on the target screen, skip AX resolution & DO NOT activate/focus!
+                let isAlreadyFullScreenOnTargetScreen = appRecords.allSatisfy { record in
+                    guard record.isNativeFullScreen || record.isFullScreenMode else { return false }
+                    guard let lr = liveRecords.first(where: {
+                        $0.windowID.appBundleID == record.windowID.appBundleID &&
+                        (record.windowID.windowTitle.isEmpty ? $0.windowID.appWindowIndex == record.windowID.appWindowIndex : $0.windowID.windowTitle == record.windowID.windowTitle)
+                    }) else { return false }
+                    guard lr.isNativeFullScreen || lr.isFullScreenMode else { return false }
+                    let sameScreen = lr.screenName == record.screenName ||
+                                     (lr.screenFrame != nil && record.screenFrame != nil &&
+                                      abs(lr.screenFrame!.origin.x - record.screenFrame!.origin.x) < 5 &&
+                                      abs(lr.screenFrame!.origin.y - record.screenFrame!.origin.y) < 5)
+                    return sameScreen
+                }
+
+                if isAlreadyFullScreenOnTargetScreen {
+                    self.log("ℹ️ Skipping AX resolution & activation for '\(bundleID)' — already full-screen on target display", level: .verbose, type: .restore)
+                    continue
+                }
                 
                 let pid = app.processIdentifier
                 let appElement = AXUIElementCreateApplication(pid)
