@@ -2380,18 +2380,21 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     
                     guard let lr = matchingLR else { return false }
                     
-                    // Native full-screen state MUST match exactly (do not confuse with fill-screen / maximized)!
-                    if record.isNativeFullScreen != lr.isNativeFullScreen {
+                    let wantsFS = record.isNativeFullScreen || record.isFullScreenMode
+                    let liveFS = lr.isNativeFullScreen || lr.isFullScreenMode
+                    if wantsFS != liveFS {
                         return false
                     }
                     
-                    if record.isNativeFullScreen {
+                    if wantsFS {
+                        // Both are full screen: verify monitor match
                         let sameScreen = lr.screenName == record.screenName ||
                             (lr.screenFrame != nil && record.screenFrame != nil &&
                              abs(lr.screenFrame!.origin.x - record.screenFrame!.origin.x) < 5 &&
                              abs(lr.screenFrame!.origin.y - record.screenFrame!.origin.y) < 5)
                         if !sameScreen { return false }
                     } else {
+                        // Both are normal windows: verify coordinate match
                         let target = self.calculateTargetFrame(for: record)
                         let tol: CGFloat = 2.0
                         let close = abs(lr.globalFrame.origin.x - target.origin.x) <= tol &&
@@ -3014,9 +3017,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         var didModify = false
 
-        // Determine if we need to change screens for a native full-screen window
+        let wantsFullScreen = record.isNativeFullScreen || record.isFullScreenMode
+        let isLiveFS = (liveRecord?.isNativeFullScreen ?? false) || (liveRecord?.isFullScreenMode ?? false)
+        let currentlyFullScreen = isAlreadyFullScreen || isLiveFS
+
+        // Determine if we need to change screens for a full-screen window
         var needsScreenChangeForFullScreen = false
-        if record.isNativeFullScreen && isAlreadyFullScreen {
+        if wantsFullScreen && currentlyFullScreen {
             if let liveScreen = liveRecord?.screenName, let targetScreenName = record.screenName {
                 if liveScreen != targetScreenName {
                     needsScreenChangeForFullScreen = true
@@ -3056,12 +3063,17 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
         }
 
+        // Case 1: App is already full screen on the correct screen and wants full screen -> leave untouched!
+        if wantsFullScreen && currentlyFullScreen && !needsScreenChangeForFullScreen {
+            log("AX ✅ '\(appName)' already full-screen on target display", level: .verbose)
+            return (success: true, didModify: false)
+        }
+
         var activeWin = win
 
-        // If target layout wants NORMAL / FILL-SCREEN but window is currently native full-screen, OR
-        // target layout wants native full-screen but window is currently full-screen on a DIFFERENT monitor,
-        // exit full-screen first.
-        if isAlreadyFullScreen && (!record.isNativeFullScreen || needsScreenChangeForFullScreen) {
+        // Case 2: Target layout wants normal/windowed mode but window is currently full-screen, OR
+        // target layout wants full-screen but window is currently on a DIFFERENT monitor -> exit full screen first
+        if currentlyFullScreen && (!wantsFullScreen || needsScreenChangeForFullScreen) {
             log("ℹ️ Restore: '\(appName)' → exiting Full Screen first to change screens or layout", level: .verbose, type: .restore)
             _ = AXUIElementSetAttributeValue(win, "AXFullScreen" as CFString, kCFBooleanFalse)
             didModify = true
@@ -3097,12 +3109,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
         }
 
-        if record.isNativeFullScreen {
-            if isAlreadyFullScreen && !needsScreenChangeForFullScreen {
-                // Already in native full-screen on the correct display!
-                return (success: true, didModify: false)
-            }
-
+        // Case 3: Target layout wants full-screen (and window was either not full screen or moved from another monitor)
+        if wantsFullScreen {
             didModify = true
 
             // 1. Move window to the target screen
@@ -3129,19 +3137,23 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 try? await Task.sleep(nanoseconds: 20_000_000)
             }
 
-            // 4. Trigger native full screen
-            let runningAppsArray = NSWorkspace.shared.runningApplications
-            if let targetApp = runningAppsArray.first(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) {
-                targetApp.activate()
-            }
-            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms settle
+            // 4. Trigger native full screen if native full-screen is requested
+            if record.isNativeFullScreen {
+                let runningAppsArray = NSWorkspace.shared.runningApplications
+                if let targetApp = runningAppsArray.first(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) {
+                    targetApp.activate()
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms settle
 
-            let fsErr = AXUIElementSetAttributeValue(activeWin, "AXFullScreen" as CFString, kCFBooleanTrue)
-            if fsErr == .success {
-                log("✅ Restore: '\(appName)' → entering Full Screen on target display", level: .verbose, type: .restore)
-                return (success: true, didModify: true)
+                let fsErr = AXUIElementSetAttributeValue(activeWin, "AXFullScreen" as CFString, kCFBooleanTrue)
+                if fsErr == .success {
+                    log("✅ Restore: '\(appName)' → entering Full Screen on target display", level: .verbose, type: .restore)
+                    return (success: true, didModify: true)
+                } else {
+                    log("ℹ️ Restore: '\(appName)' — native full-screen unsupported, kept at filled screen bounds", level: .verbose, type: .restore)
+                    return (success: true, didModify: true)
+                }
             } else {
-                log("ℹ️ Restore: '\(appName)' — native full-screen unsupported, kept at filled screen bounds", level: .verbose, type: .restore)
                 return (success: true, didModify: true)
             }
         }
