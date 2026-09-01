@@ -267,6 +267,59 @@ enum SystemSound: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    var emoji: String {
+        switch self {
+        // Encore Tones
+        case .welcome:         return "👋"
+        case .droplet:         return "💧"
+        case .milestone:       return "🏆"
+        case .cheers:          return "🥂"
+        case .passage:         return "🚪"
+        case .portal:          return "🌀"
+        case .handoff:         return "🤝"
+        case .rebound:         return "🏀"
+        case .slide:           return "🛝"
+        // Melodic & Ambient
+        case .stargaze:        return "✨"
+        case .illuminate:      return "💡"
+        case .crystals:        return "💎"
+        case .cosmic:          return "🪐"
+        // Meme & Fun
+        case .emotionalDamage: return "💔"
+        case .faah:            return "📢"
+        case .vineBoom:        return "💥"
+        case .bruh:            return "🗿"
+        case .robloxOof:       return "💀"
+        case .windowsError:    return "⚠️"
+        case .whatTheDogDoin:  return "🐕"
+        case .mario1Up:        return "🍄"
+        case .marioPowerUp:    return "🌟"
+        case .marioJump:       return "🦘"
+        case .marioPipe:       return "🧪"
+        case .illuminati:      return "👁️"
+        case .directedBy:      return "🎬"
+        case .huhCat:          return "🐱"
+        case .wilhelm:         return "😱"
+        case .tacoBell:        return "🌮"
+        case .quack:           return "🦆"
+        case .sheesh:          return "🥶"
+        case .yeet:            return "🚀"
+        case .animeWow:        return "✨"
+        case .tada:            return "🎉"
+        // Classic Alerts
+        case .glass:           return "🥛"
+        case .hero:            return "🦸"
+        case .pop:             return "🫧"
+        case .ping:            return "🏓"
+        case .tink:            return "🔔"
+        case .submarine:       return "🚢"
+        case .funk:            return "🎸"
+        case .morse:           return "📻"
+        case .purr:            return "🐈"
+        case .frog:            return "🐸"
+        }
+    }
+
     /// Resolves file URL for bundled trimmed sounds, ToneLibrary sounds, or classic alert sounds.
     var fileURL: URL? {
         // 1. Check if we bundled a trimmed version in App Resources
@@ -376,15 +429,15 @@ struct LayoutStore: Codable {
     /// Per-event sound for notch notifications
     var notchSoundOnFullRestore: Bool = true
     var notchSoundOnSingleRestore: Bool = true
-    var notchSoundOnDisplayChange: Bool = false
+    var notchSoundOnDisplayChange: Bool = true
     var notchSoundOnSnapshotUpdate: Bool = true
     var notchSoundOnDesktopToggle: Bool = true
 
-    var notchSoundNameFullRestore: String = SystemSound.passage.rawValue
-    var notchSoundNameSingleRestore: String = SystemSound.glass.rawValue
+    var notchSoundNameFullRestore: String = SystemSound.animeWow.rawValue
+    var notchSoundNameSingleRestore: String = SystemSound.marioJump.rawValue
     var notchSoundNameDisplayChange: String = SystemSound.welcome.rawValue
-    var notchSoundNameSnapshotUpdate: String = SystemSound.slide.rawValue
-    var notchSoundNameDesktopToggle: String = SystemSound.submarine.rawValue
+    var notchSoundNameSnapshotUpdate: String = SystemSound.marioPowerUp.rawValue
+    var notchSoundNameDesktopToggle: String = SystemSound.marioPipe.rawValue
 
     /// Per-event sound for macOS system notifications
     var systemSoundOnFullRestore: Bool = false
@@ -463,14 +516,14 @@ struct LayoutStore: Codable {
         defaultNotificationSound              = migrateSound(try c.decodeIfPresent(String.self, forKey: .defaultNotificationSound), fallback: SystemSound.stargaze.rawValue)
         notchSoundOnFullRestore               = try c.decodeIfPresent(Bool.self,                   forKey: .notchSoundOnFullRestore) ?? true
         notchSoundOnSingleRestore             = try c.decodeIfPresent(Bool.self,                   forKey: .notchSoundOnSingleRestore) ?? true
-        notchSoundOnDisplayChange             = try c.decodeIfPresent(Bool.self,                   forKey: .notchSoundOnDisplayChange) ?? false
+        notchSoundOnDisplayChange             = try c.decodeIfPresent(Bool.self,                   forKey: .notchSoundOnDisplayChange) ?? true
         notchSoundOnSnapshotUpdate            = try c.decodeIfPresent(Bool.self,                   forKey: .notchSoundOnSnapshotUpdate) ?? true
         notchSoundOnDesktopToggle             = try c.decodeIfPresent(Bool.self,                   forKey: .notchSoundOnDesktopToggle) ?? true
-        notchSoundNameFullRestore             = migrateSound(try c.decodeIfPresent(String.self, forKey: .notchSoundNameFullRestore), fallback: SystemSound.passage.rawValue)
-        notchSoundNameSingleRestore           = migrateSound(try c.decodeIfPresent(String.self, forKey: .notchSoundNameSingleRestore), fallback: SystemSound.glass.rawValue)
+        notchSoundNameFullRestore             = migrateSound(try c.decodeIfPresent(String.self, forKey: .notchSoundNameFullRestore), fallback: SystemSound.animeWow.rawValue)
+        notchSoundNameSingleRestore           = migrateSound(try c.decodeIfPresent(String.self, forKey: .notchSoundNameSingleRestore), fallback: SystemSound.marioJump.rawValue)
         notchSoundNameDisplayChange           = migrateSound(try c.decodeIfPresent(String.self, forKey: .notchSoundNameDisplayChange), fallback: SystemSound.welcome.rawValue)
-        notchSoundNameSnapshotUpdate          = migrateSound(try c.decodeIfPresent(String.self, forKey: .notchSoundNameSnapshotUpdate), fallback: SystemSound.slide.rawValue)
-        notchSoundNameDesktopToggle           = migrateSound(try c.decodeIfPresent(String.self, forKey: .notchSoundNameDesktopToggle), fallback: SystemSound.submarine.rawValue)
+        notchSoundNameSnapshotUpdate          = migrateSound(try c.decodeIfPresent(String.self, forKey: .notchSoundNameSnapshotUpdate), fallback: SystemSound.marioPowerUp.rawValue)
+        notchSoundNameDesktopToggle           = migrateSound(try c.decodeIfPresent(String.self, forKey: .notchSoundNameDesktopToggle), fallback: SystemSound.marioPipe.rawValue)
         // Per-event sound flags (system)
         systemSoundOnFullRestore              = try c.decodeIfPresent(Bool.self,                   forKey: .systemSoundOnFullRestore) ?? false
         systemSoundOnSingleRestore            = try c.decodeIfPresent(Bool.self,                   forKey: .systemSoundOnSingleRestore) ?? false
