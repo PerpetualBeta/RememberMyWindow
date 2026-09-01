@@ -2,6 +2,24 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v13.1] — 2026-09-01
+
+### 🛠️ Fixes for Previous Release
+
+#### 🎵 Audio & Meme Sounds
+- **Acoustic Reverb & Echo Tail**: Re-rendered all 21 meme sound files with Apple Medium Hall reverb (35% wet mix) and spatial echo delay (20% feedback, 1.4s decay tail) baked into 192kbps AAC `.m4a` files.
+- **Mario Power-Up Resampling Fix**: Fixed dynamic buffer allocation for 22,050 Hz source audio so the complete ascending power-up melody plays without being truncated.
+
+#### 🪟 Smart Single App Restore
+- **Silent "Already In Place" Banner**: Single app restore checks whether target windows are already in place before executing. If unmoved, it displays a quiet compact Notch banner saying `"Already In Place"` (`"כבר במקום"`) with **zero sound played**.
+- **Quiet Mode Setting**: Added *"Quiet when already in place"* toggle in Settings under Notification Events, enabled by default with an option to restore standard notifications.
+
+#### 🎨 Notification UI Redesign
+- **Clean 2-Row Card Layout**: Redesigned Notification Events list into modern individual cards. Titles and descriptions now have full horizontal width, eliminating awkward text wrapping. Sound selector controls and sub-options are neatly indented on row 2.
+- **Hebrew Localization**: Full bilingual translations for all new strings and settings.
+
+---
+
 ## [v13.0] — 2026-09-01
 
 ### 🎶 "Wilhelm Screamed When He Saw How Fast It Starts Now"

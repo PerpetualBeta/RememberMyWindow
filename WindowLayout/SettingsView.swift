@@ -894,6 +894,10 @@ struct SettingsView: View {
                                     soundName: Binding(
                                         get: { manager.store.notchSoundNameSingleRestore },
                                         set: { manager.store.notchSoundNameSingleRestore = $0; manager.persist() }
+                                    ),
+                                    quietBinding: Binding(
+                                        get: { manager.store.quietSingleRestoreWhenInPlace },
+                                        set: { manager.store.quietSingleRestoreWhenInPlace = $0; manager.persist() }
                                     )
                                 )
 
@@ -948,10 +952,8 @@ struct SettingsView: View {
                                     )
                                 )
                             }
-                            .padding(.leading, 32)
-                            .padding(.trailing, 14)
-                            .padding(.vertical, 10)
-                            .background(Color.primary.opacity(0.03))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
                             .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
@@ -1099,10 +1101,8 @@ struct SettingsView: View {
                                     )
                                 )
                             }
-                            .padding(.leading, 32)
-                            .padding(.trailing, 14)
-                            .padding(.vertical, 10)
-                            .background(Color.primary.opacity(0.03))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
                             .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
@@ -1967,67 +1967,112 @@ struct NotificationEventCheckbox: View {
     @Binding var isOn: Bool
     var soundIsOn: Binding<Bool>? = nil
     var soundName: Binding<String>? = nil
+    var quietBinding: Binding<Bool>? = nil
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
 
     var body: some View {
-        HStack(alignment: .center, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            // Row 1: Checkbox + Title & Subtitle spanning full width
             Button {
                 isOn.toggle()
             } label: {
-                HStack(alignment: .center, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
                     Image(systemName: isOn ? "checkmark.square.fill" : "square")
                         .foregroundStyle(isOn ? Color.accentColor : .secondary)
-                        .font(.system(size: 13))
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.top, 1)
 
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(title.localized(appLanguage))
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 12.5, weight: .semibold))
                             .foregroundStyle(.primary)
+
                         Text(subtitle.localized(appLanguage))
-                            .font(.system(size: 10))
+                            .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Spacer()
+                    Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            if let soundBinding = soundIsOn {
-                HStack(spacing: 4) {
-                    if let nameBinding = soundName, soundBinding.wrappedValue && isOn {
-                        SoundPickerButton(
-                            selectedSoundName: nameBinding,
-                            appLanguage: appLanguage,
-                            fontSize: 10.5,
-                            horizontalPadding: 6,
-                            verticalPadding: 3,
-                            cornerRadius: 5
-                        )
-                        .help("Select Sound".localized(appLanguage))
+            // Row 2: Sound Controls & Sub-options when event is enabled
+            if isOn {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let soundBinding = soundIsOn {
+                        HStack(spacing: 8) {
+                            Text("Sound".localized(appLanguage))
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+
+                            if let nameBinding = soundName, soundBinding.wrappedValue {
+                                SoundPickerButton(
+                                    selectedSoundName: nameBinding,
+                                    appLanguage: appLanguage,
+                                    fontSize: 10.5,
+                                    horizontalPadding: 6,
+                                    verticalPadding: 3,
+                                    cornerRadius: 5
+                                )
+                                .help("Select Sound".localized(appLanguage))
+                            }
+
+                            Button {
+                                soundBinding.wrappedValue.toggle()
+                                if soundBinding.wrappedValue, let nameBinding = soundName {
+                                    WindowManager.shared.previewSound(named: nameBinding.wrappedValue)
+                                }
+                            } label: {
+                                Image(systemName: soundBinding.wrappedValue ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(soundBinding.wrappedValue
+                                        ? Color.accentColor.opacity(0.85)
+                                        : Color.secondary.opacity(0.4))
+                                    .frame(width: 22, height: 22)
+                                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 4))
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(soundBinding.wrappedValue ? "Sound on for this event".localized(appLanguage) : "Sound off for this event".localized(appLanguage))
+
+                            Spacer(minLength: 0)
+                        }
                     }
 
-                    Button {
-                        soundBinding.wrappedValue.toggle()
-                        if soundBinding.wrappedValue, let nameBinding = soundName {
-                            WindowManager.shared.previewSound(named: nameBinding.wrappedValue)
+                    if let quiet = quietBinding {
+                        Button {
+                            quiet.wrappedValue.toggle()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: quiet.wrappedValue ? "checkmark.square.fill" : "square")
+                                    .foregroundStyle(quiet.wrappedValue ? Color.accentColor : .secondary)
+                                    .font(.system(size: 11))
+                                Text("Quiet when already in place".localized(appLanguage))
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                    } label: {
-                        Image(systemName: soundBinding.wrappedValue ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(soundBinding.wrappedValue
-                                ? (isOn ? Color.accentColor.opacity(0.85) : Color.secondary.opacity(0.4))
-                                : Color.secondary.opacity(0.4))
-                            .frame(width: 22, height: 22)
-                            .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .help("Silent banner without sound when window is already in position".localized(appLanguage))
+                        .padding(.top, 2)
                     }
-                    .buttonStyle(.plain)
-                    .help(soundBinding.wrappedValue ? "Sound on for this event".localized(appLanguage) : "Sound off for this event".localized(appLanguage))
-                    .disabled(!isOn)
                 }
+                .padding(.leading, 24)
+                .transition(.opacity)
             }
         }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.03))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 0.8)
+        )
     }
 }
 

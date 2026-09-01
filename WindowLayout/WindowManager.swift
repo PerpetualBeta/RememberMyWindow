@@ -1246,7 +1246,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         isCompact: Bool = false,
         bundleID: String? = nil,
         appIcon: NSImage? = nil,
-        triggerKey: String? = nil
+        triggerKey: String? = nil,
+        silent: Bool = false
     ) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -1293,14 +1294,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         window.show()
                     }
 
-                    if notchSoundEnabled {
+                    if notchSoundEnabled && !silent {
                         SystemSound.playSound(named: notchSoundName)
                     }
                 }
             }
 
             // 2. macOS System Notification (UNUserNotificationCenter)
-            if self.store.showSystemNotification {
+            if self.store.showSystemNotification && !silent {
                 var shouldSend = false
                 var systemSoundEnabled = false
                 var systemSoundName = self.store.defaultNotificationSound
@@ -1350,7 +1351,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     let osTitle = "\(title)\(triggerSuffix)"
                     let osBody = (subtitle == "fn" || subtitle == "⇪" || subtitle == "⇪⇪") ? "" : subtitle
 
-                    self.sendSystemNotification(title: osTitle, subtitle: osBody, playSound: systemSoundEnabled, soundName: systemSoundName)
+                    self.sendSystemNotification(title: osTitle, subtitle: osBody, playSound: systemSoundEnabled && !silent, soundName: systemSoundName)
                 }
             }
         }
@@ -2358,6 +2359,27 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 resolvedTargets.append(contentsOf: matchedTargetsForApp)
             }
 
+            // Pre-check if single-app windows were already in place before restoration
+            let wasAlreadyInPlace: Bool = {
+                guard specificAppBundleID != nil, !records.isEmpty else { return false }
+                for record in records {
+                    let target = self.calculateTargetFrame(for: record)
+                    guard let lr = liveRecords.first(where: {
+                        $0.windowID.appBundleID == record.windowID.appBundleID &&
+                        (record.windowID.windowTitle.isEmpty ? $0.windowID.appWindowIndex == record.windowID.appWindowIndex : $0.windowID.windowTitle == record.windowID.windowTitle)
+                    }) else {
+                        return false
+                    }
+                    let tol: CGFloat = 8.0
+                    let close = abs(lr.globalFrame.origin.x - target.origin.x) <= tol &&
+                                abs(lr.globalFrame.origin.y - target.origin.y) <= tol &&
+                                abs(lr.globalFrame.width - target.width) <= tol &&
+                                abs(lr.globalFrame.height - target.height) <= tol
+                    if !close { return false }
+                }
+                return true
+            }()
+
             // ---------- Sequential Restoration ----------
             var restoredCount = 0
             for record in records {
@@ -2812,13 +2834,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
                 if showNotification {
                     let appName = records.first?.windowID.appName ?? specificAppBundleID ?? "App"
+                    let isQuiet = wasAlreadyInPlace && self.store.quietSingleRestoreWhenInPlace
+                    let notifTitle = isQuiet ? lz("Already In Place") : "\(appName) \(lz("Restored"))"
+                    let notifSubtitle = isQuiet ? (triggerSubtitle.map { "\($0) · \(appName)" } ?? appName) : (triggerSubtitle ?? "")
+
                     self.deliverNotification(
                         type: .singleRestore,
-                        title: "\(appName) \(lz("Restored"))",
-                        subtitle: triggerSubtitle ?? "",
+                        title: notifTitle,
+                        subtitle: notifSubtitle,
                         isCompact: true,
                         bundleID: specificAppBundleID,
-                        triggerKey: triggerSubtitle
+                        triggerKey: triggerSubtitle,
+                        silent: isQuiet
                     )
                     // Brief pause so the icon drop animation is visible before the menu opens
                     try? await Task.sleep(nanoseconds: 200_000_000) // 200ms

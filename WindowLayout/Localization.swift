@@ -300,6 +300,9 @@ private let translationDict: [String: String] = [
     "Update Full Layout": "עדכן פריסה מלאה",
     "Full Restore '%@'": "שחזור מלא '%@'",
     "Full Restore Default Layout": "שחזור מלא של פריסת ברירת מחדל",
+    "Already In Place": "כבר במקום",
+    "Quiet when already in place": "שקט כאשר החלון כבר במקום",
+    "Silent banner without sound when window is already in position": "התראה שקטה ללא צליל כאשר החלון כבר נמצא במיקומו",
     "How it works": "איך זה עובד",
     "After restoring windows, the app sends **⌘⇧R** to the frontmost application. Open each saved session and tap the **⌘⇧R button** on any app row to exclude that app from receiving the keystroke.": "לאחר שחזור החלונות, האפליקציה שולחת **⌘⇧R** ליישום הקדמי ביותר. פתח כל מפגש שמור והקש על **לחצן ה-⌘⇧R** בשורת כל יישום כדי להחריג יישום זה מקבלת צירוף המקשים.",
     // Experimental

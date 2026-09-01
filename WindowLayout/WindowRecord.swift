@@ -406,6 +406,9 @@ struct LayoutStore: Codable {
     var notchNotifyOnSnapshotUpdate: Bool = true
     var notchNotifyOnDesktopToggle: Bool = true
 
+    /// When true, single app restore shows a quiet "Already in place" banner with no sound if the window was already in position.
+    var quietSingleRestoreWhenInPlace: Bool = true
+
 
     // Custom decode so new Bool flags fall back to their defaults when the key
     // is absent in an older persisted JSON, instead of throwing and wiping the store.
@@ -440,6 +443,7 @@ struct LayoutStore: Codable {
         systemNotifyOnDisplayChange           = try c.decodeIfPresent(Bool.self,                   forKey: .systemNotifyOnDisplayChange) ?? true
         systemNotifyOnSnapshotUpdate          = try c.decodeIfPresent(Bool.self,                   forKey: .systemNotifyOnSnapshotUpdate) ?? true
         systemNotifyOnDesktopToggle           = try c.decodeIfPresent(Bool.self,                   forKey: .systemNotifyOnDesktopToggle) ?? false
+        quietSingleRestoreWhenInPlace         = try c.decodeIfPresent(Bool.self,                   forKey: .quietSingleRestoreWhenInPlace) ?? true
 
         func migrateSound(_ name: String?, fallback: String = SystemSound.stargaze.rawValue) -> String {
             guard let name = name else { return fallback }
