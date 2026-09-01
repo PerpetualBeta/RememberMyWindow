@@ -2363,25 +2363,50 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             let wasAlreadyInPlace: Bool = {
                 guard specificAppBundleID != nil, !records.isEmpty else { return false }
                 for record in records {
-                    let target = self.calculateTargetFrame(for: record)
-                    guard let lr = liveRecords.first(where: {
-                        $0.windowID.appBundleID == record.windowID.appBundleID &&
-                        (record.windowID.windowTitle.isEmpty ? $0.windowID.appWindowIndex == record.windowID.appWindowIndex : $0.windowID.windowTitle == record.windowID.windowTitle)
-                    }) else {
+                    let appLive = liveRecords.filter { $0.windowID.appBundleID == record.windowID.appBundleID }
+                    guard !appLive.isEmpty else { return false }
+                    
+                    let matchingLR: WindowRecord?
+                    if !record.windowID.windowTitle.isEmpty,
+                       let match = appLive.first(where: { $0.windowID.windowTitle == record.windowID.windowTitle }) {
+                        matchingLR = match
+                    } else if let match = appLive.first(where: { $0.windowID.appWindowIndex == record.windowID.appWindowIndex }) {
+                        matchingLR = match
+                    } else if appLive.count == 1 {
+                        matchingLR = appLive.first
+                    } else {
                         return false
                     }
-                    let tol: CGFloat = 8.0
-                    let close = abs(lr.globalFrame.origin.x - target.origin.x) <= tol &&
-                                abs(lr.globalFrame.origin.y - target.origin.y) <= tol &&
-                                abs(lr.globalFrame.width - target.width) <= tol &&
-                                abs(lr.globalFrame.height - target.height) <= tol
-                    if !close { return false }
+                    
+                    guard let lr = matchingLR else { return false }
+                    
+                    // Native full-screen state MUST match exactly (do not confuse with fill-screen / maximized)!
+                    if record.isNativeFullScreen != lr.isNativeFullScreen {
+                        return false
+                    }
+                    
+                    if record.isNativeFullScreen {
+                        let sameScreen = lr.screenName == record.screenName ||
+                            (lr.screenFrame != nil && record.screenFrame != nil &&
+                             abs(lr.screenFrame!.origin.x - record.screenFrame!.origin.x) < 5 &&
+                             abs(lr.screenFrame!.origin.y - record.screenFrame!.origin.y) < 5)
+                        if !sameScreen { return false }
+                    } else {
+                        let target = self.calculateTargetFrame(for: record)
+                        let tol: CGFloat = 2.0
+                        let close = abs(lr.globalFrame.origin.x - target.origin.x) <= tol &&
+                                    abs(lr.globalFrame.origin.y - target.origin.y) <= tol &&
+                                    abs(lr.globalFrame.width - target.width) <= tol &&
+                                    abs(lr.globalFrame.height - target.height) <= tol
+                        if !close { return false }
+                    }
                 }
                 return true
             }()
 
             // ---------- Sequential Restoration ----------
             var restoredCount = 0
+            var didModifyAnyWindow = false
             for record in records {
                 let appName = record.windowID.appBundleID
                 let target = self.calculateTargetFrame(for: record)
@@ -2391,31 +2416,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     continue
                 }
 
-                // Skip if app is already full-screen on the correct screen in the live layout
-                if (record.isNativeFullScreen || record.isFullScreenMode) {
-                    let liveRecord = liveRecords.first { lr in
-                        lr.windowID.appBundleID == record.windowID.appBundleID &&
-                        (record.windowID.windowTitle.isEmpty ? lr.windowID.appWindowIndex == record.windowID.appWindowIndex : lr.windowID.windowTitle == record.windowID.windowTitle)
-                    }
-                    if let liveRecord = liveRecord, liveRecord.isNativeFullScreen || liveRecord.isFullScreenMode {
-                        let sameScreen = liveRecord.screenName == record.screenName ||
-                                         (liveRecord.screenFrame != nil && record.screenFrame != nil &&
-                                          abs(liveRecord.screenFrame!.origin.x - record.screenFrame!.origin.x) < 5 &&
-                                          abs(liveRecord.screenFrame!.origin.y - record.screenFrame!.origin.y) < 5)
-                        if sameScreen {
-                            continue
-                        }
-                    }
-                }
-
                 // ---------- Our own windows: use NSWindow directly ----------
                 if appName == Bundle.main.bundleIdentifier || appName == ownProcessName {
                     let success = await MainActor.run { [weak self] in
                         if let win = NSApplication.shared.windows.first(where: { $0.title == record.windowID.windowTitle }) {
-                            if animated {
-                                win.animator().setFrame(target, display: true)
-                            } else {
-                                win.setFrame(target, display: true)
+                            if abs(win.frame.origin.x - target.origin.x) > 2 ||
+                               abs(win.frame.origin.y - target.origin.y) > 2 ||
+                               abs(win.frame.width - target.width) > 2 ||
+                               abs(win.frame.height - target.height) > 2 {
+                                didModifyAnyWindow = true
+                                if animated {
+                                    win.animator().setFrame(target, display: true)
+                                } else {
+                                    win.setFrame(target, display: true)
+                                }
                             }
                             self?.log("✅ Own window '\(record.windowID.windowTitle)' restored", level: .verbose)
                             return true
@@ -2432,12 +2446,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 self.log("→ Restoring '\(appName)'", level: .verbose)
                 
                 var success = false
+                var windowModified = false
                 if let resolved = resolvedTargets.first(where: { $0.record.id == record.id }) {
                     let liveRecord = liveRecords.first { lr in
                         lr.windowID.appBundleID == record.windowID.appBundleID &&
                         (record.windowID.windowTitle.isEmpty ? lr.windowID.appWindowIndex == record.windowID.appWindowIndex : lr.windowID.windowTitle == record.windowID.windowTitle)
                     }
-                    success = await self.restoreViaAX(
+                    let res = await self.restoreViaAX(
                         win: resolved.element,
                         record: record,
                         targetFrame: target,
@@ -2445,16 +2460,23 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         liveRecord: liveRecord,
                         animated: animated
                     )
+                    success = res.success
+                    windowModified = res.didModify
                 }
                 
                 if !success {
                     self.log("⚠️ AX failed or unavailable for '\(appName)', trying AppleScript...", level: .verbose, type: .system)
                     success = await self.restoreViaOsascript(record: record, targetFrame: target, primaryScreenH: primaryScreenH)
+                    windowModified = true
+                }
+
+                if windowModified {
+                    didModifyAnyWindow = true
                 }
 
                 if success {
                     restoredCount += 1
-                    if record.isNativeFullScreen || record.isFullScreenMode {
+                    if record.isNativeFullScreen {
                         // Allow macOS Space transition to settle before restoring subsequent windows
                         try? await Task.sleep(nanoseconds: 800_000_000) // 800ms
                     }
@@ -2834,7 +2856,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
                 if showNotification {
                     let appName = records.first?.windowID.appName ?? specificAppBundleID ?? "App"
-                    let isQuiet = wasAlreadyInPlace && self.store.quietSingleRestoreWhenInPlace
+                    let isQuiet = wasAlreadyInPlace && !didModifyAnyWindow && self.store.quietSingleRestoreWhenInPlace
                     let notifTitle = isQuiet ? lz("Already In Place") : "\(appName) \(lz("Restored"))"
                     let notifSubtitle = isQuiet ? (triggerSubtitle.map { "\($0) · \(appName)" } ?? appName) : (triggerSubtitle ?? "")
 
@@ -2962,7 +2984,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         primaryScreenH: CGFloat,
         liveRecord: WindowRecord?,
         animated: Bool = true
-    ) async -> Bool {
+    ) async -> (success: Bool, didModify: Bool) {
         let appName = record.windowID.appBundleID
 
         // CG/AX coords: origin = top-left of primary screen
@@ -2971,7 +2993,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let axW = targetFrame.width
         let axH = targetFrame.height
 
-        func isFrameClose(to target: CGRect, current: CGRect, tolerance: CGFloat = 15) -> Bool {
+        func isFrameClose(to target: CGRect, current: CGRect, tolerance: CGFloat = 2.0) -> Bool {
             abs(current.origin.x - target.origin.x) <= tolerance &&
             abs(current.origin.y - target.origin.y) <= tolerance &&
             abs(current.size.width - target.size.width) <= tolerance &&
@@ -2980,7 +3002,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         guard hasAccessibilityPermission else {
             log("AX ❌ no permission for '\(appName)' — will fall back to osascript", level: .verbose)
-            return false
+            return (success: false, didModify: false)
         }
 
         var isAlreadyFullScreen = false
@@ -2990,9 +3012,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             isAlreadyFullScreen = fsVal
         }
 
-        // Determine if we need to change screens for a full-screen window
+        var didModify = false
+
+        // Determine if we need to change screens for a native full-screen window
         var needsScreenChangeForFullScreen = false
-        if (record.isNativeFullScreen || record.isFullScreenMode) && isAlreadyFullScreen {
+        if record.isNativeFullScreen && isAlreadyFullScreen {
             if let liveScreen = liveRecord?.screenName, let targetScreenName = record.screenName {
                 if liveScreen != targetScreenName {
                     needsScreenChangeForFullScreen = true
@@ -3034,12 +3058,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         var activeWin = win
 
-        // If target layout wants NORMAL but window is currently full-screen, OR
-        // target layout wants full-screen but window is currently full-screen on a DIFFERENT monitor,
+        // If target layout wants NORMAL / FILL-SCREEN but window is currently native full-screen, OR
+        // target layout wants native full-screen but window is currently full-screen on a DIFFERENT monitor,
         // exit full-screen first.
-        if isAlreadyFullScreen && (!(record.isNativeFullScreen || record.isFullScreenMode) || needsScreenChangeForFullScreen) {
+        if isAlreadyFullScreen && (!record.isNativeFullScreen || needsScreenChangeForFullScreen) {
             log("ℹ️ Restore: '\(appName)' → exiting Full Screen first to change screens or layout", level: .verbose, type: .restore)
             _ = AXUIElementSetAttributeValue(win, "AXFullScreen" as CFString, kCFBooleanFalse)
+            didModify = true
             
             // Wait up to 500ms, retrying the exit command if the window manager ignores it
             var exited = false
@@ -3072,7 +3097,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
         }
 
-        if record.isNativeFullScreen || record.isFullScreenMode {
+        if record.isNativeFullScreen {
+            if isAlreadyFullScreen && !needsScreenChangeForFullScreen {
+                // Already in native full-screen on the correct display!
+                return (success: true, didModify: false)
+            }
+
+            didModify = true
+
             // 1. Move window to the target screen
             var pos = CGPoint(x: axX, y: axY)
             if let v = AXValueCreate(.cgPoint, &pos) {
@@ -3097,30 +3129,34 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 try? await Task.sleep(nanoseconds: 20_000_000)
             }
 
-            // 4. If native full screen is requested, activate the app first then trigger AXFullScreen
-            if record.isNativeFullScreen {
-                let runningAppsArray = NSWorkspace.shared.runningApplications
-                if let targetApp = runningAppsArray.first(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) {
-                    targetApp.activate()
-                }
-                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms settle
+            // 4. Trigger native full screen
+            let runningAppsArray = NSWorkspace.shared.runningApplications
+            if let targetApp = runningAppsArray.first(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) {
+                targetApp.activate()
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms settle
 
-                let fsErr = AXUIElementSetAttributeValue(activeWin, "AXFullScreen" as CFString, kCFBooleanTrue)
-                if fsErr == .success {
-                    log("✅ Restore: '\(appName)' → entering Full Screen on target display", level: .verbose, type: .restore)
-                    return true
-                } else {
-                    log("ℹ️ Restore: '\(appName)' — native full-screen unsupported, kept at filled screen bounds", level: .verbose, type: .restore)
-                    return true
-                }
+            let fsErr = AXUIElementSetAttributeValue(activeWin, "AXFullScreen" as CFString, kCFBooleanTrue)
+            if fsErr == .success {
+                log("✅ Restore: '\(appName)' → entering Full Screen on target display", level: .verbose, type: .restore)
+                return (success: true, didModify: true)
             } else {
-                return true
+                log("ℹ️ Restore: '\(appName)' — native full-screen unsupported, kept at filled screen bounds", level: .verbose, type: .restore)
+                return (success: true, didModify: true)
             }
         }
 
         let axTargetFrame = CGRect(x: axX, y: axY, width: axW, height: axH)
         var targetSize = CGSize(width: axW, height: axH)
         var targetPos = CGPoint(x: axX, y: axY)
+
+        // Check if window is already in exact position and size
+        if let cur = getCurrentFrame(of: activeWin), isFrameClose(to: axTargetFrame, current: cur, tolerance: 2.0) {
+            log("AX ✅ '\(appName)' already in place at (\(Int(axX)), \(Int(axY))) \(Int(axW))×\(Int(axH))", level: .verbose)
+            return (success: true, didModify: didModify)
+        }
+
+        didModify = true
 
         // 1. Identify current screen and target screen to determine optimal resize order
         let screens = NSScreen.screens
@@ -3176,7 +3212,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         for _ in 1...3 {
             try? await Task.sleep(nanoseconds: 30_000_000) // 30ms
             if let current = getCurrentFrame(of: activeWin) {
-                if isFrameClose(to: axTargetFrame, current: current, tolerance: 3.0) {
+                if isFrameClose(to: axTargetFrame, current: current, tolerance: 2.0) {
                     break
                 }
                 // Discrepancy detected: re-apply position & size
@@ -3190,7 +3226,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         log("AX ✅ '\(appName)' final frame → (\(Int(axX)), \(Int(axY))) \(Int(axW))×\(Int(axH))", level: .verbose)
-        return true
+        return (success: true, didModify: true)
     }
 
     // MARK: - osascript fallback (nonisolated — safe on any thread)
