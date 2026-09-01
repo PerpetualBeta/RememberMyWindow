@@ -27,9 +27,11 @@ jobs:
         run: |
           awk '/^## /{if (found) exit; found=1} found' CHANGELOG.md > release_notes.md
           cat release_notes.md
-          # Extract the ### title line (e.g. ### 🎶 "Wilhelm Screamed...")
+          # Use delimiter syntax so quotes/emojis in the title don't break the env var
           RELEASE_TITLE=$(grep -m1 '^### ' release_notes.md | sed 's/^### //')
-          echo "RELEASE_TITLE=${RELEASE_TITLE}" >> $GITHUB_ENV
+          echo "RELEASE_TITLE<<EOF" >> $GITHUB_ENV
+          echo "$RELEASE_TITLE"     >> $GITHUB_ENV
+          echo "EOF"                >> $GITHUB_ENV
 
       - name: Upload DMG to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -37,3 +39,9 @@ jobs:
           files: RememberMyWindows.dmg
           body_path: release_notes.md
           name: ${{ env.RELEASE_TITLE }}
+
+      - name: Ensure release title is set (handles pre-existing releases)
+        run: |
+          gh release edit "${{ github.ref_name }}" --title "${{ env.RELEASE_TITLE }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
