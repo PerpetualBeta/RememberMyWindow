@@ -405,7 +405,10 @@ private let translationDict: [String: String] = [
     "Necessary": "חיוני",
     "Moderate": "מתון",
     "Verbose": "מפורט",
-    // Version
+    // Version & GitHub
+    "Version": "גרסה",
+    "GitHub": "GitHub",
+    "Open RememberMyWindows on GitHub": "פתח את RememberMyWindows ב-GitHub",
     "Version 1.0.0": "גרסה 1.0.0",
     // ContentView
     "Update Layout": "עדכן סידור",

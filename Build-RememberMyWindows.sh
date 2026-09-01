@@ -57,7 +57,9 @@ swiftc -parse-as-library \
     WindowLayout/MenuBarIconManager.swift \
     -o "${MACOS_DIR}/${APP_NAME}"
 
-echo "Generating Info.plist..."
+APP_VERSION=$(grep -E '^## \[[vV]?[0-9]+(\.[0-9]+)*\]' CHANGELOG.md | head -n 1 | sed -E 's/.*\[[vV]?([^]]+)\].*/\1/' || echo "13.1")
+
+echo "Generating Info.plist for v${APP_VERSION}..."
 cat <<EOF > "${APP_DIR}/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -79,9 +81,9 @@ cat <<EOF > "${APP_DIR}/Contents/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>${APP_VERSION}</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

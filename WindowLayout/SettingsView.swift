@@ -132,11 +132,41 @@ struct SettingsView: View {
                 SettingsFeatureTourSection()
                     .padding(.top, 4)
 
-                // App Version Footer
-                VStack(spacing: 4) {
-                    Text("Version 1.2.0".localized(appLanguage))
+                // App Version & GitHub Link Footer
+                HStack(spacing: 8) {
+                    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "13.1"
+                    let displayVersion = version.hasPrefix("v") ? version : "v\(version)"
+                    
+                    Text("\("Version".localized(appLanguage)) \(displayVersion)")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.secondary.opacity(0.8))
+
+                    Text("•")
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary.opacity(0.4))
+
+                    Button {
+                        if let url = URL(string: "https://github.com/netanel3000fine/RememberMyWindow") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "link")
+                                .font(.system(size: 9.5, weight: .semibold))
+                            Text("GitHub".localized(appLanguage))
+                                .font(.system(size: 10.5, weight: .medium))
+                        }
+                        .foregroundStyle(Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { inside in
+                        if inside {
+                            NSCursor.pointingHand.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    .help("Open RememberMyWindows on GitHub".localized(appLanguage))
                 }
                 .padding(.top, 8)
             }
