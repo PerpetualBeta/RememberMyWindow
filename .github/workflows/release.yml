@@ -51,6 +51,8 @@ jobs:
 
       - name: Ensure release title is set (handles pre-existing releases)
         run: |
-          gh release edit "${{ env.TAG_NAME }}" --title "${{ env.RELEASE_TITLE }}"
+          gh release edit "$TAG_NAME" --title "$RELEASE_TITLE"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ env.TAG_NAME }}
+          RELEASE_TITLE: ${{ env.RELEASE_TITLE }}
