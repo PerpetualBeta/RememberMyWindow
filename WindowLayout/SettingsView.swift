@@ -838,31 +838,54 @@ struct SettingsView: View {
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "slider.horizontal.3")
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(.system(size: 11.5, weight: .semibold))
                                     .foregroundColor(.accentColor)
-                                    .frame(width: 20)
+                                    .frame(width: 18)
                                 
                                 Text("Configure Notch Events".localized(appLanguage))
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundColor(.primary)
                                 
                                 Spacer()
+
+                                // Active Count Badge
+                                let activeCount = (manager.store.notchNotifyOnFullRestore ? 1 : 0) +
+                                                  (manager.store.notchNotifyOnSingleRestore ? 1 : 0) +
+                                                  (manager.store.notchNotifyOnDisplayChange ? 1 : 0) +
+                                                  (manager.store.notchNotifyOnSnapshotUpdate ? 1 : 0) +
+                                                  (manager.store.notchNotifyOnDesktopToggle ? 1 : 0)
+                                Text("\(activeCount) " + "Active".localized(appLanguage))
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                    .foregroundStyle(activeCount > 0 ? Color.accentColor : Color.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule()
+                                            .fill((activeCount > 0 ? Color.accentColor : Color.secondary).opacity(0.12))
+                                    )
                                 
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(.secondary)
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary.opacity(0.8))
                                     .rotationEffect(.degrees(isNotchEventsExpanded ? 90 : 0))
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(isNotchEventsExpanded ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.035))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(isNotchEventsExpanded ? Color.accentColor.opacity(0.2) : Color.clear, lineWidth: 0.8)
+                            )
                             .padding(.horizontal, 12)
                             .padding(.vertical, 4)
                         }
                         .buttonStyle(.plain)
 
                         if isNotchEventsExpanded {
-                            VStack(spacing: 8) {
+                            VStack(spacing: 0) {
                                 NotificationEventCheckbox(
                                     title: "Full layout restores",
                                     subtitle: "When all windows are restored to their saved layout",
@@ -879,6 +902,8 @@ struct SettingsView: View {
                                         set: { manager.store.notchSoundNameFullRestore = $0; manager.persist() }
                                     )
                                 )
+
+                                Divider().opacity(0.4).padding(.horizontal, 10)
 
                                 NotificationEventCheckbox(
                                     title: "Single app restores",
@@ -901,6 +926,8 @@ struct SettingsView: View {
                                     )
                                 )
 
+                                Divider().opacity(0.4).padding(.horizontal, 10)
+
                                 NotificationEventCheckbox(
                                     title: "Display connections & changes",
                                     subtitle: "When monitors connect, disconnect, or reconnect",
@@ -917,6 +944,8 @@ struct SettingsView: View {
                                         set: { manager.store.notchSoundNameDisplayChange = $0; manager.persist() }
                                     )
                                 )
+
+                                Divider().opacity(0.4).padding(.horizontal, 10)
 
                                 NotificationEventCheckbox(
                                     title: "Snapshot & app updates",
@@ -935,6 +964,8 @@ struct SettingsView: View {
                                     )
                                 )
 
+                                Divider().opacity(0.4).padding(.horizontal, 10)
+
                                 NotificationEventCheckbox(
                                     title: "Desktop toggle (⌘D)",
                                     subtitle: "When all windows are hidden or restored",
@@ -952,8 +983,16 @@ struct SettingsView: View {
                                     )
                                 )
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.primary.opacity(0.03))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.06), lineWidth: 0.8)
+                            )
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 8)
                             .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
@@ -962,19 +1001,19 @@ struct SettingsView: View {
 
                 Divider().padding(.horizontal, 12)
 
-                // ── macOS System Notifications ─────────────────────────────────
+                // ── macOS System Notification (Notification Center) ──────────────
                 SettingsToggle(
-                    title: "macOS System Notifications",
-                    subtitle: "Deliver standard Notification Center banners for layout and display events",
-                    icon: "bell.badge.fill",
+                    title: "macOS Notification Center",
+                    subtitle: "Deliver notifications to standard macOS Notification Center banners",
+                    icon: "bell.badge",
                     isOn: Binding(
                         get: { manager.store.showSystemNotification },
-                        set: { newValue in
-                            manager.store.showSystemNotification = newValue
-                            if newValue {
+                        set: {
+                            manager.store.showSystemNotification = $0
+                            manager.persist()
+                            if $0 {
                                 manager.requestSystemNotificationPermission()
                             }
-                            manager.persist()
                         }
                     )
                 )
@@ -983,39 +1022,62 @@ struct SettingsView: View {
                     VStack(spacing: 0) {
                         Divider().padding(.horizontal, 12)
 
-                        // Collapsible trigger for System events
+                        // Collapsible trigger for System Notification events
                         Button {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                                 isSystemEventsExpanded.toggle()
                             }
                         } label: {
                             HStack(spacing: 8) {
-                                Image(systemName: "slider.horizontal.3")
-                                    .font(.system(size: 12, weight: .semibold))
+                                Image(systemName: "bell.and.waveform")
+                                    .font(.system(size: 11.5, weight: .semibold))
                                     .foregroundColor(.accentColor)
-                                    .frame(width: 20)
+                                    .frame(width: 18)
                                 
-                                Text("Configure System Events".localized(appLanguage))
+                                Text("Configure Notification Center Events".localized(appLanguage))
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundColor(.primary)
                                 
                                 Spacer()
+
+                                // Active Count Badge
+                                let activeCount = (manager.store.systemNotifyOnFullRestore ? 1 : 0) +
+                                                  (manager.store.systemNotifyOnSingleRestore ? 1 : 0) +
+                                                  (manager.store.systemNotifyOnDisplayChange ? 1 : 0) +
+                                                  (manager.store.systemNotifyOnSnapshotUpdate ? 1 : 0) +
+                                                  (manager.store.systemNotifyOnDesktopToggle ? 1 : 0)
+                                Text("\(activeCount) " + "Active".localized(appLanguage))
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                    .foregroundStyle(activeCount > 0 ? Color.accentColor : Color.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule()
+                                            .fill((activeCount > 0 ? Color.accentColor : Color.secondary).opacity(0.12))
+                                    )
                                 
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(.secondary)
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary.opacity(0.8))
                                     .rotationEffect(.degrees(isSystemEventsExpanded ? 90 : 0))
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(isSystemEventsExpanded ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.035))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(isSystemEventsExpanded ? Color.accentColor.opacity(0.2) : Color.clear, lineWidth: 0.8)
+                            )
                             .padding(.horizontal, 12)
                             .padding(.vertical, 4)
                         }
                         .buttonStyle(.plain)
 
                         if isSystemEventsExpanded {
-                            VStack(spacing: 8) {
+                            VStack(spacing: 0) {
                                 NotificationEventCheckbox(
                                     title: "Full layout restores",
                                     subtitle: "When all windows are restored to their saved layout",
@@ -1032,6 +1094,8 @@ struct SettingsView: View {
                                         set: { manager.store.systemSoundNameFullRestore = $0; manager.persist() }
                                     )
                                 )
+
+                                Divider().opacity(0.4).padding(.horizontal, 10)
 
                                 NotificationEventCheckbox(
                                     title: "Single app restores",
@@ -1050,6 +1114,8 @@ struct SettingsView: View {
                                     )
                                 )
 
+                                Divider().opacity(0.4).padding(.horizontal, 10)
+
                                 NotificationEventCheckbox(
                                     title: "Display connections & changes",
                                     subtitle: "When monitors connect, disconnect, or reconnect",
@@ -1066,6 +1132,8 @@ struct SettingsView: View {
                                         set: { manager.store.systemSoundNameDisplayChange = $0; manager.persist() }
                                     )
                                 )
+
+                                Divider().opacity(0.4).padding(.horizontal, 10)
 
                                 NotificationEventCheckbox(
                                     title: "Snapshot & app updates",
@@ -1084,6 +1152,8 @@ struct SettingsView: View {
                                     )
                                 )
 
+                                Divider().opacity(0.4).padding(.horizontal, 10)
+
                                 NotificationEventCheckbox(
                                     title: "Desktop toggle (⌘D)",
                                     subtitle: "When all windows are hidden or restored",
@@ -1101,8 +1171,16 @@ struct SettingsView: View {
                                     )
                                 )
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.primary.opacity(0.03))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.06), lineWidth: 0.8)
+                            )
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 8)
                             .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
@@ -2064,15 +2142,8 @@ struct NotificationEventCheckbox: View {
                 .transition(.opacity)
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.03))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 0.8)
-        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
     }
 }
 
