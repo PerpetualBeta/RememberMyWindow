@@ -4,7 +4,7 @@ All notable changes to RememberMyWindows will be documented here.
 
 ## [v13.0] — 2026-09-01
 
-### 🧠💨 "The App Was Thinking, It Just Needed a Coffee"
+### 🎶 "Wilhelm Screamed When He Saw How Fast It Starts Now"
 
 #### 🚀 Performance
 - **Instant launch, no more frozen beach ball**: App now shows the menu bar icon and main window immediately at startup. AX observer registration for all running apps is deferred to a cooperative background task instead of blocking the main thread.
