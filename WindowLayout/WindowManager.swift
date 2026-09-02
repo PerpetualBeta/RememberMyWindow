@@ -2125,8 +2125,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             let screens = NSScreen.screens
             let primaryScreenH = screens.first?.frame.height ?? 1080
 
-            for (idx, record) in appRecords.enumerated() {
-                let win = idx < wins.count ? wins[idx] : wins.first!
+            for (idx, win) in wins.enumerated() {
+                let record = idx < appRecords.count ? appRecords[idx] : appRecords.first!
                 let targetFrame = self.calculateTargetFrame(for: record)
                 let axX = targetFrame.origin.x
                 let axY = primaryScreenH - targetFrame.origin.y - targetFrame.height
@@ -2496,10 +2496,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     !matchedTargetsForApp.contains(where: { $0.record.id == rec.id })
                 }
                 let sortedRemaining = remainingRecords.sorted(by: { $0.windowID.appWindowIndex < $1.windowID.appWindowIndex })
-                for (i, rec) in sortedRemaining.enumerated() {
+                for rec in sortedRemaining {
                     let element: AXUIElement
-                    if i < unclaimed.count {
-                        element = unclaimed[i]
+                    if !unclaimed.isEmpty {
+                        element = unclaimed.removeFirst()
                     } else if let first = wins.first {
                         element = first
                     } else {
@@ -2509,17 +2509,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     matchedTargetsForApp.append(ResolvedTarget(record: rec, element: element, targetFrame: target))
                 }
                 
-                resolvedTargets.append(contentsOf: matchedTargetsForApp)
-
-                // Broadcast mode: if this app has exactly 1 saved record (single-position save),
-                // apply the same target frame to every live AX window that wasn't already claimed.
+                // Broadcast mode: if there are extra open AX windows that weren't claimed by saved records,
+                // apply the template target frame (e.g. from appRecords.first) to every extra window.
                 // This stacks all open windows at the saved position so the user can drag them apart.
-                if appRecords.count == 1, let templateRecord = appRecords.first {
+                if let templateRecord = appRecords.first {
                     let target = self.calculateTargetFrame(for: templateRecord)
                     for extraWin in unclaimed {
-                        resolvedTargets.append(ResolvedTarget(record: templateRecord, element: extraWin, targetFrame: target))
+                        matchedTargetsForApp.append(ResolvedTarget(record: templateRecord, element: extraWin, targetFrame: target))
                     }
+                    unclaimed.removeAll()
                 }
+
+                resolvedTargets.append(contentsOf: matchedTargetsForApp)
             }
 
             // Pre-check if single-app windows were already in place before restoration
@@ -2573,9 +2574,39 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             // ---------- Sequential Restoration ----------
             var restoredCount = 0
             var didModifyAnyWindow = false
-            for record in records {
-                let appName = record.windowID.appBundleID
+
+            // 1. Restore our own windows (RememberMyWindows)
+            let ownRecords = records.filter { $0.windowID.appBundleID == Bundle.main.bundleIdentifier || $0.windowID.appBundleID == ownProcessName }
+            for record in ownRecords {
                 let target = self.calculateTargetFrame(for: record)
+                let success = await MainActor.run { [weak self] in
+                    if let win = NSApplication.shared.windows.first(where: { $0.title == record.windowID.windowTitle }) {
+                        if abs(win.frame.origin.x - target.origin.x) > 2 ||
+                           abs(win.frame.origin.y - target.origin.y) > 2 ||
+                           abs(win.frame.width - target.width) > 2 ||
+                           abs(win.frame.height - target.height) > 2 {
+                            didModifyAnyWindow = true
+                            if animated {
+                                win.animator().setFrame(target, display: true)
+                            } else {
+                                win.setFrame(target, display: true)
+                            }
+                        }
+                        self?.log("✅ Own window '\(record.windowID.windowTitle)' restored", level: .verbose)
+                        return true
+                    }
+                    return false
+                }
+                if success {
+                    restoredCount += 1
+                }
+            }
+
+            // 2. Restore all resolved external window targets (every window of every app)
+            for targetItem in resolvedTargets {
+                let record = targetItem.record
+                let appName = record.windowID.appBundleID
+                let target = targetItem.targetFrame
 
                 // Skip if app is not running
                 if !updatedRunningApps.values.contains(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) {
@@ -2600,53 +2631,25 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     }
                 }
 
-                // ---------- Our own windows: use NSWindow directly ----------
-                if appName == Bundle.main.bundleIdentifier || appName == ownProcessName {
-                    let success = await MainActor.run { [weak self] in
-                        if let win = NSApplication.shared.windows.first(where: { $0.title == record.windowID.windowTitle }) {
-                            if abs(win.frame.origin.x - target.origin.x) > 2 ||
-                               abs(win.frame.origin.y - target.origin.y) > 2 ||
-                               abs(win.frame.width - target.width) > 2 ||
-                               abs(win.frame.height - target.height) > 2 {
-                                didModifyAnyWindow = true
-                                if animated {
-                                    win.animator().setFrame(target, display: true)
-                                } else {
-                                    win.setFrame(target, display: true)
-                                }
-                            }
-                            self?.log("✅ Own window '\(record.windowID.windowTitle)' restored", level: .verbose)
-                            return true
-                        }
-                        return false
-                    }
-                    if success {
-                        restoredCount += 1
-                    }
-                    continue
-                }
-
-                // ---------- External apps: AX first, osascript fallback ----------
-                self.log("→ Restoring '\(appName)'", level: .verbose)
+                self.log("→ Restoring '\(appName)' window", level: .verbose)
                 
                 var success = false
                 var windowModified = false
-                if let resolved = resolvedTargets.first(where: { $0.record.id == record.id }) {
-                    let liveRecord = liveRecords.first { lr in
-                        lr.windowID.appBundleID == record.windowID.appBundleID &&
-                        (record.windowID.windowTitle.isEmpty ? lr.windowID.appWindowIndex == record.windowID.appWindowIndex : lr.windowID.windowTitle == record.windowID.windowTitle)
-                    }
-                    let res = await self.restoreViaAX(
-                        win: resolved.element,
-                        record: record,
-                        targetFrame: target,
-                        primaryScreenH: primaryScreenH,
-                        liveRecord: liveRecord,
-                        animated: animated
-                    )
-                    success = res.success
-                    windowModified = res.didModify
+                
+                let liveRecord = liveRecords.first { lr in
+                    lr.windowID.appBundleID == record.windowID.appBundleID &&
+                    (record.windowID.windowTitle.isEmpty ? lr.windowID.appWindowIndex == record.windowID.appWindowIndex : lr.windowID.windowTitle == record.windowID.windowTitle)
                 }
+                let res = await self.restoreViaAX(
+                    win: targetItem.element,
+                    record: record,
+                    targetFrame: target,
+                    primaryScreenH: primaryScreenH,
+                    liveRecord: liveRecord,
+                    animated: animated
+                )
+                success = res.success
+                windowModified = res.didModify
                 
                 if !success {
                     self.log("⚠️ AX failed or unavailable for '\(appName)', trying AppleScript...", level: .verbose, type: .system)
@@ -2846,39 +2849,22 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                             break
                         }
 
-                        let correctionRecords = verificationAppIDs.flatMap { mismatchesByApp[$0] ?? [] }
-                        let directCorrectionRecords = correctionRecords.filter { record in
-                            resolvedTargets.contains { $0.record.id == record.id }
-                        }
-                        let fallbackCorrectionRecords = correctionRecords.filter { record in
-                            !resolvedTargets.contains { $0.record.id == record.id }
+                        let correctionTargets = verificationAppIDs.flatMap { appID in
+                            resolvedTargets.filter { $0.record.windowID.appBundleID == appID }
                         }
 
-                        self.log("🔧 Correction pass \(verificationAttempt): re-applying frame to \(correctionRecords.count) window(s)...", level: .verbose, type: .restore)
-                        // Keep direct AX writes together in one non-animated run-loop turn per pass.
-                        for record in directCorrectionRecords {
-                            let targetFrame = self.calculateTargetFrame(for: record)
-                            guard let resolved = resolvedTargets.first(where: { $0.record.id == record.id }) else {
-                                continue
-                            }
+                        self.log("🔧 Correction pass \(verificationAttempt): re-applying frame to \(correctionTargets.count) window(s)...", level: .verbose, type: .restore)
+                        for target in correctionTargets {
+                            let targetFrame = target.targetFrame
                             let axY = primaryScreenH - targetFrame.origin.y - targetFrame.height
                             var position = CGPoint(x: targetFrame.origin.x, y: axY)
                             var size = targetFrame.size
                             if let value = AXValueCreate(.cgPoint, &position) {
-                                _ = AXUIElementSetAttributeValue(resolved.element, kAXPositionAttribute as CFString, value)
+                                _ = AXUIElementSetAttributeValue(target.element, kAXPositionAttribute as CFString, value)
                             }
                             if let value = AXValueCreate(.cgSize, &size) {
-                                _ = AXUIElementSetAttributeValue(resolved.element, kAXSizeAttribute as CFString, value)
+                                _ = AXUIElementSetAttributeValue(target.element, kAXSizeAttribute as CFString, value)
                             }
-                        }
-
-                        for record in fallbackCorrectionRecords {
-                            let targetFrame = self.calculateTargetFrame(for: record)
-                            _ = await self.restoreViaOsascript(
-                                record: record,
-                                targetFrame: targetFrame,
-                                primaryScreenH: primaryScreenH
-                            )
                         }
 
                         try? await Task.sleep(nanoseconds: 150_000_000)
@@ -2896,68 +2882,33 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // ---------- Single-App Restore Path ----------
                 var singleRestoreVerified: Bool? = nil
                 var singleRestoreUnverifiedCount = 0
-                let windowServerVerifiableRecords = records.filter {
-                    !$0.isNativeFullScreen && !$0.isFullScreenMode
+                let targetTargets = resolvedTargets.filter {
+                    !$0.record.isNativeFullScreen && !$0.record.isFullScreenMode
                 }
-                let nonVerifiableRecordCount = records.count - windowServerVerifiableRecords.count
-                var targetFramesByRecordID: [UUID: CGRect] = [:]
-                for record in windowServerVerifiableRecords {
-                    targetFramesByRecordID[record.id] = self.calculateTargetFrame(for: record)
-                }
+                let nonVerifiableRecordCount = resolvedTargets.count - targetTargets.count
 
-                func matchingWindowServerRecord(
-                    for record: WindowRecord,
-                    in currentRecords: [WindowRecord]
-                ) -> WindowRecord? {
-                    let appRecords = currentRecords.filter {
-                        $0.windowID.appBundleID == record.windowID.appBundleID
-                    }
-                    guard !appRecords.isEmpty else { return nil }
-
-                    if !record.windowID.windowTitle.isEmpty,
-                       let titleMatch = appRecords.first(where: {
-                           $0.windowID.windowTitle == record.windowID.windowTitle
-                       }) {
-                        return titleMatch
-                    }
-
-                    return appRecords.first {
-                        $0.windowID.appWindowIndex == record.windowID.appWindowIndex
-                    }
+                func isTargetInPlace(_ target: ResolvedTarget) -> Bool {
+                    guard let current = self.getCurrentFrame(of: target.element) else { return false }
+                    let axX = target.targetFrame.origin.x
+                    let axY = primaryScreenH - target.targetFrame.origin.y - target.targetFrame.height
+                    let axTargetFrame = CGRect(x: axX, y: axY, width: target.targetFrame.width, height: target.targetFrame.height)
+                    let tolerance: CGFloat = 3.0
+                    return abs(current.origin.x - axTargetFrame.origin.x) <= tolerance &&
+                           abs(current.origin.y - axTargetFrame.origin.y) <= tolerance &&
+                           abs(current.width - axTargetFrame.width) <= tolerance &&
+                           abs(current.height - axTargetFrame.height) <= tolerance
                 }
 
-                func matchesWindowServerFrame(_ record: WindowRecord, _ currentRecord: WindowRecord) -> Bool {
-                    guard let targetFrame = targetFramesByRecordID[record.id] else { return false }
-                    let currentFrame = currentRecord.globalFrame
-                    let tolerance: CGFloat = 2
-                    return abs(targetFrame.origin.x - currentFrame.origin.x) <= tolerance &&
-                        abs(targetFrame.origin.y - currentFrame.origin.y) <= tolerance &&
-                        abs(targetFrame.width - currentFrame.width) <= tolerance &&
-                        abs(targetFrame.height - currentFrame.height) <= tolerance
-                }
-
-                let verificationDeadline = Date().addingTimeInterval(4)
+                let verificationDeadline = Date().addingTimeInterval(3)
                 var verificationAttempt = 0
 
-                while Date() < verificationDeadline && verificationAttempt < 24 {
+                while Date() < verificationDeadline && verificationAttempt < 15 {
                     verificationAttempt += 1
-                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    try? await Task.sleep(nanoseconds: 80_000_000) // 80ms
 
-                    let currentRecords = self.captureAllWindows(
-                        for: ScreenFingerprint.current(),
-                        silent: true
-                    )
-                    let mismatchedRecords = windowServerVerifiableRecords.filter { record in
-                        guard let currentRecord = matchingWindowServerRecord(
-                            for: record,
-                            in: currentRecords
-                        ) else {
-                            return true
-                        }
-                        return !matchesWindowServerFrame(record, currentRecord)
-                    }
+                    let mismatchedTargets = targetTargets.filter { !isTargetInPlace($0) }
 
-                    if mismatchedRecords.isEmpty && nonVerifiableRecordCount == 0 {
+                    if mismatchedTargets.isEmpty && nonVerifiableRecordCount == 0 {
                         singleRestoreVerified = true
                         self.log(
                             "✅ Single-app restore verified by WindowServer after \(verificationAttempt) attempt(s).",
@@ -2967,40 +2918,32 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         break
                     }
 
-                    if mismatchedRecords.isEmpty {
+                    if mismatchedTargets.isEmpty {
                         singleRestoreUnverifiedCount = nonVerifiableRecordCount
                         break
                     }
 
-                    singleRestoreUnverifiedCount = mismatchedRecords.count + nonVerifiableRecordCount
+                    singleRestoreUnverifiedCount = mismatchedTargets.count + nonVerifiableRecordCount
                     self.log(
                         "⚠️ WindowServer single-app check \(verificationAttempt): \(singleRestoreUnverifiedCount) window(s) not yet confirmed.",
                         level: .verbose,
                         type: .restore
                     )
 
-                    for record in mismatchedRecords {
-                        let targetFrame = self.calculateTargetFrame(for: record)
-                        if let resolved = resolvedTargets.first(where: { $0.record.id == record.id }) {
-                            let liveRecord = liveRecords.first {
-                                $0.windowID.appBundleID == record.windowID.appBundleID &&
-                                $0.windowID.appWindowIndex == record.windowID.appWindowIndex
-                            }
-                            _ = await self.restoreViaAX(
-                                win: resolved.element,
-                                record: record,
-                                targetFrame: targetFrame,
-                                primaryScreenH: primaryScreenH,
-                                liveRecord: liveRecord,
-                                animated: false
-                            )
-                        } else {
-                            _ = await self.restoreViaOsascript(
-                                record: record,
-                                targetFrame: targetFrame,
-                                primaryScreenH: primaryScreenH
-                            )
+                    for targetItem in mismatchedTargets {
+                        let targetFrame = targetItem.targetFrame
+                        let liveRecord = liveRecords.first {
+                            $0.windowID.appBundleID == targetItem.record.windowID.appBundleID &&
+                            $0.windowID.appWindowIndex == targetItem.record.windowID.appWindowIndex
                         }
+                        _ = await self.restoreViaAX(
+                            win: targetItem.element,
+                            record: targetItem.record,
+                            targetFrame: targetFrame,
+                            primaryScreenH: primaryScreenH,
+                            liveRecord: liveRecord,
+                            animated: false
+                        )
                     }
                 }
 
@@ -3013,7 +2956,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     )
                 }
 
-                self.log("Restored \(records.count) window(s) for \(specificAppBundleID!)", level: .necessary, type: .restore, details: details)
+                self.log("Restored \(resolvedTargets.count) window(s) for \(specificAppBundleID!)", level: .necessary, type: .restore, details: details)
                 if singleRestoreVerified == false {
                     self.statusMessage = lz("Restore needs attention")
                 }
@@ -3143,7 +3086,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
     }
 
-    private func getCurrentFrame(of element: AXUIElement) -> CGRect? {
+    nonisolated private func getCurrentFrame(of element: AXUIElement) -> CGRect? {
         var positionValueRef: AnyObject?
         var sizeValueRef: AnyObject?
         var position = CGPoint.zero
