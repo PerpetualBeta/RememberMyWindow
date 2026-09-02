@@ -430,11 +430,15 @@ struct LayoutStore: Codable {
     var snapshots: [String: LayoutSnapshot] = [:]
     /// key = ScreenFingerprint.key, value = LayoutSnapshot.id.uuidString
     var defaultSnapshotIDs: [String: String] = [:]
-    /// Persist the live layout across restarts. **Off by default**, and the
-    /// decoder below ignores any stored value for the same reason: the field
-    /// has been round-tripping since it was introduced while nothing read it,
-    /// so every existing store already holds `true` by accident rather than by
-    /// choice. Honouring that would opt the whole install base in silently.
+    /// Persist the live layout across restarts. **Off by default.**
+    ///
+    /// The default alone is not enough for existing users. This field has been
+    /// round-tripping since it was introduced while nothing ever read it, so
+    /// every store already on disk holds `true` by accident rather than by
+    /// choice — and `decodeIfPresent(_:) ?? false` honours a present key, so it
+    /// would opt the whole install base in silently. `WindowManager.load()`
+    /// clears it once, guarded by a UserDefaults marker, after which the user's
+    /// own choice is respected normally.
     var autoSaveEnabled: Bool = false
     var autoRestoreEnabled: Bool = true
     var restoreAnimated: Bool = true
