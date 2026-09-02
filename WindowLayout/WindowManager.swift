@@ -3314,7 +3314,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         // Check if window is already in exact position and size
         if let cur = getCurrentFrame(of: activeWin), isFrameClose(to: axTargetFrame, current: cur, tolerance: 2.0) {
-            log("AX ✅ '\(appName)' already in place at (\(Int(axX)), \(Int(axY))) \(Int(axW))×\(Int(axH))", level: .verbose)
+            log("AX ✅ '\(appName)' already in place at (\(axX.clampedInt), \(axY.clampedInt)) \(axW.clampedInt)×\(axH.clampedInt)", level: .verbose)
             return (success: true, didModify: didModify)
         }
 
@@ -3387,7 +3387,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
         }
 
-        log("AX ✅ '\(appName)' final frame → (\(Int(axX)), \(Int(axY))) \(Int(axW))×\(Int(axH))", level: .verbose)
+        log("AX ✅ '\(appName)' final frame → (\(axX.clampedInt), \(axY.clampedInt)) \(axW.clampedInt)×\(axH.clampedInt)", level: .verbose)
         return (success: true, didModify: true)
     }
 
@@ -3395,10 +3395,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     nonisolated private func restoreViaOsascript(record: WindowRecord, targetFrame: CGRect, primaryScreenH: CGFloat) async -> Bool {
         let appName = record.windowID.appBundleID
-        let x       = Int(targetFrame.origin.x)
-        let y       = Int(primaryScreenH - targetFrame.origin.y - targetFrame.height)
-        let right   = x + Int(targetFrame.width)
-        let bottom  = y + Int(targetFrame.height)
+        let x       = targetFrame.origin.x.clampedInt
+        let y       = (primaryScreenH - targetFrame.origin.y - targetFrame.height).clampedInt
+        let right   = x + targetFrame.width.clampedInt
+        let bottom  = y + targetFrame.height.clampedInt
         let title   = record.windowID.windowTitle
 
         var script = ""
@@ -3794,7 +3794,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private func formatWindowDetail(record: WindowRecord) -> String {
         let app = record.windowID.appName ?? record.windowID.appBundleID
         let title = record.windowID.windowTitle
-        let size = "\(Int(record.globalFrame.width))×\(Int(record.globalFrame.height))"
+        let size = "\(record.globalFrame.width.clampedInt)×\(record.globalFrame.height.clampedInt)"
         let screen = record.screenName ?? "Unknown Screen"
         
         // If the window title is exactly the same as the app name, or contains it redundantly, simplify
