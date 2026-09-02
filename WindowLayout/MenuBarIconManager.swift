@@ -189,22 +189,18 @@ final class MenuBarIconManager: ObservableObject {
                 baseImage = resizeImage(loadedImg, targetSize: NSSize(width: 18, height: 18))
             } else {
                 let symbolName = actionState ? selectedPreset.defaultActionSymbol : selectedPreset.defaultRestingSymbol
-                baseImage = NSImage(systemSymbolName: symbolName, accessibilityDescription: "RememberMyWindows")
-                    ?? NSImage(systemSymbolName: "macwindow.on.rectangle", accessibilityDescription: "RememberMyWindows")!
+                baseImage = createCenteredSymbolImage(named: symbolName)
             }
 
         case .customSymbol:
             let symbolName = actionState
                 ? (customActionSymbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedPreset.defaultActionSymbol : customActionSymbol)
                 : (customRestingSymbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedPreset.defaultRestingSymbol : customRestingSymbol)
-            baseImage = NSImage(systemSymbolName: symbolName, accessibilityDescription: "RememberMyWindows")
-                ?? NSImage(systemSymbolName: actionState ? selectedPreset.defaultActionSymbol : selectedPreset.defaultRestingSymbol, accessibilityDescription: "RememberMyWindows")
-                ?? NSImage(systemSymbolName: "macwindow.on.rectangle", accessibilityDescription: "RememberMyWindows")!
+            baseImage = createCenteredSymbolImage(named: symbolName, fallback: actionState ? selectedPreset.defaultActionSymbol : selectedPreset.defaultRestingSymbol)
 
         default:
             let symbolName = actionState ? selectedPreset.defaultActionSymbol : selectedPreset.defaultRestingSymbol
-            baseImage = NSImage(systemSymbolName: symbolName, accessibilityDescription: "RememberMyWindows")
-                ?? NSImage(systemSymbolName: "macwindow.on.rectangle", accessibilityDescription: "RememberMyWindows")!
+            baseImage = createCenteredSymbolImage(named: symbolName)
         }
 
         // Apply theme tint or template
@@ -235,32 +231,63 @@ final class MenuBarIconManager: ObservableObject {
         }
     }
 
+    private func createCenteredSymbolImage(named symbolName: String, fallback: String? = "macwindow.on.rectangle") -> NSImage {
+        let targetSize = NSSize(width: 18, height: 18)
+        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        let rawSymbol = (NSImage(systemSymbolName: symbolName, accessibilityDescription: "RememberMyWindows")
+            ?? (fallback != nil ? NSImage(systemSymbolName: fallback!, accessibilityDescription: "RememberMyWindows") : nil)
+            ?? NSImage(systemSymbolName: "macwindow.on.rectangle", accessibilityDescription: "RememberMyWindows"))?
+            .withSymbolConfiguration(config)
+        
+        guard let base = rawSymbol else {
+            return NSImage(size: targetSize)
+        }
+        
+        let canvas = NSImage(size: targetSize, flipped: false) { rect in
+            let bSize = base.size
+            if bSize.width > 0 && bSize.height > 0 {
+                let scale = min(targetSize.width / bSize.width, targetSize.height / bSize.height)
+                let w = bSize.width * scale
+                let h = bSize.height * scale
+                let x = (targetSize.width - w) / 2.0
+                let y = (targetSize.height - h) / 2.0
+                base.draw(in: NSRect(x: x, y: y, width: w, height: h))
+            } else {
+                base.draw(in: rect)
+            }
+            return true
+        }
+        return canvas
+    }
+
     private func resizeImage(_ image: NSImage, targetSize: NSSize) -> NSImage {
-        let newImage = NSImage(size: targetSize)
-        newImage.lockFocus()
-        image.draw(in: NSRect(origin: .zero, size: targetSize),
-                   from: NSRect(origin: .zero, size: image.size),
-                   operation: .sourceOver,
-                   fraction: 1.0)
-        newImage.unlockFocus()
+        let newImage = NSImage(size: targetSize, flipped: false) { rect in
+            let srcSize = image.size
+            guard srcSize.width > 0 && srcSize.height > 0 else { return false }
+            let scale = min(targetSize.width / srcSize.width, targetSize.height / srcSize.height)
+            let w = srcSize.width * scale
+            let h = srcSize.height * scale
+            let x = (targetSize.width - w) / 2.0
+            let y = (targetSize.height - h) / 2.0
+            image.draw(in: NSRect(x: x, y: y, width: w, height: h),
+                       from: NSRect(origin: .zero, size: srcSize),
+                       operation: .sourceOver,
+                       fraction: 1.0)
+            return true
+        }
         return newImage
     }
 
     private func tintImage(_ image: NSImage, with color: NSColor) -> NSImage {
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return image }
         let size = image.size
-        let tintedImage = NSImage(size: size)
-        tintedImage.lockFocus()
-        guard let ctx = NSGraphicsContext.current?.cgContext else {
-            tintedImage.unlockFocus()
-            return image
+        let tintedImage = NSImage(size: size, flipped: false) { rect in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            ctx.clip(to: rect, mask: cgImage)
+            color.setFill()
+            rect.fill()
+            return true
         }
-
-        let rect = CGRect(origin: .zero, size: CGSize(width: size.width, height: size.height))
-        ctx.clip(to: rect, mask: cgImage)
-        color.setFill()
-        rect.fill()
-        tintedImage.unlockFocus()
         tintedImage.isTemplate = false
         return tintedImage
     }
