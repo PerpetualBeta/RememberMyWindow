@@ -646,7 +646,19 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     /// Restore saved layout for the current screen config.
     /// Prefers the user-marked default; falls back to the most recent saved session.
-    func restoreNow(animated: Bool? = nil, triggerSubtitle: String? = nil) {
+    /// - Parameter automatic: true when nothing asked for this directly — a
+    ///   display reconnecting, for instance. Those honour the Auto layout when
+    ///   it is switched on. A restore the user asked for stays as it was.
+    func restoreNow(animated: Bool? = nil, triggerSubtitle: String? = nil, automatic: Bool = false) {
+        if automatic, store.autoSaveEnabled, let auto = autoLayoutSnapshot {
+            log("Restoring the Auto layout rather than a saved session — Auto is switched on",
+                level: .necessary, type: .autoSave)
+            restore(snapshot: auto,
+                    animated: animated ?? store.restoreAnimated,
+                    skipCommandSend: true,
+                    triggerSubtitle: triggerSubtitle)
+            return
+        }
         let fp = ScreenFingerprint.current()
         let candidate: LayoutSnapshot?
         if let defaultID = store.defaultSnapshotIDs[fp.key],
@@ -1011,10 +1023,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
             
             if self.store.autoRestoreOnAppOpen {
-                if let snapshot = self.currentApplicableSnapshot {
+                if let source = self.automaticRestoreSnapshot {
                     let targetID = app.bundleIdentifier ?? app.localizedName
                     if let targetID = targetID {
-                        self.restore(snapshot: snapshot, animated: self.store.restoreAnimated, specificAppBundleID: targetID, isAppLaunch: true, showNotification: true)
+                        self.restore(snapshot: source.snapshot,
+                                     animated: self.store.restoreAnimated,
+                                     specificAppBundleID: targetID,
+                                     isAppLaunch: true,
+                                     showNotification: true,
+                                     skipCommandSend: source.isAuto)
                     }
                 }
             }
@@ -1189,6 +1206,45 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         return entry.screenKey == currentFingerprint.key
     }
 
+    /// The newest auto capture as a snapshot, when there is one and it was
+    /// taken on the display setup in front of the user now.
+    var autoLayoutSnapshot: LayoutSnapshot? {
+        guard let entry = autoSaveStore?.latest,
+              entry.screenKey == currentFingerprint.key else { return nil }
+        return LayoutSnapshot(
+            name: entry.readableScreenKey ?? currentFingerprint.readableName,
+            screenKey: entry.screenKey,
+            readableScreenKey: entry.readableScreenKey,
+            records: entry.records,
+            createdAt: entry.capturedAt,
+            updatedAt: entry.capturedAt,
+            location: nil,
+            isAutoSave: true,
+            foregroundBundleID: nil,
+            commandExcludedBundleIDs: []
+        )
+    }
+
+    /// What an **automatic** restore should apply.
+    ///
+    /// Turning the Auto layout on is a statement about what "restore
+    /// automatically" ought to mean, so it wins over a saved snapshot here.
+    /// Otherwise the app reverts a deliberate change to a checkpoint the user
+    /// took at some point in the past, which is what happens today: resize a
+    /// window, quit the app, reopen it, and the saved snapshot puts it back.
+    ///
+    /// Explicit restores are untouched. Choosing a saved session in the UI, or
+    /// Full Restore from the menu, still restores exactly what was chosen.
+    var automaticRestoreSnapshot: (snapshot: LayoutSnapshot, isAuto: Bool)? {
+        if store.autoSaveEnabled, let auto = autoLayoutSnapshot {
+            return (auto, true)
+        }
+        if let saved = currentApplicableSnapshot {
+            return (saved, false)
+        }
+        return nil
+    }
+
     /// Restores the newest auto capture.
     ///
     /// **Geometry and placement only.** `skipCommandSend: true` keeps it out of
@@ -1203,24 +1259,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             log("No auto layout recorded yet", level: .moderate, type: .autoSave)
             return
         }
-        guard entry.screenKey == currentFingerprint.key else {
+        guard let snapshot = autoLayoutSnapshot else {
             log("Auto layout was captured on a different display setup — not restoring",
                 level: .moderate, type: .autoSave)
             return
         }
-
-        let snapshot = LayoutSnapshot(
-            name: entry.readableScreenKey ?? currentFingerprint.readableName,
-            screenKey: entry.screenKey,
-            readableScreenKey: entry.readableScreenKey,
-            records: entry.records,
-            createdAt: entry.capturedAt,
-            updatedAt: entry.capturedAt,
-            location: nil,
-            isAutoSave: true,
-            foregroundBundleID: nil,
-            commandExcludedBundleIDs: []
-        )
 
         log("Restoring the auto layout — \(entry.records.count) window(s) captured \(entry.capturedAt)",
             level: .necessary, type: .autoSave)
@@ -1698,7 +1741,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 self.deliverNotification(type: .displayChange, title: notifTitle, subtitle: "Restoring layout...")
 
                 // Start restoration
-                self.restoreNow()
+                self.restoreNow(automatic: true)
                 
                 // Clear the pending names
                 self.pendingConnectedNames.removeAll()
@@ -4395,6 +4438,21 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 loaded.defaultSnapshotIDs.removeValue(forKey: snap.screenKey)
             }
             purged = true
+        }
+
+        // One-time opt-out for stores written before the toggle meant anything.
+        // Every one of them holds autoSaveEnabled == true purely because the
+        // field round-tripped while nothing read it, and a present key beats
+        // the decoder's default. Clearing it once keeps the feature genuinely
+        // opt-in; after this the user's own choice is honoured normally.
+        let optInMarker = "autoSaveOptInMigrated"
+        if !UserDefaults.standard.bool(forKey: optInMarker) {
+            if loaded.autoSaveEnabled {
+                loaded.autoSaveEnabled = false
+                log("Auto layout left off: the stored flag predates the setting and was never a choice",
+                    level: .verbose, type: .autoSave)
+            }
+            UserDefaults.standard.set(true, forKey: optInMarker)
         }
 
         store = loaded
