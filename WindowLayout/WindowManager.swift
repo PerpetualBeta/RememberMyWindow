@@ -2991,7 +2991,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     let appName = records.first?.windowID.appName ?? specificAppBundleID ?? "App"
                     let isQuiet = wasAlreadyInPlace && !didModifyAnyWindow && self.store.quietSingleRestoreWhenInPlace
                     let notifTitle = isQuiet ? lz("Already In Place") : "\(appName) \(lz("Restored"))"
-                    let notifSubtitle = isQuiet ? (triggerSubtitle.map { "\($0) · \(appName)" } ?? appName) : (triggerSubtitle ?? "")
+                    // For the quiet "already in place" compact notch, only pass the raw trigger key
+                    // (e.g. "⇪⇪" or "fn") as the subtitle — never append the app name, because
+                    // the compact pill badge has no room and the icon already identifies the app.
+                    let notifSubtitle = isQuiet ? (triggerSubtitle ?? "") : (triggerSubtitle ?? "")
 
                     self.deliverNotification(
                         type: .singleRestore,
