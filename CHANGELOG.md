@@ -2,6 +2,20 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v13.3] — 2026-09-02
+
+### 🪟 "The Multiverse of Multitasking"
+
+#### 📺 The Multi-Window Miracle (Full & Single Restore)
+- **Leave No Window Behind (Not Even Your 14th YouTube Tab)**: It turns out people open more than one browser window! Fixed a bug where opening 5 YouTube windows or multiple browser/app windows would only restore *one* lonely window while leaving the others wandering the desktop abyss.
+- **Broadcast Stacking**: *Sorry Window #2, we swear we didn't mean to ghost you.* When you have more open windows than saved in your snapshot, we now broadcast the layout coordinates to all extra windows and stack them neatly at the saved position so you can slide them apart like a fresh deck of cards.
+- **Lightning Verification**: Rewrote the WindowServer verification loop to check and correct each window directly via nonisolated Accessibility handles. Gone is the awkward 3.6-second stall where the app stared at Window 1 trying to fix Window 2.
+
+#### 🎛️ Menu Bar Icon Cha-Cha Elimination
+- **1-Pixel Shift Evicted**: Centered all SF Symbols and custom icons inside a fixed 18×18 point canvas. Clicking the status bar icon no longer causes a microscopic 1-pixel jump to the right when transitioning into the action state.
+
+---
+
 ## [v13.2] — 2026-09-01
 
 ### 🔕 "When I Turn Off Notifications, I Mean Disappear"
