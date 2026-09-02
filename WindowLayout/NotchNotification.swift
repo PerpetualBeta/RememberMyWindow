@@ -173,6 +173,10 @@ struct NotchNotificationView: View {
         return themeColor.color ?? Color(red: 0.2, green: 0.9, blue: 0.5)
     }
 
+    private var isShortText: Bool {
+        isCompact && data.title.count <= 18
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             // Main Hardware Notch Body & Border (Extended upwards into bezel with seamless bottom curvature)
@@ -224,12 +228,7 @@ struct NotchNotificationView: View {
                             .animation(.spring(response: 0.42, dampingFraction: 0.65), value: iconDrop)
                     } else {
                         ZStack {
-                            // Persistent halo. The ripple below fades to zero
-                            // opacity at the top of its cycle, so without this
-                            // the indicator collapses to a bare dot for part of
-                            // every pulse and the notification reads as smaller
-                            // than it is. The halo holds the visual weight; the
-                            // ripple supplies the motion.
+                            // Persistent halo.
                             Circle()
                                 .fill(accentColor.opacity(0.22))
                                 .frame(width: isCompact ? 18 : 26, height: isCompact ? 18 : 26)
@@ -255,8 +254,12 @@ struct NotchNotificationView: View {
                 }
                 .padding(.leading, isCompact ? 8 : 12)
 
+                if isShortText {
+                    Spacer(minLength: 0)
+                }
+
                 HStack(spacing: 6) {
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: isShortText ? .center : .leading, spacing: 1) {
                         Text(data.title)
                             .font(.system(size: isCompact ? 11 : 12.5, weight: .bold, design: .rounded))
                             .foregroundColor(.white)
@@ -303,7 +306,16 @@ struct NotchNotificationView: View {
                 }
                 .animation(.spring(response: 0.38, dampingFraction: 0.78), value: data.title)
 
-                Spacer(minLength: 4)
+                if isShortText {
+                    Spacer(minLength: 0)
+
+                    // Symmetrical balance space matching the leading icon + padding
+                    Color.clear
+                        .frame(width: isCompact ? 18 : 22, height: isCompact ? 18 : 22)
+                        .padding(.trailing, isCompact ? 8 : 12)
+                } else {
+                    Spacer(minLength: 4)
+                }
             }
             .padding(.horizontal, isCompact ? 8 : 14)
             .padding(.bottom, isCompact ? 4 : 8)

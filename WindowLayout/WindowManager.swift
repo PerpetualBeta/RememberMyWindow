@@ -1286,20 +1286,21 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let (title, subtitle, isCompact, bundleID): (String, String, Bool, String?) = {
             switch eventType {
             case .fullRestore:
-                let snapName = self.store.snapshots.values.first?.name ?? "Home"
+                let snapName = self.store.snapshots.values.first?.name ?? lz("Home")
                 let count = self.store.snapshots.values.first?.records.count ?? 5
-                return ("Layout Restored", "\(snapName) · \(count)/\(count) windows", false, nil)
+                let winWord = lz("Windows").lowercased()
+                return (lz("Layout Restored"), "\(snapName) · \(count)/\(count) \(winWord)", false, nil)
             case .singleRestore:
-                return ("Safari Restored", "", true, "com.apple.Safari")
+                return ("Safari \(lz("Restored"))", "", true, "com.apple.Safari")
             case .displayChange:
-                return ("Display Connected", "Restoring layout...", false, nil)
+                return (lz("Display Connected"), lz("Restoring layout..."), false, nil)
             case .snapshotUpdate:
-                let snapName = self.store.snapshots.values.first?.name ?? "Home"
-                return ("Safari Saved", snapName, true, "com.apple.Safari")
+                let snapName = self.store.snapshots.values.first?.name ?? lz("Home")
+                return ("Safari \(lz("Saved"))", snapName, true, "com.apple.Safari")
             case .desktopToggle:
-                return ("Desktop Clean", "All windows hidden", true, "com.apple.finder")
+                return (lz("Desktop Clean"), lz("All windows hidden"), true, "com.apple.finder")
             case .permissionWarning:
-                return ("RememberMyWindows", "Permission required", false, nil)
+                return ("RememberMyWindows", lz("Permission required"), false, nil)
             }
         }()
 
@@ -1335,7 +1336,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     soundEnabled = true
                     soundName = self.store.defaultNotificationSound
                 }
-                if soundEnabled { SystemSound.playSound(named: soundName) }
+                if soundEnabled { SystemSound.playSound(named: soundName, volume: Float(self.store.notchSoundVolume)) }
             } else {
                 // Force system notification only — bypass showNotchNotification check
                 let content = UNMutableNotificationContent()
@@ -1365,7 +1366,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     soundName = self.store.defaultNotificationSound
                 }
                 content.sound = soundEnabled ? .default : nil
-                if soundEnabled { SystemSound.playSound(named: soundName) }
+                if soundEnabled { SystemSound.playSound(named: soundName, volume: Float(self.store.systemSoundVolume)) }
                 let request = UNNotificationRequest(identifier: "preview-\(UUID().uuidString)", content: content, trigger: nil)
                 UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
             }
@@ -1428,7 +1429,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     }
 
                     if notchSoundEnabled && !silent {
-                        SystemSound.playSound(named: notchSoundName)
+                        SystemSound.playSound(named: notchSoundName, volume: Float(self.store.notchSoundVolume))
                     }
                 }
             }
@@ -1513,12 +1514,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         if playSound {
-            SystemSound.playSound(named: soundName)
+            SystemSound.playSound(named: soundName, volume: Float(self.store.systemSoundVolume))
         }
     }
 
-    func previewSound(named soundName: String) {
-        SystemSound.playSound(named: soundName)
+    func previewSound(named soundName: String, volume: Float? = nil) {
+        let vol = volume ?? Float(self.store.notchSoundVolume)
+        SystemSound.playSound(named: soundName, volume: vol)
     }
 
     func requestSystemNotificationPermission() {

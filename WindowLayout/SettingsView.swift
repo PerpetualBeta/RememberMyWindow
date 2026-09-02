@@ -2694,9 +2694,79 @@ struct NotificationChannelDetailView: View {
 
             ScrollView {
                 VStack(spacing: 18) {
-                    // Events Section (master channel toggle removed as requested)
-                    SettingsSection(title: "Events".localized(appLanguage), icon: "list.bullet.clipboard") {
-                        VStack(spacing: 0) {
+                    // Sound Volume Section
+                    SettingsSection(title: "Sound Volume".localized(appLanguage), icon: "speaker.wave.2.fill") {
+                        VStack(spacing: 12) {
+                            HStack(spacing: 12) {
+                                let currentVolume: Double = channel == .notch ? manager.store.notchSoundVolume : manager.store.systemSoundVolume
+                                let speakerIcon: String = currentVolume <= 0.01 ? "speaker.slash.fill" : (currentVolume < 0.35 ? "speaker.wave.1.fill" : (currentVolume < 0.7 ? "speaker.wave.2.fill" : "speaker.wave.3.fill"))
+
+                                Image(systemName: speakerIcon)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(channel.color)
+                                    .frame(width: 24)
+                                    .animation(.easeInOut(duration: 0.2), value: currentVolume)
+
+                                Slider(
+                                    value: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundVolume : manager.store.systemSoundVolume },
+                                        set: { newVal in
+                                            if channel == .notch {
+                                                manager.store.notchSoundVolume = newVal
+                                            } else {
+                                                manager.store.systemSoundVolume = newVal
+                                            }
+                                            manager.persist()
+                                        }
+                                    ),
+                                    in: 0.0...1.0
+                                )
+                                .tint(channel.color)
+
+                                Text("\(Int(round(currentVolume * 100)))%")
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 44, alignment: .trailing)
+
+                                Button {
+                                    let testSound = channel == .notch ? manager.store.notchSoundNameSingleRestore : manager.store.systemSoundNameSingleRestore
+                                    let vol = Float(currentVolume)
+                                    manager.previewSound(named: testSound, volume: vol)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "play.fill")
+                                            .font(.system(size: 10))
+                                        Text("Test".localized(appLanguage))
+                                            .font(.system(size: 11, weight: .medium))
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(channel.color.opacity(0.12))
+                                    )
+                                    .foregroundStyle(channel.color)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Preview volume with current sound".localized(appLanguage))
+                            }
+                            .padding(12)
+                        }
+                    }
+
+                    // Events Section: distinct interactive cards
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "list.bullet.clipboard")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Text("Events".localized(appLanguage))
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 4)
+
+                        VStack(spacing: 12) {
                             eventCard(
                                 icon: "display.2",
                                 title: "Full Layout Restore",
@@ -2715,8 +2785,6 @@ struct NotificationChannelDetailView: View {
                                     set: { v in channel == .notch ? (manager.store.notchSoundNameFullRestore = v) : (manager.store.systemSoundNameFullRestore = v); manager.persist() }
                                 )
                             )
-
-                            Divider().opacity(0.5).padding(.horizontal, 14)
 
                             eventCard(
                                 icon: "app.badge.checkmark",
@@ -2741,8 +2809,6 @@ struct NotificationChannelDetailView: View {
                                 ) : nil
                             )
 
-                            Divider().opacity(0.5).padding(.horizontal, 14)
-
                             eventCard(
                                 icon: "externaldrive.connected.to.line.below",
                                 title: "Display Connection & Change",
@@ -2762,8 +2828,6 @@ struct NotificationChannelDetailView: View {
                                 )
                             )
 
-                            Divider().opacity(0.5).padding(.horizontal, 14)
-
                             eventCard(
                                 icon: "camera.viewfinder",
                                 title: "Snapshot & App Update",
@@ -2782,8 +2846,6 @@ struct NotificationChannelDetailView: View {
                                     set: { v in channel == .notch ? (manager.store.notchSoundNameSnapshotUpdate = v) : (manager.store.systemSoundNameSnapshotUpdate = v); manager.persist() }
                                 )
                             )
-
-                            Divider().opacity(0.5).padding(.horizontal, 14)
 
                             eventCard(
                                 icon: "keyboard.badge.eye",
@@ -2857,22 +2919,41 @@ private struct EventCardView: View {
     @State private var isHovered = false
     @State private var hoverWorkItem: DispatchWorkItem?
 
+    // Event-specific accent color for distinct visual differentiation
+    private var eventAccentColor: Color {
+        switch eventType {
+        case .fullRestore:     return Color.indigo
+        case .singleRestore:   return Color.teal
+        case .displayChange:   return Color.orange
+        case .snapshotUpdate:  return Color.purple
+        case .desktopToggle:   return Color.pink
+        case .permissionWarning: return Color.red
+        }
+    }
+
+    private var activeColor: Color {
+        channel == .notch ? eventAccentColor : channel.color
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header row: icon + title + subtitle + toggle
             HStack(alignment: .top, spacing: 12) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(channel.color.opacity(isOn ? 0.16 : 0.07))
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(activeColor.opacity(isOn ? (isHovered ? 0.22 : 0.16) : 0.07))
                     Image(systemName: icon)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(isOn ? channel.color : Color.secondary.opacity(0.5))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(isOn ? activeColor : Color.secondary.opacity(0.5))
+                        .shadow(color: (isHovered && isOn) ? activeColor.opacity(0.4) : .clear, radius: 4)
                 }
-                .frame(width: 30, height: 30)
+                .frame(width: 32, height: 32)
+                .scaleEffect(isHovered && isOn ? 1.05 : 1.0)
+                .animation(.spring(response: 0.25), value: isHovered)
                 .animation(.spring(response: 0.25), value: isOn)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 6) {
                         Text(title.localized(appLanguage))
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(isOn ? .primary : .secondary)
@@ -2882,14 +2963,14 @@ private struct EventCardView: View {
                             HStack(spacing: 3) {
                                 Image(systemName: "eye.fill")
                                     .font(.system(size: 8, weight: .bold))
-                                Text("Preview")
+                                Text("Live Preview".localized(appLanguage))
                                     .font(.system(size: 9, weight: .semibold))
                             }
-                            .foregroundStyle(channel.color)
+                            .foregroundStyle(activeColor)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
                             .background(
-                                Capsule().fill(channel.color.opacity(0.12))
+                                Capsule().fill(activeColor.opacity(0.12))
                             )
                             .transition(.scale(scale: 0.7).combined(with: .opacity))
                         }
@@ -2929,12 +3010,12 @@ private struct EventCardView: View {
                                 Text(soundIsOn ? "Sound".localized(appLanguage) : "Muted".localized(appLanguage))
                                     .font(.system(size: 11.5, weight: .medium))
                             }
-                            .foregroundStyle(soundIsOn ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(soundIsOn ? activeColor : Color.secondary)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(soundIsOn ? Color.accentColor.opacity(0.1) : Color.primary.opacity(0.04))
+                                    .fill(soundIsOn ? activeColor.opacity(0.12) : Color.primary.opacity(0.04))
                             )
                         }
                         .buttonStyle(.plain)
@@ -2943,14 +3024,28 @@ private struct EventCardView: View {
                         Spacer()
 
                         if soundIsOn {
-                            SoundPickerButton(
-                                selectedSoundName: $soundName,
-                                appLanguage: appLanguage,
-                                fontSize: 11.5,
-                                horizontalPadding: 8,
-                                verticalPadding: 4,
-                                cornerRadius: 6
-                            )
+                            HStack(spacing: 6) {
+                                SoundPickerButton(
+                                    selectedSoundName: $soundName,
+                                    appLanguage: appLanguage,
+                                    fontSize: 11.5,
+                                    horizontalPadding: 8,
+                                    verticalPadding: 4,
+                                    cornerRadius: 6
+                                )
+
+                                // Quick sound test button right in the row
+                                Button {
+                                    let vol = Float(channel == .notch ? manager.store.notchSoundVolume : manager.store.systemSoundVolume)
+                                    manager.previewSound(named: soundName, volume: vol)
+                                } label: {
+                                    Image(systemName: "play.circle.fill")
+                                        .font(.system(size: 15))
+                                        .foregroundStyle(activeColor)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Test sound".localized(appLanguage))
+                            }
                         }
                     }
 
@@ -2963,7 +3058,7 @@ private struct EventCardView: View {
                         } label: {
                             HStack(alignment: .top, spacing: 8) {
                                 Image(systemName: quiet.wrappedValue ? "checkmark.square.fill" : "square")
-                                    .foregroundStyle(quiet.wrappedValue ? Color.accentColor : .secondary)
+                                    .foregroundStyle(quiet.wrappedValue ? activeColor : .secondary)
                                     .font(.system(size: 13))
                                     .padding(.top, 1)
 
@@ -2994,17 +3089,29 @@ private struct EventCardView: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .background {
-            if isHovered && isOn {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(channel.color.opacity(0.05))
-                    .padding(2)
-                    .transition(.opacity)
-            }
-        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor).opacity(isHovered ? 0.85 : 0.65))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    isHovered && isOn
+                        ? activeColor.opacity(0.4)
+                        : (isOn ? activeColor.opacity(0.15) : Color.primary.opacity(0.06)),
+                    lineWidth: (isHovered && isOn) ? 1.4 : 1.0
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .shadow(
+            color: (isHovered && isOn) ? activeColor.opacity(0.16) : Color.black.opacity(0.03),
+            radius: (isHovered && isOn) ? 8 : 2,
+            y: (isHovered && isOn) ? 3 : 1
+        )
+        .offset(y: (isHovered && isOn) ? -1.5 : 0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isHovered)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isOn)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: soundIsOn)
-        .animation(.easeInOut(duration: 0.18), value: isHovered)
         .onHover { hovering in
             isHovered = hovering
             hoverWorkItem?.cancel()
@@ -3018,6 +3125,7 @@ private struct EventCardView: View {
         }
     }
 }
+
 
 // MARK: - Sound Library Subpage View
 

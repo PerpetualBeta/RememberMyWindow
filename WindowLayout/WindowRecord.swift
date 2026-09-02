@@ -344,15 +344,48 @@ enum SystemSound: String, Codable, CaseIterable, Identifiable {
         return nil
     }
 
-    func play() {
+    /// Per-sound gain multiplier so loud meme sounds and sharp alerts have consistent perceived loudness.
+    var calibratedGain: Float {
+        switch self {
+        case .marioJump:       return 0.50  // Mario Jump has a very hot 8-bit square wave peak
+        case .marioPowerUp:    return 0.55
+        case .mario1Up:        return 0.55
+        case .marioPipe:       return 0.55
+        case .animeWow:        return 0.55
+        case .vineBoom:        return 0.60
+        case .faah:            return 0.55
+        case .robloxOof:       return 0.65
+        case .wilhelm:         return 0.55
+        case .tacoBell:        return 0.60
+        case .yeet:            return 0.60
+        case .sheesh:          return 0.60
+        case .windowsError:    return 0.65
+        case .emotionalDamage: return 0.60
+        case .whatTheDogDoin:  return 0.60
+        case .illuminati:      return 0.65
+        case .directedBy:      return 0.60
+        case .huhCat:          return 0.65
+        case .quack:           return 0.65
+        case .bruh:            return 0.65
+        case .tada:            return 0.70
+        default:               return 1.0
+        }
+    }
+
+    func play(volume: Float = 1.0) {
+        let effectiveVolume = min(1.0, max(0.0, volume * calibratedGain))
         if let url = fileURL, let sound = NSSound(contentsOf: url, byReference: true) {
+            sound.volume = effectiveVolume
             sound.play()
             return
         }
-        NSSound(named: rawValue)?.play()
+        if let sound = NSSound(named: rawValue) {
+            sound.volume = effectiveVolume
+            sound.play()
+        }
     }
 
-    static func playSound(named soundName: String) {
+    static func playSound(named soundName: String, volume: Float = 1.0) {
         let resolvedName: String
         switch soundName {
         case "Complete", "complete": resolvedName = "Welcome"
@@ -362,10 +395,13 @@ enum SystemSound: String, Codable, CaseIterable, Identifiable {
         default: resolvedName = soundName
         }
         if let matched = SystemSound(rawValue: resolvedName) {
-            matched.play()
+            matched.play(volume: volume)
             return
         }
-        NSSound(named: resolvedName)?.play()
+        if let sound = NSSound(named: resolvedName) {
+            sound.volume = min(1.0, max(0.0, volume))
+            sound.play()
+        }
     }
 }
 
@@ -425,6 +461,10 @@ struct LayoutStore: Codable {
 
     /// Global default notification sound
     var defaultNotificationSound: String = SystemSound.stargaze.rawValue
+
+    /// In-app volume control (0.0 to 1.0)
+    var notchSoundVolume: Double = 1.0
+    var systemSoundVolume: Double = 1.0
 
     /// Per-event sound for notch notifications
     var notchSoundOnFullRestore: Bool = true
@@ -511,6 +551,10 @@ struct LayoutStore: Codable {
                 return fallback
             }
         }
+
+        // In-app volume
+        notchSoundVolume                      = try c.decodeIfPresent(Double.self,                 forKey: .notchSoundVolume) ?? 1.0
+        systemSoundVolume                     = try c.decodeIfPresent(Double.self,                 forKey: .systemSoundVolume) ?? 1.0
 
         // Per-event sound flags (notch)
         defaultNotificationSound              = migrateSound(try c.decodeIfPresent(String.self, forKey: .defaultNotificationSound), fallback: SystemSound.stargaze.rawValue)

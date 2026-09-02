@@ -10,6 +10,8 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?logo=swift&logoColor=white)](https://swift.org)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
+[Features](#-features) · [Installation](#-building-from-source) · [How it works](#️-how-it-works) · [Contributing](#-contributing)
+
 </div>
 
 ---
@@ -20,7 +22,7 @@ Every time you plug in a monitor, disconnect from a dock, or rearrange your disp
 
 It silently tracks your window positions in the background, and the moment it recognises your display setup, it puts every window exactly where you left it.
 
-<img width="1419" height="893" alt="image" src="https://github.com/user-attachments/assets/4fcaa48b-c658-46eb-afff-776e05e02ebd" />
+<img width="1419" height="893" alt="Screenshot of RememberMyWindows" src="https://github.com/user-attachments/assets/4fcaa48b-c658-46eb-afff-776e05e02ebd" />
 
 ---
 
@@ -30,20 +32,20 @@ It silently tracks your window positions in the background, and the moment it re
 |---|---|
 | 🖥️ **Screen Fingerprinting** | Identifies every display by hardware ID — layouts are tied to your exact physical monitors |
 | 💾 **Auto-Save** | Records window positions as you move or resize them (800ms debounce, no disk spam) |
-| ♻️ **Auto-Restore** | When a display config reconnects, your saved layout is applied automatically |
+| ♻️ **Auto-Restore** | When a known display configuration reconnects, your saved layout is applied automatically |
 | 🏷️ **Named Layouts** | Create, rename, and manage multiple layouts per screen configuration |
 | ⌨️ **Quick Restore Shortcut** | Trigger a restore instantly with a keyboard shortcut |
-| 🔔 **Notch Notifications** | Beautiful notch-style alerts keep you informed without interrupting your flow |
+| 🔔 **Notch Notifications** | Subtle notch-style alerts keep you informed without interrupting your flow |
 | 📋 **Live Activity Log** | See every tracking event in real time |
 | 🌙 **Dark Mode & Themes** | Fully native, looks great in light and dark mode |
-| 🌍 **Hebrew & English** | Fully localised in English and Hebrew |
+| 🌍 **English & Hebrew** | Fully localised UI with automatic language detection |
 
 ---
 
 ## 📋 Requirements
 
 - **macOS 15.0 (Sequoia)** or later
-- Xcode 15+ (to build from source)
+- **Xcode 16+** (to build from source)
 
 ---
 
@@ -64,10 +66,14 @@ Then in Xcode:
 
 ### Required Permissions
 
+On first launch, the app will prompt you for the following:
+
 | Permission | Why it's needed |
 |---|---|
-| **Accessibility** | To move windows in other apps *(System Settings → Privacy → Accessibility)* |
+| **Accessibility** | To read and move windows in other apps *(System Settings → Privacy & Security → Accessibility)* |
 | **Automation / Apple Events** | Granted automatically on first use when restoring another app's window |
+
+> ℹ️ **Note:** Permissions can be revoked at any time in *System Settings → Privacy & Security*.
 
 ---
 
@@ -83,15 +89,16 @@ Each physical display has a unique `NSScreenNumber`. RememberMyWindows combines 
 When your displays change, a new key is computed and matched against your saved layouts.
 
 ### Window Capture
-Uses `CGWindowListCopyWindowInfo` to snapshot all visible windows across all apps (not just the ones it manages). Tiny utility windows under 50px are automatically ignored.
+Uses `CGWindowListCopyWindowInfo` to snapshot all visible windows across all apps. Tiny utility windows under 50px are automatically ignored to keep the log clean.
 
 ### Coordinate System
-- `CGWindowList` uses **top-left** origin (screen coordinates)
-- `AppKit / NSWindow` uses **bottom-left** origin
-- RememberMyWindows converts between them automatically using the primary screen height.
+- `CGWindowList` uses a **top-left** origin
+- `AppKit / NSWindow` uses a **bottom-left** origin
+- RememberMyWindows converts between them automatically using the primary screen height
 
 ### Restoring Other Apps
 Window positions in third-party apps are restored via AppleScript:
+
 ```applescript
 tell application "AppName"
     set bounds of front window to {x, y, x2, y2}
@@ -131,28 +138,40 @@ RememberMyWindowMac/
 ## 💾 Data Storage
 
 Window layouts are saved locally to:
+
 ```
 ~/Library/Application Support/RememberMyWindows/layouts.json
 ```
+
+No data ever leaves your Mac. 📴
 
 ---
 
 ## ⚠️ Known Limitations
 
-- **Other apps:** AppleScript restores only the **frontmost window** of each app. Background windows require the app to be focused first.
-- **Sandboxed apps:** Some Mac App Store apps may reject Apple Events.
-- **Full multi-window restore:** For precise control over all windows in all apps, `AXUIElement` (Accessibility API) can be used as a future enhancement — see comments in `WindowManager.swift`.
+- **Background windows:** AppleScript can only restore the **frontmost window** of each app. Background windows require the app to be focused first.
+- **Sandboxed apps:** Some Mac App Store apps may reject Apple Events for security reasons.
+- **Multi-window restore:** Precise control over every window in every app could be achieved with `AXUIElement` (the Accessibility API) — a possible future enhancement (see comments in `WindowManager.swift`).
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] Restore **all** windows per app using the Accessibility API (`AXUIElement`)
+- [ ] Menu bar quick actions
+- [ ] Export / import layouts between Macs
 
 ---
 
 ## 🤝 Contributing
 
 Contributions are very welcome! This project is licensed under **GPLv3**, which means:
+
 - ✅ You can fork, modify, and redistribute
 - ✅ Your contributions stay open-source
 - ❌ You cannot redistribute closed-source or proprietary versions
 
-Please open an **Issue** to discuss a bug or feature, or submit a **Pull Request** directly.
+Please open an **Issue** to discuss a bug or feature before submitting a **Pull Request**.
 
 > 💬 *Note: New interface strings should be submitted in English — the author will add Hebrew translations.*
 
