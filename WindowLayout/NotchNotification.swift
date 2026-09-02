@@ -224,7 +224,14 @@ struct NotchNotificationView: View {
             .frame(width: pillWidth, height: pillHeight)
 
             HStack(spacing: isCompact ? 8 : 10) {
-                // Far-Left Icon/Dot dropping down from top-left
+                // Centred, not left-aligned. The pill is a fixed width and is
+                // now also floored at the notch width, so a short title used to
+                // leave the label stranded against the left edge with dead
+                // space beside it. These spacers collapse to nothing when the
+                // content is wider than the pill, so long titles are unaffected.
+                Spacer(minLength: 0)
+
+                // Icon/dot dropping down from the top
                 Group {
                     if let icon = data.appIcon ?? (data.bundleID.flatMap { bID in
                         NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bID })?.icon
@@ -272,7 +279,6 @@ struct NotchNotificationView: View {
                         .animation(.spring(response: 0.42, dampingFraction: 0.65), value: iconDrop)
                     }
                 }
-                .padding(.leading, isCompact ? 8 : 12)
 
                 HStack(spacing: 6) {
                     VStack(alignment: .leading, spacing: 1) {
@@ -322,7 +328,7 @@ struct NotchNotificationView: View {
                 }
                 .animation(.spring(response: 0.38, dampingFraction: 0.78), value: data.title)
 
-                Spacer(minLength: 4)
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, isCompact ? 8 : 14)
             .padding(.bottom, isCompact ? 4 : 8)
