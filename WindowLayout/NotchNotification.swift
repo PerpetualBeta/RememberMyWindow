@@ -5,6 +5,17 @@ import CoreGraphics
 
 // MARK: - Built-in Screen Detection
 
+/// Width of the hardware notch in points, or 0 on a display without one.
+///
+/// The two auxiliary areas are the menu-bar strips either side of the notch, so
+/// the gap between them is the notch itself. This has to be read rather than
+/// hardcoded: it differs between models and scales with the display mode.
+private func notchWidth(of screen: NSScreen) -> CGFloat {
+    guard let left = screen.auxiliaryTopLeftArea,
+          let right = screen.auxiliaryTopRightArea else { return 0 }
+    return max(0, right.minX - left.maxX)
+}
+
 private func builtInScreen() -> NSScreen {
     if let notched = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) {
         return notched
@@ -64,7 +75,15 @@ final class NotchNotificationWindow: NSPanel {
             finalSubtitle = subtitle
         }
         self.isCompact = isCompact
-        self.pillWidth = isCompact ? (finalSubtitle.isEmpty ? 180 : 215) : 280
+        // Never narrower than the notch. A pill that is means the hardware
+        // cutout shows as black shoulders either side of it, and the
+        // notification reads as a stub sitting inside the notch instead of
+        // hanging from it. Only the compact-without-subtitle case was affected,
+        // at 180pt against a notch measured at 185, and isAllowedSubtitle
+        // strips the subtitle from all but a couple of notifications, so that
+        // was the common case rather than an edge one.
+        let intrinsicWidth: CGFloat = isCompact ? (finalSubtitle.isEmpty ? 180 : 215) : 280
+        self.pillWidth = max(intrinsicWidth, notchWidth(of: builtInScreen()))
         self.data = NotificationData(title: title, subtitle: finalSubtitle, bundleID: bundleID, appIcon: appIcon)
         
         let notchDepth = builtInScreen().safeAreaInsets.top > 0 ? builtInScreen().safeAreaInsets.top : 24.0
