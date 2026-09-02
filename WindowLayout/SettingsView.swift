@@ -487,6 +487,20 @@ struct SettingsView: View {
     private var restoreSettingsContent: some View {
         VStack(spacing: 18) {
             // Subcategory 1: Full Restore
+            SettingsSection(title: "Auto Layout".localized(appLanguage), icon: "clock.arrow.circlepath") {
+                VStack(spacing: 0) {
+                    SettingsToggle(
+                        title: "Persist live layout across restarts",
+                        subtitle: "Records your arrangement to its own file as you work, so it survives a quit, a sleep or a reboot. Off by default; saved sessions are unaffected.",
+                        icon: "clock.arrow.circlepath",
+                        isOn: Binding(
+                            get: { manager.store.autoSaveEnabled },
+                            set: { manager.store.autoSaveEnabled = $0 }
+                        )
+                    )
+                }
+            }
+
             SettingsSection(title: "Full Restore".localized(appLanguage), icon: "display.2") {
                 VStack(spacing: 0) {
                     SettingsToggle(

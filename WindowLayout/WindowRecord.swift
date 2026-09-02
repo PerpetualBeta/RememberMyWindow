@@ -430,7 +430,12 @@ struct LayoutStore: Codable {
     var snapshots: [String: LayoutSnapshot] = [:]
     /// key = ScreenFingerprint.key, value = LayoutSnapshot.id.uuidString
     var defaultSnapshotIDs: [String: String] = [:]
-    var autoSaveEnabled: Bool = true
+    /// Persist the live layout across restarts. **Off by default**, and the
+    /// decoder below ignores any stored value for the same reason: the field
+    /// has been round-tripping since it was introduced while nothing read it,
+    /// so every existing store already holds `true` by accident rather than by
+    /// choice. Honouring that would opt the whole install base in silently.
+    var autoSaveEnabled: Bool = false
     var autoRestoreEnabled: Bool = true
     var restoreAnimated: Bool = true
     /// Restores an app's layout automatically when it is launched.
@@ -527,7 +532,7 @@ struct LayoutStore: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         snapshots            = try c.decodeIfPresent([String: LayoutSnapshot].self, forKey: .snapshots)            ?? [:]
         defaultSnapshotIDs   = try c.decodeIfPresent([String: String].self,         forKey: .defaultSnapshotIDs)   ?? [:]
-        autoSaveEnabled      = try c.decodeIfPresent(Bool.self, forKey: .autoSaveEnabled)      ?? true
+        autoSaveEnabled      = try c.decodeIfPresent(Bool.self, forKey: .autoSaveEnabled)      ?? false
         autoRestoreEnabled   = try c.decodeIfPresent(Bool.self, forKey: .autoRestoreEnabled)   ?? true
         restoreAnimated      = try c.decodeIfPresent(Bool.self, forKey: .restoreAnimated)      ?? true
         autoRestoreOnAppOpen = try c.decodeIfPresent(Bool.self, forKey: .autoRestoreOnAppOpen) ?? true
