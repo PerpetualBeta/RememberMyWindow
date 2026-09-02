@@ -653,10 +653,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         guard let (key, snapToUpdate) = activePair else { return }
         var snap = snapToUpdate
         
-        let appRecords = captureWindowsForApp(bundleID: bundleID, fp: fp)
+        // Only save the frontmost (first) window — exactly 1 record per app in the layout.
+        // Restore broadcasts this single position to ALL currently open windows of the app.
+        let allCaptured = captureWindowsForApp(bundleID: bundleID, fp: fp)
         let appName = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID })?.localizedName ?? bundleID
 
-        if appRecords.isEmpty {
+        guard let frontmostRecord = allCaptured.first else {
             log("Could not add '\(appName)': No open window detected", level: .necessary, type: .system)
             deliverNotification(type: .snapshotUpdate, title: "Cannot Add \(appName)", subtitle: "No open window detected", isCompact: true, bundleID: bundleID)
             return
@@ -664,9 +666,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         let wasAlreadyPresent = snap.records.contains { $0.windowID.appBundleID == bundleID }
         
-        // Overwrite existing records for this app or append new ones
+        // Replace all existing records for this app with the single frontmost window
         snap.records.removeAll { $0.windowID.appBundleID == bundleID }
-        snap.records.append(contentsOf: appRecords)
+        snap.records.append(frontmostRecord)
         snap.updatedAt = Date()
         
         store.snapshots[key] = snap
@@ -679,26 +681,33 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         deliverNotification(type: .snapshotUpdate, title: "\(appName) \(actionName)", subtitle: snap.displayName, isCompact: true, bundleID: bundleID)
     }
 
-    /// Captures live window records for a specific app, with direct CGWindow fallback if AX matching drops it.
+    /// Captures live window records for a specific app.
+    /// Uses a direct CGWindowList read (always accurate regardless of focus) for screen detection,
+    /// then cross-references with the AX cache only for full-screen flag and ghost filtering.
     private func captureWindowsForApp(bundleID: String, fp: ScreenFingerprint) -> [WindowRecord] {
-        let allRecords = captureAllWindows(for: fp, silent: true)
-        let appRecords = allRecords.filter { $0.windowID.appBundleID == bundleID }
-        if !appRecords.isEmpty {
-            return appRecords
-        }
-        
-        // Direct Fallback: capture windows for bundleID directly from CGWindowList if AX filtering dropped them
-        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }),
-              let windowList = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        // --- Primary path: read live CG windows for this app and detect screen from real coords ---
+        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else {
             return []
         }
-        
         let targetPID = app.processIdentifier
-        let primaryScreenHeight = NSScreen.screens.first?.frame.height ?? 0
+        guard let windowList = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+
         let screens = NSScreen.screens
-        var fallbackRecords: [WindowRecord] = []
-        var windowIndex = 0
-        
+        let primaryScreenHeight = screens.first?.frame.height ?? 0
+        let appName = app.localizedName ?? bundleID
+
+        // Collect live CG windows for this app (layer 0, >50×50, alpha >0.01)
+        struct LiveWindow {
+            let cgFrame: CGRect      // CG coords (top-left origin)
+            let appKitFrame: CGRect  // AppKit coords (bottom-left origin)
+            let title: String
+            let windowNumber: Int
+            let isOnScreen: Bool
+        }
+
+        var liveWindows: [LiveWindow] = []
         for entry in windowList {
             guard let pid = entry[kCGWindowOwnerPID as String] as? Int32, pid == targetPID else { continue }
             guard let bounds = entry[kCGWindowBounds as String] as? [String: Any],
@@ -706,37 +715,69 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                   let y = bounds["Y"] as? CGFloat,
                   let w = bounds["Width"] as? CGFloat,
                   let h = bounds["Height"] as? CGFloat,
-                  let windowLayer = entry[kCGWindowLayer as String] as? Int,
-                  windowLayer == 0, w > 50, h > 50 else { continue }
-            
+                  let layer = entry[kCGWindowLayer as String] as? Int,
+                  layer == 0, w > 50, h > 50 else { continue }
             let alpha = entry[kCGWindowAlpha as String] as? Double ?? 1.0
             guard alpha > 0.01 else { continue }
-            
             let title = entry[kCGWindowName as String] as? String ?? ""
-            let appName = app.localizedName ?? bundleID
+            let windowNum = entry[kCGWindowNumber as String] as? Int ?? Int.max
+            let isOnScreen = entry[kCGWindowIsOnscreen as String] as? Bool ?? false
+            let cgFrame = CGRect(x: x, y: y, width: w, height: h)
             let appKitFrame = CGRect(x: x, y: primaryScreenHeight - y - h, width: w, height: h)
-            
+            liveWindows.append(LiveWindow(cgFrame: cgFrame, appKitFrame: appKitFrame,
+                                          title: title, windowNumber: windowNum, isOnScreen: isOnScreen))
+        }
+
+        // Prefer on-screen windows (off-screen ones may be minimized / on another Space).
+        let candidates = liveWindows.filter { $0.isOnScreen }.isEmpty ? liveWindows : liveWindows.filter { $0.isOnScreen }
+
+        guard !candidates.isEmpty else {
+            // Nothing visible at all — fall back to the general captureAllWindows path
+            let allRecords = captureAllWindows(for: fp, silent: true)
+            return allRecords.filter { $0.windowID.appBundleID == bundleID }
+        }
+
+        // Build AX isFullScreen map by querying the app's AX element fresh (skip cache for accuracy)
+        var axFullScreenFlags: [Int: Bool] = [:] // indexed by window position order
+        let axApp = WindowManager.createAXElement(for: targetPID)
+        var windowsRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+           let axWins = windowsRef as? [AXUIElement] {
+            for (i, win) in axWins.enumerated() {
+                var fsRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(win, "AXFullScreen" as CFString, &fsRef) == .success,
+                   let fs = fsRef as? Bool {
+                    axFullScreenFlags[i] = fs
+                }
+            }
+        }
+
+        // Convert candidates → WindowRecords, picking screen from appKitFrame intersection
+        var records: [WindowRecord] = []
+        for (idx, win) in candidates.enumerated() {
             let screen = screens.max(by: { s1, s2 in
-                s1.frame.intersection(appKitFrame).area < s2.frame.intersection(appKitFrame).area
+                s1.frame.intersection(win.appKitFrame).area < s2.frame.intersection(win.appKitFrame).area
             })
-            
-            let wid = WindowID(appBundleID: bundleID, appName: appName, windowTitle: title, appWindowIndex: windowIndex)
-            let record = WindowRecord(
+            let wid = WindowID(appBundleID: bundleID, appName: appName, windowTitle: win.title, appWindowIndex: idx)
+            var record = WindowRecord(
                 id: UUID(),
                 windowID: wid,
-                globalFrame: appKitFrame,
+                globalFrame: win.appKitFrame,
                 screenKey: fp.key,
                 screenFrame: screen?.frame,
                 screenName: screen?.localizedName ?? "Unknown Screen",
                 savedAt: Date(),
-                zIndex: windowIndex
+                zIndex: idx
             )
-            fallbackRecords.append(record)
-            windowIndex += 1
+            if axFullScreenFlags[idx] == true {
+                record.isNativeFullScreen = true
+                record.isFullScreenMode = true
+            }
+            records.append(record)
         }
-        
-        return fallbackRecords
+        return records
     }
+
 
     func toggleCommandExclusion(key: String, bundleID: String) {
         guard var snap = store.snapshots[key] else { return }
@@ -2469,6 +2510,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
                 
                 resolvedTargets.append(contentsOf: matchedTargetsForApp)
+
+                // Broadcast mode: if this app has exactly 1 saved record (single-position save),
+                // apply the same target frame to every live AX window that wasn't already claimed.
+                // This stacks all open windows at the saved position so the user can drag them apart.
+                if appRecords.count == 1, let templateRecord = appRecords.first {
+                    let target = self.calculateTargetFrame(for: templateRecord)
+                    for extraWin in unclaimed {
+                        resolvedTargets.append(ResolvedTarget(record: templateRecord, element: extraWin, targetFrame: target))
+                    }
+                }
             }
 
             // Pre-check if single-app windows were already in place before restoration

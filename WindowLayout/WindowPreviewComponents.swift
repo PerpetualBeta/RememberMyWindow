@@ -511,10 +511,20 @@ struct MenuWindowListView: View {
     private var activeBadgeBgOpacity: Double { colorScheme == .dark ? 0.15 : 0.22 }
 
     var body: some View {
-        VStack(spacing: 2) {
+        // Track which bundle IDs have already received the Active badge so that
+        // only the first (topmost) window row for the frontmost app gets it.
+        var seenActiveBundleIDs: Set<String> = []
+
+        return VStack(spacing: 2) {
             if let customList = specificRecords {
                 ForEach(customList) { record in
-                    appRow(record)
+                    let isFirstOfApp: Bool = {
+                        let bid = record.windowID.appBundleID
+                        if seenActiveBundleIDs.contains(bid) { return false }
+                        seenActiveBundleIDs.insert(bid)
+                        return true
+                    }()
+                    appRow(record, isFirstOfApp: isFirstOfApp)
                         .scaleEffect(isAppeared ? 1.0 : 0.96)
                         .offset(y: isAppeared ? 0 : 4)
                         .opacity(isAppeared ? 1.0 : 0.0)
@@ -524,10 +534,10 @@ struct MenuWindowListView: View {
                 let activeRecords = snapshot.records.filter { $0.windowID.appBundleID == frontmostBundleID }
                 let otherRecords = limitToActiveApp ? [] : snapshot.records.filter { $0.windowID.appBundleID != frontmostBundleID }
                 let displayedActiveRecords = (!activeRecords.isEmpty || !limitToActiveApp) ? activeRecords : [snapshot.records.first].compactMap { $0 }
-                
+
                 if !displayedActiveRecords.isEmpty {
-                    ForEach(displayedActiveRecords) { record in
-                        appRow(record)
+                    ForEach(Array(displayedActiveRecords.enumerated()), id: \.element.id) { index, record in
+                        appRow(record, isFirstOfApp: index == 0)
                             .scaleEffect(isAppeared ? 1.0 : 0.96)
                             .offset(y: isAppeared ? 0 : 4)
                             .opacity(isAppeared ? 1.0 : 0.0)
@@ -539,7 +549,7 @@ struct MenuWindowListView: View {
                     }
                 }
                 ForEach(otherRecords) { record in
-                    appRow(record)
+                    appRow(record, isFirstOfApp: false)
                 }
             }
         }
@@ -552,12 +562,13 @@ struct MenuWindowListView: View {
         }
     }
 
-    private func appRow(_ record: WindowRecord) -> some View {
+    private func appRow(_ record: WindowRecord, isFirstOfApp: Bool = true) -> some View {
         let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
         let rowTint = record.isFullScreenMode ? Color.indigo : themeColor.color(seed: 6)
         let isHovered = hoveredRecordID == record.id
         let itemTint = isHovered ? Color.white : rowTint
-        let isActive = record.windowID.appBundleID == (activeBundleID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        // Active badge shown only on the first (topmost) window of the frontmost app
+        let isActive = isFirstOfApp && record.windowID.appBundleID == (activeBundleID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
         
         return HStack(spacing: 12) {
             if record.isFullScreenMode {
