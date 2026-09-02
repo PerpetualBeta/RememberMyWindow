@@ -73,6 +73,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var pendingSaveUpdate = false
     private var pendingCapturedWindows: [WindowRecord]? = nil
     private var pendingFP: ScreenFingerprint? = nil
+    /// Set when the store existed at launch but could not be read. While true,
+    /// saving is refused: the file on disk is a library the user still wants,
+    /// and the empty one in memory is not.
+    private var storeIsUnreadable = false
     private var isWaitingForLocationPermission: Bool = false
     /// Backstop for the two points where a save parks waiting on CoreLocation.
     /// Without it a callback that never arrives loses the save outright: the
@@ -3676,6 +3680,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     // MARK: - Persistence
 
     func persist() {
+        guard !storeIsUnreadable else {
+            log(
+                "Refusing to save: \(saveURL.lastPathComponent) could not be read at launch, and saving now would overwrite it.",
+                level: .necessary
+            )
+            return
+        }
         do {
             let data = try JSONEncoder().encode(store)
             try data.write(to: saveURL, options: .atomic)
@@ -3684,9 +3695,41 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
     }
 
+    /// Keeps the first bad copy beside the original and refuses to save over
+    /// it. A later launch must not replace that copy with a second, less
+    /// interesting failure.
+    private func markStoreUnreadable(_ reason: String) {
+        storeIsUnreadable = true
+        let backup = saveURL.appendingPathExtension("corrupt")
+        if !FileManager.default.fileExists(atPath: backup.path) {
+            try? FileManager.default.copyItem(at: saveURL, to: backup)
+        }
+        log(
+            "\(saveURL.lastPathComponent) \(reason). A copy is at \(backup.lastPathComponent). Saving is disabled until this is resolved.",
+            level: .necessary
+        )
+    }
+
     private func load() {
-        guard let data = try? Data(contentsOf: saveURL),
-              var loaded = try? JSONDecoder().decode(LayoutStore.self, from: data) else { return }
+        // Missing and unreadable are different things. The first is a first
+        // run; the second is a library that is still on disk and still wanted.
+        let data: Data
+        do {
+            data = try Data(contentsOf: saveURL)
+        } catch CocoaError.fileReadNoSuchFile {
+            return
+        } catch {
+            markStoreUnreadable("could not be read (\(error.localizedDescription))")
+            return
+        }
+
+        var loaded: LayoutStore
+        do {
+            loaded = try JSONDecoder().decode(LayoutStore.self, from: data)
+        } catch {
+            markStoreUnreadable("could not be decoded (\(error.localizedDescription))")
+            return
+        }
 
         var migrated = false
         for (key, snap) in loaded.snapshots {
