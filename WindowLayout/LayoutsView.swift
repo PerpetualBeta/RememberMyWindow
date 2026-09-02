@@ -66,6 +66,9 @@ struct SnapshotListView: View {
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @State private var hoveredKey: String? = nil
+    /// Saved Sessions is demoted once Auto is carrying the everyday case, so
+    /// it remembers being reopened. Collapsed by default only when Auto is on.
+    @AppStorage("savedSessionsExpanded") private var savedSessionsExpanded: Bool = true
 
     var liveSnapshot: (key: String, snapshot: LayoutSnapshot)? {
         guard !manager.liveRecords.isEmpty else { return nil }
@@ -94,6 +97,11 @@ struct SnapshotListView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // AUTO LAYOUT HERO — the everyday path when persistence is on.
+                if manager.store.autoSaveEnabled {
+                    autoLayoutHero
+                }
+
                 // LIVE LAYOUT SECTION
                 VStack(alignment: .leading, spacing: 8) {
                     Text("LIVE LAYOUT".localized(appLanguage))
@@ -141,14 +149,34 @@ struct SnapshotListView: View {
                     .padding(.horizontal, 8)
                 }
 
-                // SAVED SESSIONS SECTION
+                // SAVED SESSIONS SECTION — demoted, and collapsible, once the
+                // Auto layout is doing the everyday work.
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("SAVED SESSIONS".localized(appLanguage))
-                        .font(.system(size: 11, weight: .bold))
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { savedSessionsExpanded.toggle() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .bold))
+                                .rotationEffect(.degrees(savedSessionsExpanded ? 90 : 0))
+                            Text("SAVED SESSIONS".localized(appLanguage))
+                                .font(.system(size: 11, weight: .bold))
+                            if !savedSessionsExpanded, !savedSnapshots.isEmpty {
+                                Text("\(savedSnapshots.count)")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Spacer()
+                        }
                         .foregroundStyle(.secondary)
-                        .padding(.leading, 8)
-                    
-                    if savedSnapshots.isEmpty {
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 8)
+
+                    if !savedSessionsExpanded {
+                        EmptyView()
+                    } else if savedSnapshots.isEmpty {
                         Text("No saved sessions".localized(appLanguage))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
@@ -190,6 +218,23 @@ struct SnapshotListView: View {
         }
         .scrollContentBackground(.hidden)
         .navigationTitle("Remember")
+    }
+
+    // MARK: - Auto layout hero
+
+    /// Thin adapter. The card itself takes plain values so it can be rendered
+    /// and looked at without a WindowManager behind it.
+    private var autoLayoutHero: some View {
+        let entry = manager.autoSaveStore?.latest
+        return AutoLayoutHeroCard(
+            capturedAt: entry?.capturedAt,
+            windowCount: entry?.windowCount ?? 0,
+            screenName: entry.map { $0.readableScreenKey ?? $0.screenKey },
+            matchesCurrentScreens: manager.autoLayoutMatchesCurrentScreens,
+            tint: themeColor.color(seed: 0),
+            language: appLanguage,
+            onRestore: { manager.restoreAutoLayout() }
+        )
     }
 
     func snapshotRow(_ snapshot: LayoutSnapshot, key: String, isLive: Bool) -> some View {

@@ -77,6 +77,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// saving is refused: the file on disk is a library the user still wants,
     /// and the empty one in memory is not.
     private var storeIsUnreadable = false
+
+    /// Durable home for the live layout, in its own file. Built once the
+    /// support directory is known, which is why it is not a `let`.
+    private(set) var autoSaveStore: AutoSaveStore?
     private var isWaitingForLocationPermission: Bool = false
     private var didPerformLaunchRestore: Bool = false
     private var isLiveLayoutServerReady: Bool = false
@@ -137,6 +141,22 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         saveURL = dir.appendingPathComponent("layouts.json")
         super.init()
+
+        autoSaveStore = AutoSaveStore(directory: dir) { [weak self] message in
+            self?.log(message, level: .verbose, type: .autoSave)
+        }
+
+        // Forced flush points. The coalescing interval is deliberately long, so
+        // without these the last state before a shutdown is the one lost.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(flushAutoSave),
+            name: NSWorkspace.willSleepNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(flushAutoSave),
+            name: NSWorkspace.willPowerOffNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(flushAutoSave),
+            name: NSApplication.willTerminateNotification, object: nil)
         
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
@@ -1152,6 +1172,63 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
     }
 
+    /// Terminate, sleep and log-out. Writes whatever the coalescing interval
+    /// is still holding.
+    @objc private func flushAutoSave() {
+        autoSaveStore?.flush()
+    }
+
+    // MARK: - Auto layout
+
+    /// True when the newest auto capture was taken on the display setup in
+    /// front of the user right now. Restore is offered only then: the frames
+    /// are absolute, so applying them to a different arrangement would put
+    /// windows where nothing is.
+    var autoLayoutMatchesCurrentScreens: Bool {
+        guard let entry = autoSaveStore?.latest else { return false }
+        return entry.screenKey == currentFingerprint.key
+    }
+
+    /// Restores the newest auto capture.
+    ///
+    /// **Geometry and placement only.** `skipCommandSend: true` keeps it out of
+    /// the Command+Shift+R pipeline, which exists for manual snapshots where
+    /// the user has chosen a `foregroundBundleID` and per-app exclusions in the
+    /// UI. An auto layout has neither, so there is nothing to justify sending
+    /// synthetic keystrokes into whatever happens to be focused — it could
+    /// refresh a form or toggle reader mode in an unrelated app. The empty
+    /// `commandExcludedBundleIDs` below blocks the same path a second time.
+    func restoreAutoLayout(showNotification: Bool = true) {
+        guard let entry = autoSaveStore?.latest else {
+            log("No auto layout recorded yet", level: .moderate, type: .autoSave)
+            return
+        }
+        guard entry.screenKey == currentFingerprint.key else {
+            log("Auto layout was captured on a different display setup — not restoring",
+                level: .moderate, type: .autoSave)
+            return
+        }
+
+        let snapshot = LayoutSnapshot(
+            name: entry.readableScreenKey ?? currentFingerprint.readableName,
+            screenKey: entry.screenKey,
+            readableScreenKey: entry.readableScreenKey,
+            records: entry.records,
+            createdAt: entry.capturedAt,
+            updatedAt: entry.capturedAt,
+            location: nil,
+            isAutoSave: true,
+            foregroundBundleID: nil,
+            commandExcludedBundleIDs: []
+        )
+
+        log("Restoring the auto layout — \(entry.records.count) window(s) captured \(entry.capturedAt)",
+            level: .necessary, type: .autoSave)
+        restore(snapshot: snapshot,
+                showNotification: showNotification,
+                skipCommandSend: true)
+    }
+
     private func flushPendingSaves() {
         pendingSaves.removeAll()
         let fp = ScreenFingerprint.current()
@@ -1188,6 +1265,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         if isInitialServerCapture {
             triggerLaunchRestoreIfNeeded()
+        }
+
+        // Opt-in, and it writes its own file — a drag never reaches layouts.json.
+        if store.autoSaveEnabled {
+            autoSaveStore?.record(records: currentWindows,
+                                  screenKey: fp.key,
+                                  readableScreenKey: fp.readableName)
         }
     }
 
