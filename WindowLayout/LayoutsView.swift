@@ -526,9 +526,9 @@ struct WindowRowContainer: View {
             }
             
             VStack(alignment: .trailing, spacing: 2) {
-                Text("\(Int(record.globalFrame.width)) × \(Int(record.globalFrame.height))")
+                Text("\(record.globalFrame.width.clampedInt) × \(record.globalFrame.height.clampedInt)")
                     .font(.footnote.monospaced())
-                Text("(\(Int(record.globalFrame.origin.x)), \(Int(record.globalFrame.origin.y)))")
+                Text("(\(record.globalFrame.origin.x.clampedInt), \(record.globalFrame.origin.y.clampedInt))")
                     .font(.caption.monospaced())
                     .foregroundStyle(.tertiary)
             }
