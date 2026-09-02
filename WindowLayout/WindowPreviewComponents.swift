@@ -155,7 +155,9 @@ struct LayoutPreviewView: View {
             
             ZStack {
                 // Screens
-                ForEach(getScreenFrames(), id: \.origin.x) { frame in
+                // Keyed by position, not by origin.x: two displays stacked
+                // vertically share an x, and ForEach silently drops the duplicate.
+                ForEach(Array(getScreenFrames().enumerated()), id: \.offset) { _, frame in
                     screenView(frame: frame, boundingBox: boundingBox, scale: scale)
                 }
                 

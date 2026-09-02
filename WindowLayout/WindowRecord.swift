@@ -5,6 +5,24 @@ extension CGRect {
     var area: CGFloat { width * height }
 }
 
+extension CGFloat {
+    /// `Int(_:)` is a trapping conversion. A value that is not finite, or whose
+    /// magnitude is beyond `Int`, aborts the process rather than saturating.
+    /// Window geometry reaches these call sites straight out of a decoded
+    /// `layouts.json` with nothing in between that validates it, and several of
+    /// them run while the layout browser is drawing, so a single bad number
+    /// makes the app unopenable with no way back except deleting the store by
+    /// hand. Clamp to a range real window geometry cannot exceed.
+    var clampedInt: Int {
+        // NaN has to go first: it compares false against everything, so it would
+        // pass straight through min/max and trap. Infinities clamp like any other
+        // out-of-range value, which keeps their sign rather than flattening both
+        // to zero.
+        if isNaN { return 0 }
+        return Int(Swift.max(Swift.min(self, CGFloat(Int32.max)), CGFloat(Int32.min)))
+    }
+}
+
 struct LocationInfo: Codable {
     let latitude: Double
     let longitude: Double
