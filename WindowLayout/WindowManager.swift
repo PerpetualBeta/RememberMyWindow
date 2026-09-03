@@ -1060,6 +1060,22 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // Invalidate AX caches for this PID so stale data doesn't linger
         cachedAXWindowsByPID.removeValue(forKey: pid)
         lastCGWindowsByPID.removeValue(forKey: pid)
+        // Records are matched on bundle identifier OR localised name elsewhere
+        // in this file, so clearing only the identifier left a name-keyed
+        // deferral behind after its app quit — where it could later be matched
+        // to a different process that happens to share the name.
+        if var deferred = deferredRestore {
+            var removed = false
+            if let bundleID = app.bundleIdentifier, deferred.bundleIDs.remove(bundleID) != nil {
+                removed = true
+            }
+            if let name = app.localizedName, deferred.bundleIDs.remove(name) != nil {
+                removed = true
+            }
+            if removed {
+                deferredRestore = deferred.bundleIDs.isEmpty ? nil : deferred
+            }
+        }
         if let bundleID = app.bundleIdentifier, var deferred = deferredRestore,
            deferred.bundleIDs.remove(bundleID) != nil {
             deferredRestore = deferred.bundleIDs.isEmpty ? nil : deferred
