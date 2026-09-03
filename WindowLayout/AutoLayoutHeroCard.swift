@@ -49,7 +49,8 @@ struct AutoLayoutHeroCard: View {
                 Text(relativeAge)
                     .font(.system(size: 19, weight: .semibold, design: .rounded))
                     .foregroundStyle(isStale ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                    .accessibilityLabel(Text("Captured \(capturedAt, style: .relative) ago"))
+                    .accessibilityLabel(Text(String(format: "Captured %@".localized(language),
+                                                    age(of: capturedAt))))
 
                 HStack(spacing: 6) {
                     Image(systemName: "macwindow")
@@ -180,7 +181,8 @@ struct AutoLayoutHeroCard: View {
                   : Text("Captured on a different display setup.".localized(language)))
             // Four rows all described as "Restore" would be no more use through
             // accessibility than no rows at all.
-            .accessibilityLabel(Text("Restore the capture from \(age), \(windowCount) windows"))
+            .accessibilityLabel(Text(String(format: "Restore the capture from %@, %d windows".localized(language),
+                                            age, windowCount)))
         }
     }
 
@@ -223,6 +225,11 @@ struct AutoLayoutHeroCard: View {
         f.maximumUnitCount = 1
         f.allowedUnits = seconds < 3600 ? [.minute] : (seconds < 86_400 ? [.hour] : [.day])
         let spelled = f.string(from: max(seconds, 60)) ?? ""
-        return spelled.isEmpty ? "just now" : "\(spelled) ago"
+        // The formatter localises the quantity; the suffix has to be localised
+        // too, or a Hebrew system reads "5 דקות ago" in the largest text on the
+        // card. A format string rather than concatenation, because the suffix
+        // does not follow the quantity in every language.
+        guard !spelled.isEmpty else { return "just now".localized(language) }
+        return String(format: "%@ ago".localized(language), spelled)
     }
 }
