@@ -1863,7 +1863,25 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         log("🖥️ Display config changed → \(newFP.readableName) (\(newFP.displays.count) screen(s))", level: .moderate, type: .system)
 
+        // Write whatever is still coalescing before anything else touches the
+        // desk. `pending` carries the OUTGOING configuration's key, so this
+        // preserves the arrangement under the configuration it was made in.
+        // Without it, up to one coalescing interval of the user's work is lost
+        // at exactly the moment it matters: measured, an arrangement finished
+        // eighteen seconds before an unplug was never written, and the reconnect
+        // faithfully restored a snapshot that predated half of it. The trailing
+        // flush cannot cover this — it aims at `lastWrite + interval`, and a
+        // display change arrives first.
+        autoSaveStore?.flush()
+
         let hasSavedSession = store.snapshots.values.contains { $0.screenKey == newKey && !$0.isAutoSave }
+        // Auto captures count too. This gate predates the auto layout and asked
+        // only whether a snapshot had been saved BY HAND for the configuration
+        // being arrived at, so plugging in a display nobody had thought to press
+        // Save on skipped the restore entirely — no attempt, no log line. On a
+        // desk where auto-save is doing the remembering, that is every display.
+        let hasAutoCapture = store.autoSaveEnabled
+            && (autoSaveStore?.entries.contains { $0.screenKey == newKey } ?? false)
 
         // Detect added / removed displays
         let oldScreens = Set(oldFP.displays.map { $0.screenNumber })
@@ -1895,8 +1913,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // Nothing below starts a restore unless the branch just after this does,
         // so release the hold on every other path or auto-save stays switched
         // off for the rest of the session.
-        if !(store.autoRestoreEnabled && hasSavedSession) {
-            isHandlingDisplayChange = false
+        // Anything that does not start a restore must release the hold, or
+        // auto-save stays switched off for the rest of the session.
+        var willRestore = false
+        defer {
+            if !willRestore { isHandlingDisplayChange = false }
         }
 
         // Hold auto-save from here, not from inside the task. Between a display
@@ -1909,7 +1930,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         isHandlingDisplayChange = true
         displayChangeGeneration += 1
 
-        if store.autoRestoreEnabled && hasSavedSession {
+        if store.autoRestoreEnabled && (hasSavedSession || hasAutoCapture) {
+            willRestore = true
             screenChangeTask?.cancel()
             let generation = displayChangeGeneration
             screenChangeTask = Task { @MainActor [weak self] in
