@@ -272,6 +272,13 @@ final class AutoSaveStore: ObservableObject {
             let file = try JSONDecoder().decode(AutoSaveFile.self, from: data)
             entries = file.entries
             lastKnown = file.lastKnown
+            // The coalescing floor is a promise about writes to this file, and
+            // the file outlives the process. Without this, a relaunch starts
+            // with no memory of when it last wrote and flushes on its first
+            // capture — measured at 80s after the previous write, under the 90s
+            // floor. The file's own modification date is that memory.
+            lastWrite = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
             log("auto-save: loaded \(entries.count) entr(ies), \(lastKnown.count) remembered window(s)")
         } catch {
             isUnreadable = true
