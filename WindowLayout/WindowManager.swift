@@ -2086,6 +2086,35 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // This is used to filter out system ghost windows and accurately identify full-screen windows.
         let axWindowsByPID = getValidAXWindows(runningApps: runningApps, screenCGRects: screenCGRects, cgWindowsByPID: cgWindowsByPID)
 
+        // ── Leftovers the window server has not reaped ─────────────────────────
+        // Closing a window does not remove its CGWindow entry. The entry keeps
+        // the frame the window had, and it survives for as long as the app runs,
+        // so a layout captured afterwards still contains a window the user
+        // closed. Ghostty accounted for 13 of these on one desk, all reporting
+        // the same frame as its one real window.
+        //
+        // A leftover belongs to no Space. That is the whole test, and it is the
+        // only one that also leaves windows on other Spaces alone — those report
+        // the Space they are parked on, while the accessibility tree reports
+        // nothing at all for them.
+        let spaceFilterActive = WindowSpaces.isAvailable
+        var liveWindowIDs: Set<CGWindowID> = []
+        var pidsWithNoLiveWindow: Set<Int32> = []
+        if spaceFilterActive {
+            let candidates = cgWindowsByPID.values.flatMap { $0.map { $0.windowID } }
+            liveWindowIDs = WindowSpaces.onAnySpace(candidates)
+            // An app the accessibility tree says has windows, but whose every
+            // CGWindow reports no Space, is a contradiction rather than an app
+            // with nothing open. Keep its entries: a window dropped from the
+            // layout costs the user more than a stale record does.
+            for (pid, windows) in cgWindowsByPID where axWindowsByPID[pid] != nil {
+                if !windows.contains(where: { liveWindowIDs.contains($0.windowID) }) {
+                    pidsWithNoLiveWindow.insert(pid)
+                }
+            }
+        }
+        var leftoversDropped = 0
+
         struct RawEntry {
             let entry: [String: Any]
             let pid: Int32
@@ -2119,6 +2148,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             // Filter out completely transparent ghost windows
             let alpha = entry[kCGWindowAlpha as String] as? Double ?? 1.0
             guard alpha > 0.01 else { zOrder += 1; continue }
+
+            if spaceFilterActive,
+               let windowID = entry[kCGWindowNumber as String] as? CGWindowID,
+               !liveWindowIDs.contains(windowID),
+               !pidsWithNoLiveWindow.contains(pid) {
+                leftoversDropped += 1
+                zOrder += 1; continue
+            }
 
             let isOnScreen = entry[kCGWindowIsOnscreen as String] as? Bool ?? false
             let title = entry[kCGWindowName as String] as? String ?? ""
@@ -2171,6 +2208,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 groupedEntries[pid, default: []].append(raw)
             }
             zOrder += 1
+        }
+
+        if leftoversDropped > 0 {
+            log("Skipped \(leftoversDropped) window(s) that belong to no Space", level: .verbose, type: .system)
+        } else if !spaceFilterActive {
+            log("Space lookup unavailable — closed windows may persist in the layout",
+                level: .verbose, type: .system)
         }
 
         // Log any apps where we silently dropped ghost windows
