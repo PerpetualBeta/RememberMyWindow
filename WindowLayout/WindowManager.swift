@@ -2099,10 +2099,19 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // nothing at all for them.
         let spaceFilterActive = WindowSpaces.isAvailable
         var liveWindowIDs: Set<CGWindowID> = []
+        var parkedWindowIDs: Set<CGWindowID> = []
         var pidsWithNoLiveWindow: Set<Int32> = []
         if spaceFilterActive {
             let candidates = cgWindowsByPID.values.flatMap { $0.map { $0.windowID } }
-            liveWindowIDs = WindowSpaces.onAnySpace(candidates)
+            let spacesByWindow = WindowSpaces.spaces(of: candidates)
+            let current = WindowSpaces.currentSpaces()
+            liveWindowIDs = Set(spacesByWindow.filter { !$0.value.isEmpty }.keys)
+            // Parked: real, but on a Space the user is not looking at. These are
+            // the windows the accessibility tree will not describe, so they can
+            // never be frame-matched and were being discarded as ghosts.
+            parkedWindowIDs = Set(spacesByWindow.filter { entry in
+                !entry.value.isEmpty && entry.value.allSatisfy { !current.contains($0) }
+            }.keys)
             // An app the accessibility tree says has windows, but whose every
             // CGWindow reports no Space, is a contradiction rather than an app
             // with nothing open. Keep its entries: a window dropped from the
@@ -2124,6 +2133,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             let isAXFullScreen: Bool
             let frame: CGRect
             let matchedAXFrameIndex: Int // index into axWindowsByPID[pid]; -1 if no AX data
+            /// Real, but on a Space the user is not on, so it has no accessibility
+            /// frame to match and must bypass the ghost filter.
+            var isParked: Bool = false
         }
 
         var groupedEntries: [Int32: [RawEntry]] = [:]
@@ -2190,15 +2202,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     }
                 }
 
-                if matchedIdx == -1 {
-                    // Window not in AX tree → ghost.
+                let windowID = entry[kCGWindowNumber as String] as? CGWindowID
+                let isParked = spaceFilterActive && windowID.map { parkedWindowIDs.contains($0) } == true
+
+                if matchedIdx == -1 && !isParked {
+                    // No accessibility frame and on the Space in front of the
+                    // user, so there is nothing it could be but a ghost.
                     ghostCountByApp[pid, default: 0] += 1
                     zOrder += 1; continue
                 }
 
                 let raw = RawEntry(entry: entry, pid: pid, isOnScreen: isOnScreen,
                                    area: w * h, zOrder: zOrder, isAXFullScreen: isAXFullScreen,
-                                   frame: cgFrame, matchedAXFrameIndex: matchedIdx)
+                                   frame: cgFrame, matchedAXFrameIndex: matchedIdx,
+                                   isParked: matchedIdx == -1 && isParked)
                 groupedEntries[pid, default: []].append(raw)
             } else {
                 // No AX data — deduplication will handle this app.
@@ -2235,6 +2252,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // (ghosts are always newer — higher kCGWindowNumber — than the real window).
                 var bestPerAXFrame: [Int: RawEntry] = [:]
                 for e in entries {
+                    if e.isParked {
+                        // Every parked entry carries index -1, so collapsing by
+                        // index would keep one and lose the rest.
+                        selectedEntries.append(e)
+                        continue
+                    }
                     let idx = e.matchedAXFrameIndex
                     if let existing = bestPerAXFrame[idx] {
                         let existNum = existing.entry[kCGWindowNumber as String] as? Int ?? Int.max
@@ -2247,6 +2270,17 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 let kept = bestPerAXFrame.values.sorted { $0.zOrder < $1.zOrder }
                 // Duplicate drops are normal ghost-filter operation — no log needed
                 selectedEntries.append(contentsOf: kept)
+                continue
+            }
+
+            if spaceFilterActive {
+                // The heuristic below exists only because CGWindowList alone
+                // cannot tell a real window from a leftover, so it kept exactly
+                // one entry for an app with nothing on screen — the oldest. An
+                // app with four windows parked on another Space lost three of
+                // them. Every entry that reaches here is now known to be on a
+                // Space, so every entry is a real window.
+                selectedEntries.append(contentsOf: entries)
                 continue
             }
 
