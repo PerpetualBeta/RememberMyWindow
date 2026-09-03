@@ -1022,18 +1022,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 self.scheduleAXEventFlush()
             }
             
-            if self.store.autoRestoreOnAppOpen {
-                if let source = self.automaticRestoreSnapshot {
-                    let targetID = app.bundleIdentifier ?? app.localizedName
-                    if let targetID = targetID {
-                        self.restore(snapshot: source.snapshot,
-                                     animated: self.store.restoreAnimated,
-                                     specificAppBundleID: targetID,
-                                     isAppLaunch: true,
-                                     showNotification: true,
-                                     skipCommandSend: source.isAuto)
-                    }
-                }
+            if self.store.autoRestoreOnAppOpen,
+               let targetID = app.bundleIdentifier ?? app.localizedName,
+               let source = self.automaticRestoreSnapshot(forAppLaunch: targetID) {
+                self.restore(snapshot: source.snapshot,
+                             animated: self.store.restoreAnimated,
+                             specificAppBundleID: targetID,
+                             isAppLaunch: true,
+                             showNotification: true,
+                             skipCommandSend: source.isAuto)
             }
         }
     }
@@ -1240,11 +1237,39 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     ///
     /// Explicit restores are untouched. Choosing a saved session in the UI, or
     /// Full Restore from the menu, still restores exactly what was chosen.
-    var automaticRestoreSnapshot: (snapshot: LayoutSnapshot, isAuto: Bool)? {
-        if store.autoSaveEnabled, let auto = autoLayoutSnapshot {
-            return (auto, true)
+    func automaticRestoreSnapshot(forAppLaunch bundleID: String? = nil)
+        -> (snapshot: LayoutSnapshot, isAuto: Bool)? {
+
+        // A snapshot is only an answer for a launching app if it holds a record
+        // for that app. Everything else is a candidate that happens to exist.
+        func holdsTarget(_ candidate: LayoutSnapshot) -> Bool {
+            guard let bundleID else { return true }
+            return candidate.records.contains {
+                $0.windowID.appBundleID == bundleID || $0.windowID.appName == bundleID
+            }
         }
-        if let saved = currentApplicableSnapshot {
+
+        if store.autoSaveEnabled {
+            if let auto = autoLayoutSnapshot, holdsTarget(auto) {
+                return (auto, true)
+            }
+            // The newest capture is the one place that cannot say where a
+            // just-quit app used to be. It describes the live desk, and the desk
+            // stopped containing that app the moment it quit — measured at 85
+            // seconds from quit to the record disappearing. The captures behind
+            // it were taken while the app was still open, so walk back to the
+            // most recent one that knows about it.
+            if bundleID != nil {
+                for entry in (autoSaveStore?.entries ?? []).dropFirst() {
+                    if let earlier = snapshot(from: entry), holdsTarget(earlier) {
+                        log("Using an earlier auto capture for \(bundleID ?? "?") — the newest one no longer has it",
+                            level: .verbose, type: .autoSave)
+                        return (earlier, true)
+                    }
+                }
+            }
+        }
+        if let saved = currentApplicableSnapshot, holdsTarget(saved) {
             return (saved, false)
         }
         return nil
