@@ -491,7 +491,7 @@ struct SettingsView: View {
                 VStack(spacing: 0) {
                     SettingsToggle(
                         title: "Persist live layout across restarts",
-                        subtitle: "Records your arrangement to its own file as you work, so it survives a quit, a sleep or a reboot. Off by default; saved sessions are unaffected.",
+                        subtitle: "Records your arrangement to its own file as you work, so it survives a quit, a sleep or a reboot. Your saved sessions are never written to, but while this is on, automatic restores prefer the newer Auto layout over them. Switching it off stops the recording and leaves the file in place.",
                         icon: "clock.arrow.circlepath",
                         isOn: Binding(
                             get: { manager.store.autoSaveEnabled },
