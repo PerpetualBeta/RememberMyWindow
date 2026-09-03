@@ -2214,8 +2214,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     pidsWithNoLiveWindow.insert(pid)
                 }
             }
+            log("Spaces: current=\(current.sorted()) candidates=\(candidates.count) "
+                + "onASpace=\(liveWindowIDs.count) parkedElsewhere=\(parkedWindowIDs.count) "
+                + "appsWithNoLiveWindow=\(pidsWithNoLiveWindow.count)",
+                level: .verbose, type: .system)
         }
         var leftoversDropped = 0
+        var closedDropped = 0
 
         struct RawEntry {
             let entry: [String: Any]
@@ -2371,9 +2376,33 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // cannot tell a real window from a leftover, so it kept exactly
                 // one entry for an app with nothing on screen — the oldest. An
                 // app with four windows parked on another Space lost three of
-                // them. Every entry that reaches here is now known to be on a
-                // Space, so every entry is a real window.
-                selectedEntries.append(contentsOf: entries)
+                // them.
+                //
+                // Belonging to a Space is necessary but not sufficient. A closed
+                // window can keep one: collapsing eight Spaces into one migrated
+                // the leftovers onto the survivor, and they came back reporting
+                // it. On that desk 15 entries claimed the Space the user was
+                // looking at while being off screen.
+                //
+                // The Dock cannot settle whether those are minimised. With
+                // "Minimise windows into application icon" switched on, a
+                // minimised window gets no Dock tile at all, so an empty Dock
+                // is consistent with both answers. `AXMinimized` is the signal
+                // that separates them.
+                //
+                // Reaching here means the app vended no accessibility windows at
+                // all — and accessibility does vend minimised ones — so the app
+                // has nothing minimised either. An entry that is off screen while
+                // claiming the Space in front of the user therefore cannot be a
+                // window anyone can see.
+                let kept = entries.filter { raw in
+                    guard let id = raw.entry[kCGWindowNumber as String] as? CGWindowID else { return true }
+                    if raw.isOnScreen { return true }
+                    if parkedWindowIDs.contains(id) { return true }   // elsewhere, real
+                    closedDropped += 1
+                    return false
+                }
+                selectedEntries.append(contentsOf: kept)
                 continue
             }
 
@@ -2401,6 +2430,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
         }
         
+        // Reported after the selection loop, which is where the count is made.
+        if closedDropped > 0 {
+            log("Skipped \(closedDropped) closed window(s): off screen while claiming the current Space",
+                level: .verbose, type: .system)
+        }
+
         // Sort selected entries back to original zOrder
         selectedEntries.sort { $0.zOrder < $1.zOrder }
 
