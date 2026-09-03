@@ -225,7 +225,9 @@ struct SnapshotListView: View {
     /// Thin adapter. The card itself takes plain values so it can be rendered
     /// and looked at without a WindowManager behind it.
     private var autoLayoutHero: some View {
-        let entry = manager.autoSaveStore?.latest
+        let entries = manager.autoSaveStore?.entries ?? []
+        let entry = entries.first
+        let currentKey = manager.currentFingerprint.key
         return AutoLayoutHeroCard(
             capturedAt: entry?.capturedAt,
             windowCount: entry?.windowCount ?? 0,
@@ -233,7 +235,15 @@ struct SnapshotListView: View {
             matchesCurrentScreens: manager.autoLayoutMatchesCurrentScreens,
             tint: themeColor.color(seed: 0),
             language: appLanguage,
-            onRestore: { manager.restoreAutoLayout() }
+            onRestore: { manager.restoreAutoLayout() },
+            earlier: entries.dropFirst().map {
+                AutoLayoutHeroCard.EarlierCapture(
+                    id: $0.id,
+                    capturedAt: $0.capturedAt,
+                    windowCount: $0.windowCount,
+                    matchesCurrentScreens: $0.screenKey == currentKey)
+            },
+            onRestoreEarlier: { manager.restoreAutoLayout(entryID: $0) }
         )
     }
 
