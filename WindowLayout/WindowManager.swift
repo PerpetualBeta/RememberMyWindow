@@ -4670,6 +4670,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             return
         }
 
+        DebugLogSink.write(type: type.rawValue, msg: msg, details: details)
         let event = TrackingEvent(type: type, message: msg, details: details, date: Date())
         recentEvents.insert(event, at: 0)
         if recentEvents.count > 100 { recentEvents.removeLast() }
@@ -4905,5 +4906,48 @@ struct TrackingEvent: Identifiable {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
         return f.string(from: date)
+    }
+}
+
+
+/// A file sink for the event log, off unless explicitly switched on.
+///
+/// `log(_:)` only prints, and a GUI app's stdout goes nowhere, so the verbose
+/// stream that exists to explain a capture is unreadable exactly when it is
+/// needed. This mirrors it to a file when the user asks for it:
+///
+///     defaults write com.netanel.remembermywindows debugLogToFile -bool YES
+///
+/// Off by default, so nothing is written to disk on an ordinary run.
+enum DebugLogSink {
+    private static let enabled = UserDefaults.standard.bool(forKey: "debugLogToFile")
+    private static let queue = DispatchQueue(label: "com.netanel.remembermywindows.debuglog")
+
+    private static let handle: FileHandle? = {
+        guard enabled else { return nil }
+        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs/RememberMyWindows", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("debug.log")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        let h = try? FileHandle(forWritingTo: url)
+        _ = try? h?.seekToEnd()
+        return h
+    }()
+
+    private static let stamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f
+    }()
+
+    static func write(type: String, msg: String, details: [String]?) {
+        guard enabled, let h = handle else { return }
+        var line = "\(stamp.string(from: Date())) [\(type)] \(msg)\n"
+        for d in details ?? [] { line += "    - \(d)\n" }
+        guard let data = line.data(using: .utf8) else { return }
+        queue.async { try? h.write(contentsOf: data) }
     }
 }
