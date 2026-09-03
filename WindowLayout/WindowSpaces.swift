@@ -77,6 +77,29 @@ enum WindowSpaces {
         return out
     }
 
+    /// The Spaces that are active right now, one per display.
+    ///
+    /// Needed to tell two kinds of window apart, both of which have no
+    /// accessibility frame to match against: one parked on another Space, which
+    /// is real, and one on the Space in front of the user that the accessibility
+    /// tree declined to report, which is not.
+    static func currentSpaces() -> Set<Int> {
+        guard let r = resolved,
+              let handle = dlopen(nil, RTLD_NOW),
+              let ptr = dlsym(handle, "CGSCopyManagedDisplaySpaces") else { return [] }
+        typealias ManagedSpacesFn = @convention(c) (Int32) -> Unmanaged<CFArray>?
+        let fn = unsafeBitCast(ptr, to: ManagedSpacesFn.self)
+        guard let displays = fn(r.connection)?.takeRetainedValue() as? [[String: Any]] else { return [] }
+        var out = Set<Int>()
+        for display in displays {
+            if let current = display["Current Space"] as? [String: Any],
+               let id = current["ManagedSpaceID"] as? Int {
+                out.insert(id)
+            }
+        }
+        return out
+    }
+
     /// The subset that belongs to at least one Space, i.e. the windows that
     /// really exist. Returns every id unchanged when the lookup is unavailable,
     /// so a caller filtering on this set is a no-op rather than a purge.
