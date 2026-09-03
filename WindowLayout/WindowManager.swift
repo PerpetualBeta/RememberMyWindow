@@ -1390,14 +1390,56 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var screenChangeTask: Task<Void, Never>?
     private var pendingConnectedNames: Set<String> = []
 
+    /// The configuration a settle task is waiting on, and the task itself.
+    private var settlingDisplayFingerprint: ScreenFingerprint?
+    private var displaySettleTask: Task<Void, Never>?
+
+    /// How long the screen list must hold still before it is acted on.
+    ///
+    /// Attaching or removing a display is not one event. Measured on a Mac with
+    /// an external display attached the whole time:
+    ///
+    ///     16:51:54.577  Built-in (1 screen)
+    ///     16:51:55.127  Built-in + virtual display (2 screens)
+    ///     16:51:55.740  Built-in (1 screen)
+    ///     16:51:56.344  Built-in + virtual display (2 screens)
+    ///     16:51:57.430  restore fires on that last one
+    ///
+    /// The external display is in none of them. Acting on a reading taken
+    /// mid-flap restored a single-display layout over a two-display desk and
+    /// dragged the user's windows off the external screen.
+    private static let displaySettleInterval: UInt64 = 2_000_000_000
+
     @objc private func screensChanged() {
+        let newFP = ScreenFingerprint.current()
+
+        if currentFingerprint == newFP && settlingDisplayFingerprint == nil {
+            log("🖥️ Display parameters changed (e.g. transparency), but physical configuration is identical. Ignoring.", level: .verbose, type: .system)
+            return
+        }
+
+        settlingDisplayFingerprint = newFP
+        log("🖥️ Display config changing → \(newFP.readableName) (\(newFP.displays.count) screen(s)) — waiting for it to settle",
+            level: .verbose, type: .system)
+
+        displaySettleTask?.cancel()
+        displaySettleTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.displaySettleInterval)
+            guard !Task.isCancelled, let self else { return }
+            self.settlingDisplayFingerprint = nil
+            self.handleSettledDisplayChange()
+        }
+    }
+
+    private func handleSettledDisplayChange() {
         let oldFP = currentFingerprint
         let newFP = ScreenFingerprint.current()
         let newKey = newFP.key
         currentFingerprint = newFP
 
         if oldFP == newFP {
-            log("🖥️ Display parameters changed (e.g. transparency), but physical configuration is identical. Ignoring.", level: .verbose, type: .system)
+            log("🖥️ Display configuration settled back to \(newFP.readableName) — nothing to do",
+                level: .verbose, type: .system)
             return
         }
 
