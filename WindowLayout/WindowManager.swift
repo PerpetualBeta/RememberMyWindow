@@ -49,6 +49,33 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     // Throttle: only record a window move/resize after it's been still for 0.8 s
     private var pendingSaves: [WindowID: WindowRecord] = [:]
+
+    // ── Settle gate ────────────────────────────────────────────────────────
+    // A capture taken while a window is in flight records a state nobody asked
+    // for. The accessibility frame and the CG frame disagree during a move, the
+    // window matches neither, and it is dropped from the layout entirely.
+    //
+    // Rather than reconstruct the pairing afterwards, wait: geometry that is
+    // still changing is not an arrangement yet. Two consecutive identical
+    // samples mean the desk has stopped moving.
+    private var lastGeometrySignature: [CGWindowID: CGRect] = [:]
+    private var settleWaitStartedAt: Date?
+    private var settleRecheckTask: Task<Void, Never>?
+
+    /// Gap between geometry samples. Short enough to be invisible against the
+    /// coalescing interval, long enough that a drag cannot produce two
+    /// identical samples by chance.
+    private static let settleSampleInterval: UInt64 = 150_000_000
+
+    /// How long to keep waiting for the desk to stop moving.
+    ///
+    /// A time budget rather than a count of samples: what matters is how long
+    /// auto-save may stay silent, and tying that to a sample count means
+    /// changing the sample interval silently changes the guarantee. Ten seconds
+    /// outlasts any hand-driven drag, while still bounding the damage if some
+    /// app animates its window geometry for ever — that case degrades to one
+    /// capture every ten seconds rather than none at all.
+    private static let settleMaxWait: TimeInterval = 10
     private var flushTask: Task<Void, Never>?
     private var trackingTask: Task<Void, Never>?
     private var lastKnownWindows: [WindowID: (frame: CGRect, id: UUID)] = [:]
@@ -1366,6 +1393,41 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     private func flushPendingSaves() {
+        // Do not record a desk that is still moving. Jonathan's call, and a
+        // better one than pairing the leftover CG entry with the leftover
+        // accessibility frame afterwards: that only ever worked when exactly
+        // one window was in flight, while this covers a two-window drag, a
+        // restore sweep and a Mission Control animation alike.
+        let signature = cgGeometrySignature()
+        if signature != lastGeometrySignature {
+            lastGeometrySignature = signature
+            let waitedSince = settleWaitStartedAt ?? Date()
+            settleWaitStartedAt = waitedSince
+            let waited = Date().timeIntervalSince(waitedSince)
+            if waited < Self.settleMaxWait {
+                settleRecheckTask?.cancel()
+                settleRecheckTask = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: Self.settleSampleInterval)
+                    guard !Task.isCancelled else { return }
+                    self?.flushPendingSaves()
+                }
+                return
+            }
+            // Giving up on the wait is not a thing to be silent about: the
+            // arrangement about to be recorded may well be mid-flight.
+            log(String(format: "Geometry still changing after %.1fs — capturing anyway", waited),
+                level: .moderate, type: .autoSave)
+        }
+        // One line per settle, not one per sample: enough to see the gate work
+        // without a drag filling the log.
+        if let started = settleWaitStartedAt {
+            log(String(format: "Desk settled after %.0fms — capturing",
+                       Date().timeIntervalSince(started) * 1000),
+                level: .verbose, type: .autoSave)
+        }
+        settleWaitStartedAt = nil
+        settleRecheckTask?.cancel()
+
         pendingSaves.removeAll()
         let fp = ScreenFingerprint.current()
         let currentWindows = captureAllWindows(for: fp, silent: true)
@@ -2123,6 +2185,28 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     // MARK: - Capture
+
+    /// Window geometry as the window server currently reports it.
+    ///
+    /// Deliberately CG-only: no accessibility call, no permission, and no IPC
+    /// to other applications, so it is cheap enough to run on every flush. It
+    /// answers one question — has anything moved since the last sample.
+    private func cgGeometrySignature() -> [CGWindowID: CGRect] {
+        guard let windowList = CGWindowListCopyWindowInfo(
+            [.optionAll, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return [:] }
+
+        var out: [CGWindowID: CGRect] = [:]
+        for entry in windowList {
+            guard let id = entry[kCGWindowNumber as String] as? CGWindowID,
+                  entry[kCGWindowLayer as String] as? Int == 0,
+                  let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+                  rect.width > 50, rect.height > 50 else { continue }
+            out[id] = rect
+        }
+        return out
+    }
 
     private func captureAllWindows(for fp: ScreenFingerprint, silent: Bool = false) -> [WindowRecord] {
         var records: [WindowRecord] = []
