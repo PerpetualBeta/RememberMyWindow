@@ -6,11 +6,7 @@
 
 **A native macOS app that remembers where your windows were — and puts them back.**
 
-[![macOS](https://img.shields.io/badge/macOS-15.0%2B-blue?logo=apple&logoColor=white)](https://www.apple.com/macos/)
-[![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?logo=swift&logoColor=white)](https://swift.org)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-
-[Features](#-features) · [Installation](#-installation) · [How it works](#️-how-it-works) · [Contributing](#-contributing)
+[Features](#-features) · [Installation](#-installation) · [How it works](#️-how-it-works) ·  [Contributing](#-contributing) [![macOS](https://img.shields.io/badge/macOS-15.0%2B-blue?logo=apple&logoColor=white)](https://www.apple.com/macos/) [![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?logo=swift&logoColor=white)](https://swift.org) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 </div>
 
