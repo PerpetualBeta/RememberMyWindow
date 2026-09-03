@@ -2,6 +2,17 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v13.4] — 2026-09-03
+
+### 🚀 "Rise and Shine, Windows In Line"
+
+#### 🔄 Automatic Full Layout Restore at Launch
+- **First Scan, Full Restore**: Whenever RememberMyWindows launches—whether started manually by you or triggered at system login—it now automatically initiates a full layout restore as soon as the live layout tracking server finishes its initial window capture.
+- **Login Settle Buffer**: Built-in 1.75-second settling delay ensures other login applications finishing their startup sequences have their windows captured and aligned precisely without racing.
+- **Zero-Friction Reliability**: Works seamlessly with your active screen fingerprint, preserving the saved foreground app focus and firing the standard Notch overlay notification with window counts.
+
+---
+
 ## [v13.3] — 2026-09-02
 
 ### 🪟 "The Multiverse of Multitasking"

@@ -78,6 +78,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// and the empty one in memory is not.
     private var storeIsUnreadable = false
     private var isWaitingForLocationPermission: Bool = false
+    private var didPerformLaunchRestore: Bool = false
+    private var isLiveLayoutServerReady: Bool = false
     /// Backstop for the two points where a save parks waiting on CoreLocation.
     /// Without it a callback that never arrives loses the save outright: the
     /// pending state stays set, the status line reads "Waiting for location
@@ -513,6 +515,43 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let details = filteredWindows.map { formatWindowDetail(record: $0) }
         log("Snapshot saved: \(snapshot.name)", level: .necessary, type: .manualSave, details: details)
         statusMessage = "Saved layout '\(snapshot.name)'"
+    }
+
+    /// Triggers an automatic full restore upon application launch once the live layout server is ready.
+    func triggerLaunchRestoreIfNeeded() {
+        guard !didPerformLaunchRestore else { return }
+        guard UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") else { return }
+
+        let fp = ScreenFingerprint.current()
+        let candidate: LayoutSnapshot?
+        if let defaultID = store.defaultSnapshotIDs[fp.key],
+           let snap = store.snapshots[defaultID], !snap.isAutoSave {
+            candidate = snap
+        } else {
+            candidate = store.snapshots.values
+                .filter { $0.screenKey == fp.key && !$0.isAutoSave }
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .first
+        }
+
+        guard candidate != nil else {
+            log("Launch restore: No saved layout for current display configuration (\(fp.readableName)), skipping auto-restore.", level: .moderate, type: .system)
+            didPerformLaunchRestore = true
+            return
+        }
+
+        didPerformLaunchRestore = true
+        log("Live layout server ready. Scheduling launch full restore after settling delay...", level: .necessary, type: .restore)
+
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            // 1.75s settling delay to allow login apps to finish opening windows
+            try? await Task.sleep(nanoseconds: 1_750_000_000)
+
+            guard self.isTracking else { return }
+            self.log("🚀 Initiating launch full restore...", level: .necessary, type: .restore)
+            self.restoreNow()
+        }
     }
 
     /// Restore saved layout for the current screen config.
@@ -984,6 +1023,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
         lastWindowCount = newCount
 
+        let isInitialServerCapture = !isLiveLayoutServerReady
+        if isInitialServerCapture {
+            isLiveLayoutServerReady = true
+        }
+
         // AX can repeatedly notify us about an app that has not actually changed. Publishing
         // the same layout re-renders the full SwiftUI preview (and its springs) every time,
         // preventing App Nap and causing substantial idle energy use.
@@ -991,11 +1035,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             // A noisy AX source becomes almost free at idle: 2, 4, 8, 16, then at most
             // one validation scan every 30 seconds.
             axIdleCaptureInterval = min(axIdleCaptureInterval * 2, 30)
+            if isInitialServerCapture {
+                triggerLaunchRestoreIfNeeded()
+            }
             return
         }
         axIdleCaptureInterval = 2
         liveRecords = currentWindows
         log("Live layout updated (\(newCount) windows)", level: .verbose, type: .autoSave)
+
+        if isInitialServerCapture {
+            triggerLaunchRestoreIfNeeded()
+        }
     }
 
     /// Compares the display-relevant parts of two captures while tolerating the small coordinate
@@ -3613,6 +3664,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
                 self.liveRecords = records
                 self.lastWindowCount = records.count
+                if !self.isLiveLayoutServerReady {
+                    self.isLiveLayoutServerReady = true
+                    self.triggerLaunchRestoreIfNeeded()
+                }
             }
 
             // Polling is a compatibility fallback. Start at five seconds for responsiveness,
