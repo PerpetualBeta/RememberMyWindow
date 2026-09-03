@@ -122,6 +122,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
     private var pendingUnlockAction: PendingUnlockRestoreAction?
 
+    /// Windows a restore could not reach because they are parked on a Space the
+    /// user is not on, held until they go there. See `retryDeferredRestore`.
+    private var deferredRestore: (snapshot: LayoutSnapshot, bundleIDs: Set<String>)?
+    /// How many windows are still waiting for their Space, for the UI to say so.
+    var deferredRestoreCount: Int {
+        guard let d = deferredRestore else { return 0 }
+        return d.snapshot.records.filter { d.bundleIDs.contains($0.windowID.appBundleID) }.count
+    }
+
     override private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent("RememberMyWindows", isDirectory: true)
@@ -260,6 +269,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         observeRunningApps()
 
         // Also watch for new apps launching
+        // The accessibility tree only describes windows on the Space in front of
+        // the user, so a restore cannot reach the rest. This is the moment they
+        // become reachable.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(activeSpaceChanged),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil)
+
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(appLaunched(_:)),
@@ -983,6 +1001,58 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
     }
 
+    /// The active Space changed, so windows a restore could not reach may be
+    /// reachable now.
+    @objc private func activeSpaceChanged() {
+        retryDeferredRestore(reason: "the Space changed")
+    }
+
+    /// Puts back whatever the last restore had to leave behind.
+    ///
+    /// A window parked on another Space has no accessibility element to set a
+    /// frame on, and nothing the app can do from here creates one: activating
+    /// the owning app does not bring its Space forward. Waiting until the user
+    /// goes there themselves costs nothing, steals no focus, and switches no
+    /// Space, and by then accessibility answers normally.
+    ///
+    /// Apps still out of reach stay in the queue. The queue is replaced by the
+    /// next full restore and emptied when its apps quit, so it cannot outlive
+    /// the arrangement it belongs to.
+    func retryDeferredRestore(reason: String) {
+        guard let deferred = deferredRestore, !deferred.bundleIDs.isEmpty else { return }
+        guard deferred.snapshot.screenKey == currentFingerprint.key else {
+            log("Dropping \(deferredRestoreCount) held window(s) — the display setup changed",
+                level: .moderate, type: .restore)
+            deferredRestore = nil
+            return
+        }
+
+        let running = NSWorkspace.shared.runningApplications
+        var reachable: [String] = []
+        for bundleID in deferred.bundleIDs {
+            guard let app = running.first(where: {
+                $0.bundleIdentifier == bundleID || $0.localizedName == bundleID
+            }) else { continue }
+            let element = WindowManager.createAXElement(for: app.processIdentifier)
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
+               let windows = value as? [AXUIElement], !windows.isEmpty {
+                reachable.append(bundleID)
+            }
+        }
+
+        guard !reachable.isEmpty else { return }
+        log("\(reason) — restoring \(reachable.count) app(s) held from the last restore",
+            level: .necessary, type: .restore)
+        for bundleID in reachable {
+            restore(snapshot: deferred.snapshot,
+                    animated: store.restoreAnimated,
+                    specificAppBundleID: bundleID,
+                    showNotification: false,
+                    skipCommandSend: true)
+        }
+    }
+
     @objc private func appTerminated(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let pid = app.processIdentifier
@@ -990,6 +1060,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // Invalidate AX caches for this PID so stale data doesn't linger
         cachedAXWindowsByPID.removeValue(forKey: pid)
         lastCGWindowsByPID.removeValue(forKey: pid)
+        if let bundleID = app.bundleIdentifier, var deferred = deferredRestore,
+           deferred.bundleIDs.remove(bundleID) != nil {
+            deferredRestore = deferred.bundleIDs.isEmpty ? nil : deferred
+        }
         // Schedule a flush so the live layout drops the terminated app's windows
         if !store.usePollingMode {
             scheduleAXEventFlush()
@@ -2097,9 +2171,19 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             } else if let cached = cachedAXWindowsByPID[pid], !WindowSpaces.isAvailable {
                 // AX returned nothing useful (app is backgrounded / in its own full-screen Space).
                 // Use the last known good frames so ghost-window filtering still works correctly.
+                //
+                // Only without the Space lookup. Reaching here means this app's CG
+                // geometry has changed since those frames were cached — the
+                // identical-geometry case returned early above — so the cache is
+                // stale by definition, and a stale frame matches nothing, which
+                // discards the real window as a ghost. Preview vanished from every
+                // capture that way. With Spaces available the window is recognised
+                // as parked instead, which is what the cache was standing in for.
                 lastCGWindowsByPID[pid] = currentCGWindows
                 result[pid] = cached
             } else {
+                cachedAXWindowsByPID.removeValue(forKey: pid)
+                lastCGWindowsByPID.removeValue(forKey: pid)
                 // No fresh data and no cache — deduplication will handle it.
                 // (Normal for apps that haven't been focused since launch.)
             }
@@ -2171,19 +2255,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let opts = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(opts)
         refreshAccessibilityPermissionStatus()
-                //
-                // Only without the Space lookup. Reaching here means this app's CG
-                // geometry has changed since those frames were cached — the
-                // identical-geometry case returned early above — so the cache is
-                // stale by definition, and a stale frame matches nothing, which
-                // discards the real window as a ghost. Preview vanished from every
-                // capture that way. With Spaces available the window is recognised
-                // as parked instead, which is what the cache was standing in for.
     }
 
     /// Manually re-checks permissions (e.g. from user UI interaction).
-                cachedAXWindowsByPID.removeValue(forKey: pid)
-                lastCGWindowsByPID.removeValue(forKey: pid)
     func checkAccessibilityPermissionManually() {
         refreshAccessibilityPermissionStatus()
     }
@@ -2427,6 +2501,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 let targetFrame: CGRect
             }
             var resolvedTargets: [ResolvedTarget] = []
+            var deferredBundleIDs: Set<String> = []
 
             let externalRecords = records.filter { $0.windowID.appBundleID != Bundle.main.bundleIdentifier && $0.windowID.appBundleID != ownProcessName }
             let groupedRecords = Dictionary(grouping: externalRecords, by: { $0.windowID.appBundleID })
@@ -2570,7 +2645,25 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
                 
                 guard !wins.isEmpty else {
-                    self.log("⏭️ Skipping '\(bundleID)' — no AX windows found after retries", level: .verbose, type: .restore)
+                    // The retry above is the only lever the synchronous path has
+                    // and it does not work. Activating an app whose windows are
+                    // parked on another Space does not bring that Space forward,
+                    // so the accessibility list stays empty. Measured across ten
+                    // apps in one restore: focus changed, 600ms of retries each,
+                    // every one of them skipped.
+                    //
+                    // The windows are real — the capture found them and the window
+                    // server names the Space each one is on. So rather than drop
+                    // them and still report the layout as restored, hold them and
+                    // put them back when the user next goes to that Space, which
+                    // is when accessibility starts answering.
+                    if liveRecords.contains(where: { $0.windowID.appBundleID == bundleID }) {
+                        deferredBundleIDs.insert(bundleID)
+                        self.log("⏸️ Holding \(appRecords.count) window(s) of '\(bundleID)' — parked on another Space, will restore on the way there",
+                                 level: .moderate, type: .restore)
+                    } else {
+                        self.log("⏭️ Skipping '\(bundleID)' — app has no windows", level: .verbose, type: .restore)
+                    }
                     continue
                 }
                 
@@ -2850,6 +2943,23 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
 
             if specificAppBundleID == nil {
+                self.deferredRestore = deferredBundleIDs.isEmpty
+                    ? nil
+                    : (snapshot: snapshot, bundleIDs: deferredBundleIDs)
+            } else if !deferredBundleIDs.isEmpty, var existing = self.deferredRestore {
+                existing.bundleIDs.formUnion(deferredBundleIDs)
+                self.deferredRestore = existing
+            } else if deferredBundleIDs.isEmpty, let app = specificAppBundleID,
+                      var existing = self.deferredRestore, existing.bundleIDs.contains(app) {
+                existing.bundleIDs.remove(app)
+                self.deferredRestore = existing.bundleIDs.isEmpty ? nil : existing
+            }
+
+            let deferredCount = deferredBundleIDs.isEmpty ? 0 : snapshot.records.filter {
+                deferredBundleIDs.contains($0.windowID.appBundleID)
+            }.count
+
+            if specificAppBundleID == nil {
                 // Finally, bring the user's preferred foreground app to the absolute front (if set and screen is unlocked)
                 if !isLocked, let targetBundleID = snapshot.foregroundBundleID {
                     self.bringAppToFront(bundleID: targetBundleID)
@@ -2863,10 +2973,17 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
 
                 if showNotification {
+                    // Saying "23/23 windows" while ten of them were skipped is
+                    // the part of this that was actually misleading. What is
+                    // waiting, and what it is waiting for, both belong here.
+                    var subtitle = "\(snapshot.name) · \(restoredCount)/\(snapshot.records.count) \(lz("windows"))"
+                    if deferredCount > 0 {
+                        subtitle += " · \(deferredCount) \(lz("waiting for their Space"))"
+                    }
                     self.deliverNotification(
                         type: .fullRestore,
                         title: "Layout Restored",
-                        subtitle: "\(snapshot.name) · \(restoredCount)/\(snapshot.records.count) \(lz("windows"))",
+                        subtitle: subtitle,
                         triggerKey: triggerSubtitle
                     )
                 }
@@ -3611,16 +3728,6 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         guard let screen = NSScreen.screens.max(by: { $0.frame.intersection(f).area < $1.frame.intersection(f).area }) ?? NSScreen.main else {
             return f
         }
-        
-        let vf = screen.visibleFrame
-        
-        // Preserve exact saved width and height (only capped if window is physically larger than visible screen)
-        let targetW = min(f.width, vf.width)
-        let targetH = min(f.height, vf.height)
-        
-        // Clamp origin so the entire window fits inside visibleFrame without mutating dimensions
-        let targetX = min(max(f.origin.x, vf.minX), max(vf.minX, vf.maxX - targetW))
-        let targetY = min(max(f.origin.y, vf.minY), max(vf.minY, vf.maxY - targetH))
 
         // A window is allowed to hang over an edge, and people park them that
         // way deliberately. Clamping every restore into visibleFrame meant a
@@ -3636,6 +3743,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             return f
         }
 
+        let vf = screen.visibleFrame
+        
+        // Preserve exact saved width and height (only capped if window is physically larger than visible screen)
+        let targetW = min(f.width, vf.width)
+        let targetH = min(f.height, vf.height)
+        
+        // Clamp origin so the entire window fits inside visibleFrame without mutating dimensions
+        let targetX = min(max(f.origin.x, vf.minX), max(vf.minX, vf.maxX - targetW))
+        let targetY = min(max(f.origin.y, vf.minY), max(vf.minY, vf.maxY - targetH))
+        
         return CGRect(x: targetX, y: targetY, width: targetW, height: targetH)
     }
 
