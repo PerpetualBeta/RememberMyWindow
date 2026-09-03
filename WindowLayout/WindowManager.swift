@@ -1209,8 +1209,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// The newest auto capture as a snapshot, when there is one and it was
     /// taken on the display setup in front of the user now.
     var autoLayoutSnapshot: LayoutSnapshot? {
-        guard let entry = autoSaveStore?.latest,
-              entry.screenKey == currentFingerprint.key else { return nil }
+        autoSaveStore?.latest.flatMap { snapshot(from: $0) }
+    }
+
+    /// One ring entry as a snapshot, when it was taken on the display setup in
+    /// front of the user now.
+    func snapshot(from entry: AutoSaveEntry) -> LayoutSnapshot? {
+        guard entry.screenKey == currentFingerprint.key else { return nil }
         return LayoutSnapshot(
             name: entry.readableScreenKey ?? currentFingerprint.readableName,
             screenKey: entry.screenKey,
@@ -1254,12 +1259,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// synthetic keystrokes into whatever happens to be focused — it could
     /// refresh a form or toggle reader mode in an unrelated app. The empty
     /// `commandExcludedBundleIDs` below blocks the same path a second time.
-    func restoreAutoLayout(showNotification: Bool = true) {
-        guard let entry = autoSaveStore?.latest else {
+    func restoreAutoLayout(entryID: UUID? = nil, showNotification: Bool = true) {
+        let chosen = entryID.flatMap { id in autoSaveStore?.entries.first { $0.id == id } }
+            ?? autoSaveStore?.latest
+        guard let entry = chosen else {
             log("No auto layout recorded yet", level: .moderate, type: .autoSave)
             return
         }
-        guard let snapshot = autoLayoutSnapshot else {
+        guard let snapshot = snapshot(from: entry) else {
             log("Auto layout was captured on a different display setup — not restoring",
                 level: .moderate, type: .autoSave)
             return

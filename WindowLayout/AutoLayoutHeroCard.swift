@@ -10,6 +10,15 @@ import SwiftUI
 /// Takes plain values rather than reaching into `WindowManager`, so it can be
 /// rendered on its own and looked at.
 struct AutoLayoutHeroCard: View {
+
+    /// One of the captures behind the newest one.
+    struct EarlierCapture: Identifiable {
+        let id: UUID
+        let capturedAt: Date
+        let windowCount: Int
+        let matchesCurrentScreens: Bool
+    }
+
     let capturedAt: Date?
     let windowCount: Int
     let screenName: String?
@@ -17,6 +26,9 @@ struct AutoLayoutHeroCard: View {
     let tint: Color
     let language: AppLanguage
     let onRestore: () -> Void
+    /// The rest of the ring, newest first. Empty hides the control entirely.
+    var earlier: [EarlierCapture] = []
+    var onRestoreEarlier: (UUID) -> Void = { _ in }
 
     /// How old a capture may be before the card stops looking confident.
     /// Restoring a days-old layout is worse than not restoring, so past this
@@ -60,6 +72,10 @@ struct AutoLayoutHeroCard: View {
                 } else if isStale {
                     footnote("This capture is old. Check it is the arrangement you want.")
                 }
+
+                if !earlier.isEmpty {
+                    earlierCaptures
+                }
             } else {
                 footnote("Nothing captured yet. Move a window and it will appear here.")
             }
@@ -71,15 +87,100 @@ struct AutoLayoutHeroCard: View {
 
     @ViewBuilder
     private var restoreButton: some View {
+        // Spelled "Restore" because the card it sits in is headed AUTO LAYOUT,
+        // which is the only thing that separates it from the toolbar's Restore.
+        // That reads correctly on screen and not at all through accessibility,
+        // where both are a button described as "Restore", so the distinction
+        // has to be stated there explicitly.
         let label = Text("Restore".localized(language)).frame(maxWidth: .infinity)
         if isStale {
             Button(action: onRestore) { label }
                 .controlSize(.large).buttonStyle(.bordered)
                 .tint(tint).disabled(!matchesCurrentScreens)
+                .accessibilityLabel(Text("Restore the auto layout".localized(language)))
         } else {
             Button(action: onRestore) { label }
                 .controlSize(.large).buttonStyle(.borderedProminent)
                 .tint(tint).disabled(!matchesCurrentScreens)
+                .accessibilityLabel(Text("Restore the auto layout".localized(language)))
+        }
+    }
+
+    /// The rest of the ring.
+    ///
+    /// Five captures are kept precisely so a bad one can be stepped back past,
+    /// and by the time the user notices a bad arrangement the auto-save has
+    /// usually recorded it into the newest slot already. Keeping four more on
+    /// disk with no way to reach them is not a safeguard.
+    private var earlierCaptures: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(earlier) { capture in
+                    EarlierRow(age: age(of: capture.capturedAt),
+                               windowCount: capture.windowCount,
+                               isApplicable: capture.matchesCurrentScreens,
+                               tint: tint,
+                               language: language,
+                               action: { onRestoreEarlier(capture.id) })
+                }
+            }
+            .padding(.top, 3)
+        } label: {
+            Text(earlier.count == 1 ? "1 earlier capture" : "\(earlier.count) earlier captures")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// A row that restores one earlier capture.
+    ///
+    /// Rendered first as plain text with the age and the count, which looked
+    /// exactly like the two static lines above it and gave no sign it could be
+    /// clicked. It carries the restore glyph and a hover fill for that reason.
+    private struct EarlierRow: View {
+        let age: String
+        let windowCount: Int
+        let isApplicable: Bool
+        let tint: Color
+        let language: AppLanguage
+        let action: () -> Void
+
+        @State private var isHovering = false
+
+        var body: some View {
+            Button(action: action) {
+                HStack(spacing: 5) {
+                    Image(systemName: isApplicable
+                          ? "arrow.uturn.backward"
+                          : "display.trianglebadge.exclamationmark")
+                        .font(.system(size: 8, weight: .semibold))
+                        .frame(width: 10)
+                    Text(age)
+                    Spacer(minLength: 8)
+                    Text(windowCount == 1 ? "1 window" : "\(windowCount) windows")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(isApplicable ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(tint.opacity(isHovering && isApplicable ? 0.12 : 0))
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!isApplicable)
+            .onHover { isHovering = $0 }
+            .help(isApplicable
+                  ? Text("Restore this capture".localized(language))
+                  : Text("Captured on a different display setup.".localized(language)))
+            // Four rows all described as "Restore" would be no more use through
+            // accessibility than no rows at all.
+            .accessibilityLabel(Text("Restore the capture from \(age), \(windowCount) windows"))
         }
     }
 
@@ -111,12 +212,17 @@ struct AutoLayoutHeroCard: View {
     /// Spelled out rather than using `Text(_:style:.relative)`, which cannot be
     /// given a reference date and so cannot be rendered for a chosen age.
     private var relativeAge: String {
-        guard let age else { return "" }
+        guard let capturedAt else { return "" }
+        return age(of: capturedAt)
+    }
+
+    private func age(of date: Date) -> String {
+        let seconds = now.timeIntervalSince(date)
         let f = DateComponentsFormatter()
         f.unitsStyle = .full
         f.maximumUnitCount = 1
-        f.allowedUnits = age < 3600 ? [.minute] : (age < 86_400 ? [.hour] : [.day])
-        let spelled = f.string(from: max(age, 60)) ?? ""
+        f.allowedUnits = seconds < 3600 ? [.minute] : (seconds < 86_400 ? [.hour] : [.day])
+        let spelled = f.string(from: max(seconds, 60)) ?? ""
         return spelled.isEmpty ? "just now" : "\(spelled) ago"
     }
 }
