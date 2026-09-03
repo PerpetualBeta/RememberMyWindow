@@ -1406,6 +1406,103 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var screenChangeTask: Task<Void, Never>?
     private var pendingConnectedNames: Set<String> = []
 
+    /// True while contested windows are still being re-applied.
+    ///
+    /// Nothing should record the desk while this is set: it is not an
+    /// arrangement, it is a disagreement between the layout and an app, and
+    /// whichever frame happens to be in place when a capture lands would become
+    /// the thing the next restore reproduces.
+    private(set) var isSettlingContestedWindows = false
+
+    /// Gaps between late correction attempts, in nanoseconds.
+    ///
+    /// Backoff rather than a single guess: the contest with an app's own frame
+    /// restoration was measured lasting past six seconds and finished well
+    /// inside a minute, and the exact duration is not knowable in advance.
+    /// Stops as soon as a window takes the frame, so the later entries only
+    /// cost anything in the cases that need them.
+    private static let lateCorrectionDelays: [UInt64] = [
+        3_000_000_000, 5_000_000_000, 8_000_000_000, 15_000_000_000, 30_000_000_000,
+    ]
+
+    /// Position and size of a window, as the accessibility API reports it.
+    private static func axFrame(of element: AXUIElement) -> CGRect? {
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let p = posRef, CFGetTypeID(p) == AXValueGetTypeID(),
+              let sz = sizeRef, CFGetTypeID(sz) == AXValueGetTypeID() else { return nil }
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(p as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(sz as! AXValue, .cgSize, &size) else { return nil }
+        return CGRect(origin: origin, size: size)
+    }
+
+    /// Send a window to another display and bring it straight back.
+    ///
+    /// An app that is re-asserting its own remembered frame stops the instant
+    /// its window changes display. Measured 2026-09-03: a window that had
+    /// refused 1280x720 through twenty-one correction passes, a six second
+    /// retry and a sixty second backoff accepted it immediately after a trip to
+    /// the other screen and back, and held it.
+    ///
+    /// Why it works is not established — only that it does, every time it was
+    /// tried. It is a last resort, used once a window has already refused a
+    /// plain re-apply, because it is the only visible thing RMW does: the
+    /// window appears elsewhere for a moment before landing where it belongs.
+    private static func nudgeViaAnotherDisplay(_ element: AXUIElement,
+                                               target: CGRect,
+                                               primaryScreenH: CGFloat) async {
+        let centre = CGPoint(x: target.midX, y: target.midY)
+        // Any screen that is not the one the window is heading for.
+        guard let elsewhere = NSScreen.screens.first(where: { !$0.frame.contains(centre) })
+                ?? NSScreen.screens.first else { return }
+
+        let parking = elsewhere.visibleFrame
+        var size = CGSize(width: min(target.width, parking.width),
+                          height: min(target.height, parking.height))
+        var away = CGPoint(x: parking.minX,
+                           y: primaryScreenH - parking.maxY)
+        if let p = AXValueCreate(.cgPoint, &away) {
+            _ = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, p)
+        }
+        if let sz = AXValueCreate(.cgSize, &size) {
+            _ = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sz)
+        }
+
+        // Long enough for the window server to register the change of display,
+        // short enough to read as a flicker rather than a journey.
+        try? await Task.sleep(nanoseconds: nudgeDwell)
+
+        var home = CGPoint(x: target.origin.x,
+                           y: primaryScreenH - target.origin.y - target.height)
+        var full = target.size
+        if let p = AXValueCreate(.cgPoint, &home) {
+            _ = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, p)
+        }
+        if let sz = AXValueCreate(.cgSize, &full) {
+            _ = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sz)
+        }
+        if let p = AXValueCreate(.cgPoint, &home) {
+            _ = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, p)
+        }
+    }
+
+    /// How long the window rests on the other display before coming back.
+    private static let nudgeDwell: UInt64 = 120_000_000
+
+    /// Close enough that nobody could see the difference.
+    private static let frameEpsilon: CGFloat = 4
+
+    private static func framesAgree(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.origin.x - b.origin.x) <= frameEpsilon
+            && abs(a.origin.y - b.origin.y) <= frameEpsilon
+            && abs(a.width - b.width) <= frameEpsilon
+            && abs(a.height - b.height) <= frameEpsilon
+    }
+
     /// The configuration a settle task is waiting on, and the task itself.
     private var settlingDisplayFingerprint: ScreenFingerprint?
     private var displaySettleTask: Task<Void, Never>?
@@ -3207,6 +3304,127 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         }
 
                         try? await Task.sleep(nanoseconds: 150_000_000)
+                    }
+
+                    // Keep re-applying, with backoff, until it takes.
+                    //
+                    // After a display returns, an app re-asserts its own
+                    // remembered frame and keeps doing so. Measured 2026-09-03:
+                    // RMW placed two windows at 1280x720 and had them verified
+                    // as placed, then twenty-one correction passes over four
+                    // seconds lost to the app re-applying 1304x948 — the exact
+                    // frame in its `NSWindow Frame` default. A single late retry
+                    // at six seconds lost too. Several minutes later the same
+                    // app accepted 1280x720 first time and held it.
+                    //
+                    // So the delay cannot be guessed. Retry with backoff and
+                    // stop on success.
+                    //
+                    // Two guards, because a loop that re-applies frames is a
+                    // loop that can fight the user. It stops the moment the
+                    // window matches, and it stops if the window is somewhere
+                    // that is neither the target nor the frame being fought —
+                    // that is a person moving a window, and their placement wins.
+                    if !mismatchesByApp.isEmpty {
+                        let stubborn = mismatchesByApp.keys.flatMap { appID in
+                            resolvedTargets.filter { $0.record.windowID.appBundleID == appID }
+                        }
+                        // An app can be mismatched while having no resolved
+                        // target — it was skipped for having no windows, say.
+                        // Reporting a retry for zero windows, and naming apps
+                        // that are not in it, is a log line that lies.
+                        guard !stubborn.isEmpty else { return }
+                        let names = Set(stubborn.compactMap { $0.record.windowID.appBundleID })
+                            .sorted().joined(separator: ", ")
+                        self.log("⏳ \(stubborn.count) window(s) still contested; retrying with backoff: \(names)",
+                                 level: .moderate, type: .restore)
+                        // Nothing is recorded while this runs. The desk is not
+                        // an arrangement yet — it is a disagreement between the
+                        // layout and an app, and whichever frame happens to be
+                        // in place when a capture lands would become the layout
+                        // the next restore reproduces.
+                        self.isSettlingContestedWindows = true
+                        Task { [weak self] in
+                            var contested = stubborn.map { (target: $0, wasAt: CGRect.null) }
+                            var attempt = 0
+                            // Announced once, not once per window and not once
+                            // per round: the user needs to know why windows are
+                            // moving, told once.
+                            var announced = false
+                            for delay in Self.lateCorrectionDelays {
+                                attempt += 1
+                                try? await Task.sleep(nanoseconds: delay)
+                                guard let self, !contested.isEmpty else { return }
+                                var stillContested: [(target: ResolvedTarget, wasAt: CGRect)] = []
+                                for entry in contested {
+                                    let target = entry.target
+                                    let wanted = target.targetFrame
+                                    let axY = primaryScreenH - wanted.origin.y - wanted.height
+                                    let live = Self.axFrame(of: target.element)
+
+                                    if let live, Self.framesAgree(live, CGRect(x: wanted.origin.x, y: axY,
+                                                                               width: wanted.width, height: wanted.height)) {
+                                        continue   // it took
+                                    }
+                                    if let live, !entry.wasAt.isNull, !Self.framesAgree(live, entry.wasAt) {
+                                        self.log("↩︎ Leaving \(target.record.windowID.appName ?? "a window") where it was moved to.",
+                                                 level: .verbose, type: .restore)
+                                        continue   // somebody moved it on purpose
+                                    }
+
+                                    if attempt == 1 {
+                                        // A plain re-apply first. It is invisible,
+                                        // and it is enough whenever the app has
+                                        // simply finished re-asserting.
+                                        var position = CGPoint(x: wanted.origin.x, y: axY)
+                                        var size = wanted.size
+                                        if let value = AXValueCreate(.cgPoint, &position) {
+                                            _ = AXUIElementSetAttributeValue(target.element, kAXPositionAttribute as CFString, value)
+                                        }
+                                        if let value = AXValueCreate(.cgSize, &size) {
+                                            _ = AXUIElementSetAttributeValue(target.element, kAXSizeAttribute as CFString, value)
+                                        }
+                                        if let value = AXValueCreate(.cgPoint, &position) {
+                                            _ = AXUIElementSetAttributeValue(target.element, kAXPositionAttribute as CFString, value)
+                                        }
+                                    } else {
+                                        if !announced {
+                                            announced = true
+                                            let n = contested.count
+                                            // The nudge is the only visible thing
+                                            // RMW does — a window appears on the
+                                            // wrong screen for a moment. Unexplained
+                                            // that reads as a glitch, so say it is
+                                            // deliberate before it happens.
+                                            self.deliverNotification(
+                                                type: .displayChange,
+                                                title: lz("Stabilizing Windows"),
+                                                subtitle: n == 1
+                                                    ? lz("One window is settling into place")
+                                                    : String(format: lz("%d windows are settling into place"), n),
+                                                isCompact: true)
+                                        }
+                                        self.log("↪︎ Nudging \(target.record.windowID.appName ?? "a window") via another display",
+                                                 level: .verbose, type: .restore)
+                                        await Self.nudgeViaAnotherDisplay(target.element,
+                                                                          target: wanted,
+                                                                          primaryScreenH: primaryScreenH)
+                                    }
+                                    stillContested.append((target: target, wasAt: live ?? entry.wasAt))
+                                }
+                                let settled = contested.count - stillContested.count
+                                if settled > 0 {
+                                    self.log("✅ \(settled) contested window(s) settled into place.",
+                                             level: .moderate, type: .restore)
+                                }
+                                contested = stillContested
+                            }
+                            self?.isSettlingContestedWindows = false
+                            if let self, !contested.isEmpty {
+                                self.log("⚠️ \(contested.count) window(s) kept their own frame; the app is overriding the layout.",
+                                         level: .moderate, type: .restore)
+                            }
+                        }
                     }
 
                     for appID in verificationAppIDs {
