@@ -16,6 +16,29 @@ private func notchWidth(of screen: NSScreen) -> CGFloat {
     return max(0, right.minX - left.maxX)
 }
 
+/// How far the pill must reach beyond the notch on each side.
+///
+/// Matching the notch exactly is not enough. `auxiliaryTopLeftArea` gives the
+/// *layout* boundary either side of the cutout, but the cutout is a physical
+/// hole: pixels there are in the framebuffer and behind the camera housing, so
+/// they are never seen. A pill exactly notch-wide therefore puts its two
+/// vertical strokes where no one can see them, and the notification looks
+/// unbordered — which is what a screenshot cannot show you, because the
+/// framebuffer has the stroke even when the glass does not.
+///
+/// There is no API for the physical cutout, so this cannot be derived. It is a
+/// knob rather than a guess:
+///
+///     defaults write com.netanel.remembermywindows notchClearance -float 8
+///
+/// Default chosen so the 1pt stroke and the corner curvature both clear the
+/// housing on a 14-inch MacBook Pro. Set it to 0 to get the old behaviour.
+private func notchClearance() -> CGFloat {
+    let key = "notchClearance"
+    guard UserDefaults.standard.object(forKey: key) != nil else { return 6 }
+    return max(0, CGFloat(UserDefaults.standard.double(forKey: key)))
+}
+
 private func builtInScreen() -> NSScreen {
     if let notched = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) {
         return notched
@@ -83,7 +106,10 @@ final class NotchNotificationWindow: NSPanel {
         // strips the subtitle from all but a couple of notifications, so that
         // was the common case rather than an edge one.
         let intrinsicWidth: CGFloat = isCompact ? (finalSubtitle.isEmpty ? 180 : 215) : 280
-        self.pillWidth = max(intrinsicWidth, notchWidth(of: builtInScreen()))
+        // Clear the notch rather than merely match it — see notchClearance().
+        let notch = notchWidth(of: builtInScreen())
+        let minimumWidth = notch > 0 ? notch + notchClearance() * 2 : 0
+        self.pillWidth = max(intrinsicWidth, minimumWidth)
         self.data = NotificationData(title: title, subtitle: finalSubtitle, bundleID: bundleID, appIcon: appIcon)
         
         let notchDepth = builtInScreen().safeAreaInsets.top > 0 ? builtInScreen().safeAreaInsets.top : 24.0
