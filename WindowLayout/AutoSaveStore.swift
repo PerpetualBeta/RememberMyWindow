@@ -28,6 +28,25 @@ struct AutoSaveEntry: Codable, Identifiable {
 struct AutoSaveFile: Codable {
     /// Newest first.
     var entries: [AutoSaveEntry] = []
+    /// Last frame seen for each window, newest first, and it never expires.
+    /// See `AutoSaveStore.lastKnown`.
+    var lastKnown: [WindowRecord] = []
+
+    init(entries: [AutoSaveEntry] = [], lastKnown: [WindowRecord] = []) {
+        self.entries = entries
+        self.lastKnown = lastKnown
+    }
+
+    /// Written by hand rather than synthesised, because synthesised decoding
+    /// requires every key and ignores property defaults. A file written before
+    /// `lastKnown` existed would fail to decode, and this store refuses to
+    /// overwrite a file it could not read, so the whole history would be
+    /// stranded on disk and unreadable.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        entries = try c.decodeIfPresent([AutoSaveEntry].self, forKey: .entries) ?? []
+        lastKnown = try c.decodeIfPresent([WindowRecord].self, forKey: .lastKnown) ?? []
+    }
 }
 
 @MainActor
@@ -44,6 +63,15 @@ final class AutoSaveStore: ObservableObject {
     /// only thing a short interval buys is disk writes.
     static let coalescingInterval: TimeInterval = 90
 
+    /// The per-window memory is bounded, and not arbitrarily: `WindowID`
+    /// includes the window title, so with Screen Recording granted a window
+    /// that changes document gets a new identity and the map grows with title
+    /// churn rather than with the number of windows. Without it the key is
+    /// effectively bundle id plus index and a real desk settles around fifty
+    /// records. This is high enough that eviction only ever bites the churn
+    /// case, at roughly 140KB in the file.
+    static let lastKnownCapacity = 400
+
     /// A capture is rejected when the window count falls to this fraction of the
     /// last recorded one or below. Chosen rather than an absolute drop because
     /// losing 3 of 4 windows matters and losing 3 of 30 does not.
@@ -52,6 +80,21 @@ final class AutoSaveStore: ObservableObject {
     // MARK: - State
 
     @Published private(set) var entries: [AutoSaveEntry] = []
+
+    /// Where each window was the last time it was seen, regardless of how long
+    /// ago that was or whether the app is still running.
+    ///
+    /// The ring cannot answer "where was this app before it quit". Each entry
+    /// describes the whole desk at one moment, and the first capture after an
+    /// app quits correctly stops mentioning it — measured at 85 seconds. So the
+    /// answer survives only as long as a ring slot, which is five captures and
+    /// no particular amount of time. Quit an app before lunch and the ring has
+    /// rolled past it by the time you come back.
+    ///
+    /// This is the other shape of the same data: one record per window instead
+    /// of one record per moment. It is scoped by screen fingerprint, because a
+    /// frame from another display setup is not an answer.
+    @Published private(set) var lastKnown: [WindowRecord] = []
     /// Set when the file existed but could not be read. Writing is refused
     /// while true, for the same reason `WindowManager.persist()` refuses.
     @Published private(set) var isUnreadable = false
@@ -63,6 +106,9 @@ final class AutoSaveStore: ObservableObject {
     private var lastWrite: Date?
     /// Guarantees the settled arrangement reaches disk. See `armTrailingFlush`.
     private var trailingTimer: Timer?
+    /// Set when `lastKnown` has changed but not yet reached disk, so a flush
+    /// with no pending capture still writes.
+    private var lastKnownIsDirty = false
     private var log: (String) -> Void
 
     init(directory: URL, log: @escaping (String) -> Void = { _ in }) {
@@ -84,8 +130,15 @@ final class AutoSaveStore: ObservableObject {
             log("auto-save: ignoring an empty capture")
             return
         }
+
+        // Updated even when the arrangement is about to be refused. A collapse
+        // is a statement about the shape of the desk, not about whether the
+        // windows still open are where the capture says they are.
+        rememberLastKnown(records)
+
         if let reason = collapseReason(newCount: records.count) {
             log("auto-save: \(reason)")
+            scheduleWrite(now: now, force: false)
             return
         }
 
@@ -93,12 +146,49 @@ final class AutoSaveStore: ObservableObject {
                                 screenKey: screenKey,
                                 readableScreenKey: readableScreenKey,
                                 records: records)
+        scheduleWrite(now: now, force: force)
+    }
 
+    /// Writes now if the coalescing interval has run out, otherwise arms the
+    /// trailing timer so it is written when it does.
+    private func scheduleWrite(now: Date, force: Bool) {
+        guard pending != nil || lastKnownIsDirty else { return }
         if force || lastWrite == nil || now.timeIntervalSince(lastWrite!) >= Self.coalescingInterval {
             flush(now: now)
         } else {
             armTrailingFlush(from: now)
         }
+    }
+
+    /// Upserts a capture's records into the per-window memory.
+    ///
+    /// Keyed on `WindowID`, which is what the restore already matches against,
+    /// so nothing new has to be invented to look a window up. Records carry
+    /// their own `screenKey`, so the display setup is already part of each one
+    /// and needs no separate structure.
+    private func rememberLastKnown(_ records: [WindowRecord]) {
+        var byID = Dictionary(lastKnown.map { ($0.windowID, $0) },
+                              uniquingKeysWith: { _, newer in newer })
+        var changed = false
+        for record in records {
+            if let existing = byID[record.windowID],
+               existing.globalFrame == record.globalFrame,
+               existing.screenKey == record.screenKey {
+                continue
+            }
+            byID[record.windowID] = record
+            changed = true
+        }
+        guard changed else { return }
+
+        // Newest first, so the cap evicts the least recently seen window and
+        // the file reads in a useful order.
+        var merged = byID.values.sorted { $0.savedAt > $1.savedAt }
+        if merged.count > Self.lastKnownCapacity {
+            merged.removeSubrange(Self.lastKnownCapacity...)
+        }
+        lastKnown = merged
+        lastKnownIsDirty = true
     }
 
     /// Writes the pending capture once the coalescing interval has run out.
@@ -129,16 +219,19 @@ final class AutoSaveStore: ObservableObject {
     func flush(now: Date = Date()) {
         trailingTimer?.invalidate()
         trailingTimer = nil
-        guard let entry = pending else { return }
+        guard pending != nil || lastKnownIsDirty else { return }
         guard !isUnreadable else {
             log("auto-save: refusing to write over a file that could not be read")
             return
         }
-        pending = nil
-        entries.insert(entry, at: 0)
-        if entries.count > Self.ringCapacity {
-            entries.removeSubrange(Self.ringCapacity...)
+        if let entry = pending {
+            pending = nil
+            entries.insert(entry, at: 0)
+            if entries.count > Self.ringCapacity {
+                entries.removeSubrange(Self.ringCapacity...)
+            }
         }
+        lastKnownIsDirty = false
         lastWrite = now
         write()
     }
@@ -156,9 +249,9 @@ final class AutoSaveStore: ObservableObject {
 
     private func write() {
         do {
-            let data = try JSONEncoder().encode(AutoSaveFile(entries: entries))
+            let data = try JSONEncoder().encode(AutoSaveFile(entries: entries, lastKnown: lastKnown))
             try data.write(to: fileURL, options: .atomic)
-            log("auto-save: wrote \(entries.first?.windowCount ?? 0) window(s), \(entries.count) in ring")
+            log("auto-save: wrote \(entries.first?.windowCount ?? 0) window(s), \(entries.count) in ring, \(lastKnown.count) remembered")
         } catch {
             log("auto-save: write failed — \(error.localizedDescription)")
         }
@@ -176,8 +269,10 @@ final class AutoSaveStore: ObservableObject {
             return
         }
         do {
-            entries = try JSONDecoder().decode(AutoSaveFile.self, from: data).entries
-            log("auto-save: loaded \(entries.count) entr(ies)")
+            let file = try JSONDecoder().decode(AutoSaveFile.self, from: data)
+            entries = file.entries
+            lastKnown = file.lastKnown
+            log("auto-save: loaded \(entries.count) entr(ies), \(lastKnown.count) remembered window(s)")
         } catch {
             isUnreadable = true
             log("auto-save: \(fileURL.lastPathComponent) could not be decoded — \(error.localizedDescription)")

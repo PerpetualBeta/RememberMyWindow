@@ -1227,6 +1227,37 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         )
     }
 
+    /// Where one app's windows were the last time each was seen.
+    ///
+    /// The ring answers "what did the desk look like at 09:43". This answers
+    /// "where was this window", which is the question a relaunching app asks,
+    /// and the only one the ring cannot answer once it has rolled past the
+    /// capture taken before the app quit.
+    ///
+    /// Scoped to the display setup in front of the user. A frame from a
+    /// two-monitor desk is not an answer on a laptop panel.
+    func lastKnownSnapshot(forAppLaunch bundleID: String) -> LayoutSnapshot? {
+        guard let store = autoSaveStore else { return nil }
+        let key = currentFingerprint.key
+        let records = store.lastKnown.filter {
+            $0.screenKey == key
+                && ($0.windowID.appBundleID == bundleID || $0.windowID.appName == bundleID)
+        }
+        guard !records.isEmpty else { return nil }
+        return LayoutSnapshot(
+            name: currentFingerprint.readableName,
+            screenKey: key,
+            readableScreenKey: currentFingerprint.readableName,
+            records: records,
+            createdAt: records.map(\.savedAt).min() ?? Date(),
+            updatedAt: records.map(\.savedAt).max() ?? Date(),
+            location: nil,
+            isAutoSave: true,
+            foregroundBundleID: nil,
+            commandExcludedBundleIDs: []
+        )
+    }
+
     /// What an **automatic** restore should apply.
     ///
     /// Turning the Auto layout on is a statement about what "restore
@@ -1259,13 +1290,21 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             // seconds from quit to the record disappearing. The captures behind
             // it were taken while the app was still open, so walk back to the
             // most recent one that knows about it.
-            if bundleID != nil {
+            if let bundleID {
                 for entry in (autoSaveStore?.entries ?? []).dropFirst() {
                     if let earlier = snapshot(from: entry), holdsTarget(earlier) {
-                        log("Using an earlier auto capture for \(bundleID ?? "?") — the newest one no longer has it",
+                        log("Using an earlier auto capture for \(bundleID) — the newest one no longer has it",
                             level: .verbose, type: .autoSave)
                         return (earlier, true)
                     }
+                }
+                // The ring has rolled past the capture taken before this app
+                // quit, which happens after five captures and no particular
+                // amount of time. The per-window memory does not expire.
+                if let remembered = lastKnownSnapshot(forAppLaunch: bundleID) {
+                    log("Using the remembered position for \(bundleID) — \(remembered.records.count) window(s), last seen \(remembered.updatedAt)",
+                        level: .verbose, type: .autoSave)
+                    return (remembered, true)
                 }
             }
         }
