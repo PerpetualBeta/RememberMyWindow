@@ -61,6 +61,8 @@ final class AutoSaveStore: ObservableObject {
     private let fileURL: URL
     private var pending: AutoSaveEntry?
     private var lastWrite: Date?
+    /// Guarantees the settled arrangement reaches disk. See `armTrailingFlush`.
+    private var trailingTimer: Timer?
     private var log: (String) -> Void
 
     init(directory: URL, log: @escaping (String) -> Void = { _ in }) {
@@ -94,12 +96,39 @@ final class AutoSaveStore: ObservableObject {
 
         if force || lastWrite == nil || now.timeIntervalSince(lastWrite!) >= Self.coalescingInterval {
             flush(now: now)
+        } else {
+            armTrailingFlush(from: now)
+        }
+    }
+
+    /// Writes the pending capture once the coalescing interval has run out.
+    ///
+    /// Throttling on the leading edge alone loses the arrangement the user
+    /// actually settled on. Move six windows and stop: the first move writes,
+    /// the rest coalesce, and then nothing more arrives to trigger the write
+    /// that would record where they ended up. Observed holding a half-finished
+    /// arrangement on disk for over three minutes while the settled one sat in
+    /// memory, and it would have held it indefinitely.
+    ///
+    /// The fire time is derived from `lastWrite`, not from now, so re-arming on
+    /// every capture keeps aiming at the same instant rather than pushing the
+    /// write further out. That keeps the one-write-per-interval promise intact
+    /// and still guarantees the last state lands within one interval.
+    private func armTrailingFlush(from now: Date) {
+        guard let lastWrite else { return }
+        let due = lastWrite.addingTimeInterval(Self.coalescingInterval)
+        trailingTimer?.invalidate()
+        trailingTimer = Timer.scheduledTimer(withTimeInterval: max(due.timeIntervalSince(now), 0),
+                                             repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.flush() }
         }
     }
 
     /// Writes whatever is pending. Called on terminate, sleep and log-out, so
     /// the state at shutdown is the state kept.
     func flush(now: Date = Date()) {
+        trailingTimer?.invalidate()
+        trailingTimer = nil
         guard let entry = pending else { return }
         guard !isUnreadable else {
             log("auto-save: refusing to write over a file that could not be read")
@@ -160,5 +189,6 @@ final class AutoSaveStore: ObservableObject {
     /// Exposed so the coalescing and ring behaviour can be exercised without
     /// waiting 90 seconds or touching the real support directory.
     func _setLastWriteForTesting(_ date: Date?) { lastWrite = date }
+    var _trailingFlushIsArmedForTesting: Bool { trailingTimer?.isValid == true }
     var _pendingForTesting: AutoSaveEntry? { pending }
 }
