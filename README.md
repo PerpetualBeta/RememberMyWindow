@@ -28,6 +28,7 @@ It silently tracks your window positions in the background, and the moment it re
 |---|---|
 | 🖥️ **Screen Fingerprinting** | Identifies every display by hardware ID — layouts are tied to your exact physical monitors |
 | 💾 **Auto-Save** | Records window positions as you move or resize them (800ms debounce, no disk spam) |
+| 🗂️ **Persistent Auto Layout** | Optional. Keeps that live arrangement across quits, sleep and reboots in its own file, so a restart does not cost you the layout you were working in. Off by default — turn it on in Settings |
 | ♻️ **Auto-Restore** | When a known display configuration reconnects, your saved layout is applied automatically |
 | 🏷️ **Named Layouts** | Create, rename, and manage multiple layouts per screen configuration |
 | ⌨️ **Quick Restore Shortcut** | Trigger a restore instantly with a keyboard shortcut |
@@ -144,6 +145,19 @@ Window layouts are saved locally to:
 ```
 ~/Library/Application Support/RememberMyWindows/layouts.json
 ```
+
+With **Persistent Auto Layout** switched on, the rolling automatic capture is kept
+separately, so an ordinary window drag never rewrites your named layouts:
+
+```
+~/Library/Application Support/RememberMyWindows/auto-layout.json
+```
+
+That file holds the five most recent captures rather than one, so a moment you did
+not mean to keep — closing everything before a meeting, say — does not cost you the
+arrangement before it. A capture whose window count collapses is refused outright.
+Writes are coalesced to at most one every 90 seconds, with a forced flush on quit,
+sleep and log-out.
 
 No data ever leaves your Mac. 📴
 
