@@ -31,8 +31,10 @@ private func notchWidth(of screen: NSScreen) -> CGFloat {
 ///
 ///     defaults write com.netanel.remembermywindows notchClearance -float 8
 ///
-/// Default chosen so the 1pt stroke and the corner curvature both clear the
-/// housing on a 14-inch MacBook Pro. Set it to 0 to get the old behaviour.
+/// 6pt each side was confirmed by eye on a 14-inch MacBook Pro on 2026-09-03:
+/// the notch measures 185pt there, so the pill becomes 197pt and the stroke
+/// lands on visible glass. Verified on the physical screen, because a
+/// screenshot shows the stroke either way. Set it to 0 for the old behaviour.
 private func notchClearance() -> CGFloat {
     let key = "notchClearance"
     guard UserDefaults.standard.object(forKey: key) != nil else { return 6 }
