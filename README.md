@@ -10,7 +10,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?logo=swift&logoColor=white)](https://swift.org)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-[Features](#-features) · [Installation](#Installation) · [How it works](#️-how-it-works) · [Contributing](#-contributing)
+[Features](#-features) · [Installation](#-installation) · [How it works](#️-how-it-works) · [Contributing](#-contributing)
 
 </div>
 
