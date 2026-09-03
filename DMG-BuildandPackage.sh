@@ -5,6 +5,7 @@ set -euo pipefail
 
 APP_NAME="RememberMyWindows"
 DMG_NAME="${APP_NAME}.dmg"
+ZIP_NAME="${APP_NAME}.zip"
 TEMP_DMG_DIR="temp_dmg"
 
 cd "$(dirname "$0")"
@@ -23,6 +24,7 @@ swiftc -parse-as-library \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -target "arm64-apple-macosx14.0" \
     WindowLayout/RememberMyWindowsApp.swift \
+    WindowLayout/UpdateManager.swift \
     WindowLayout/ContentView.swift \
     WindowLayout/ThemeManager.swift \
     WindowLayout/WindowManager.swift \
@@ -111,7 +113,11 @@ fi
 echo "  - Code signing (Ad-hoc with stable designated requirement)..."
 codesign --force --deep --sign - -r="designated => identifier \"com.netanel.remembermywindows\"" --entitlements WindowLayout/RememberMyWindows.entitlements "${APP_DIR}"
 
-echo "Step 2: Preparing DMG contents..."
+echo "Step 2: Creating ZIP update package..."
+rm -f "$ZIP_NAME"
+ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "$ZIP_NAME"
+
+echo "Step 3: Preparing DMG contents..."
 rm -rf "$TEMP_DMG_DIR"
 mkdir -p "$TEMP_DMG_DIR"
 
@@ -121,11 +127,11 @@ cp -R "${APP_DIR}" "$TEMP_DMG_DIR/"
 # Create symlink to /Applications
 ln -s /Applications "$TEMP_DMG_DIR/Applications"
 
-echo "Step 3: Creating DMG..."
+echo "Step 4: Creating DMG..."
 rm -f "$DMG_NAME"
 hdiutil create -volname "${APP_NAME}" -srcfolder "$TEMP_DMG_DIR" -ov -format UDZO "$DMG_NAME"
 
-echo "Step 4: Cleanup..."
+echo "Step 5: Cleanup..."
 rm -rf "$TEMP_DMG_DIR"
 
 echo "----------------------------------------------------"

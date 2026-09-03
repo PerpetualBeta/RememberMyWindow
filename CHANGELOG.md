@@ -6,6 +6,11 @@ All notable changes to RememberMyWindows will be documented here.
 
 ### 🚀 "Rise and Shine, Windows In Line"
 
+#### 🔄 Convenient GitHub Updates
+- **Automatic Update Checks**: Checks the latest public GitHub release a few seconds after the app starts, at most once per day, with a manual menu-bar action and a Settings toggle.
+- **One-Click ZIP Updates**: Shows release notes, downloads `RememberMyWindows.zip`, validates the app bundle and version, then replaces and reopens the app.
+- **Release Packaging**: GitHub releases now include the ZIP update package alongside the DMG. Ad-hoc builds may require macOS approval after updating.
+
 #### 🔄 Automatic Full Layout Restore at Launch
 - **First Scan, Full Restore**: Whenever RememberMyWindows launches—whether started manually by you or triggered at system login—it now automatically initiates a full layout restore as soon as the live layout tracking server finishes its initial window capture.
 - **Login Settle Buffer**: Built-in 1.75-second settling delay ensures other login applications finishing their startup sequences have their windows captured and aligned precisely without racing.

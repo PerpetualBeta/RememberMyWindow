@@ -86,6 +86,9 @@ struct ContentView: View {
         )) {
             OnboardingView {
                 withAnimation { hasCompletedOnboarding = true }
+                Task { @MainActor in
+                    UpdateManager.shared.checkIfNeeded()
+                }
             }
         }
         // Shown only on the first launch after upgrading from a build with a

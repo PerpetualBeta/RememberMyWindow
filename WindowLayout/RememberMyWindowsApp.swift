@@ -333,6 +333,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if WindowManager.shared.store.quickKeyRestoreEnabled {
             QuickKeyRestoreManager.shared.setup()
         }
+
+        // Check GitHub once after launch (with a persisted 24-hour throttle),
+        // then check again when the app becomes active later in the day.
+        UpdateManager.shared.startAutomaticChecks()
+
         // Re-configure tap whenever the setting is toggled from Settings
         NotificationCenter.default.addObserver(
             forName: .quickKeyRestoreSettingChanged,
@@ -705,6 +710,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(savedItem)
 
         menu.addItem(NSMenuItem.separator())
+        let updateItem = menu.addItem(withTitle: lz("Check for Updates…"), action: #selector(checkForUpdates), keyEquivalent: "")
+        updateItem.image = menuSymbolImage("arrow.down.circle")
+
+        menu.addItem(NSMenuItem.separator())
         let quitItem = menu.addItem(withTitle: lz("Quit"), action: #selector(quitApp), keyEquivalent: "q")
         quitItem.image = menuSymbolImage("power")
     }
@@ -812,6 +821,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let bundleID = sender.representedObject as? String,
               let snap = WindowManager.shared.currentApplicableSnapshot else { return }
         WindowManager.shared.restore(snapshot: snap, specificAppBundleID: bundleID)
+    }
+
+    @objc private func checkForUpdates() {
+        UpdateManager.shared.checkForUpdates(manual: true)
     }
 
     @objc private func quitApp() {

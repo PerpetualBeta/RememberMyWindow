@@ -39,6 +39,7 @@ swiftc -parse-as-library \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -target "arm64-apple-macosx14.0" \
     WindowLayout/RememberMyWindowsApp.swift \
+    WindowLayout/UpdateManager.swift \
     WindowLayout/ContentView.swift \
     WindowLayout/ThemeManager.swift \
     WindowLayout/WindowManager.swift \

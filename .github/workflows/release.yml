@@ -41,10 +41,12 @@ jobs:
           echo "$RELEASE_TITLE"     >> $GITHUB_ENV
           echo "EOF"                >> $GITHUB_ENV
 
-      - name: Upload DMG to GitHub Release
+      - name: Upload DMG and ZIP to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: RememberMyWindows.dmg
+          files: |
+            RememberMyWindows.dmg
+            RememberMyWindows.zip
           body_path: release_notes.md
           name: ${{ env.RELEASE_TITLE }}
           tag_name: ${{ env.TAG_NAME }}

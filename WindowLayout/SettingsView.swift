@@ -83,6 +83,7 @@ struct SettingsView: View {
     @AppStorage("masterNotificationsEnabled") private var masterNotificationsEnabled: Bool = true
     @AppStorage("masterSoundEnabled") private var masterSoundEnabled: Bool = true
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @AppStorage("updateChecksEnabled") private var updateChecksEnabled: Bool = true
     @AppStorage("restoreFocusedAppOnLeftClick") private var restoreFocusedAppOnLeftClick: Bool = true
     @State private var showingLocationAlert = false
     @State private var isTogglingLocation = false
@@ -318,6 +319,21 @@ struct SettingsView: View {
                     subtitle: "Start RememberMyWindows automatically in the background whenever you log into macOS",
                     icon: "arrow.right.square.fill",
                     isOn: $manager.launchAtLogin
+                )
+
+                Divider().padding(.horizontal, 12)
+
+                SettingsToggle(
+                    title: "Check for Updates Automatically",
+                    subtitle: "Checks for new GitHub releases once daily when the app starts",
+                    icon: "arrow.down.circle.fill",
+                    isOn: Binding(
+                        get: { updateChecksEnabled },
+                        set: {
+                            updateChecksEnabled = $0
+                            UpdateManager.shared.setAutomaticChecksEnabled($0)
+                        }
+                    )
                 )
 
                 Divider().padding(.horizontal, 12)
@@ -3425,5 +3441,3 @@ struct SoundboardTile: View {
         .onHover { isHovered = $0 }
     }
 }
-
-

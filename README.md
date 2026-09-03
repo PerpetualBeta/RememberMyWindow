@@ -62,6 +62,10 @@ Then in Xcode:
 
 Or just download the latest DMG file 
 
+### Updates
+
+RememberMyWindows checks the latest public GitHub release automatically a few seconds after the app starts, at most once per day. You can also use **Check for Updates…** from the menu bar. Releases should include `RememberMyWindows.zip` alongside the DMG; the ZIP is used for the one-click update flow. Because releases are ad-hoc signed, macOS may ask users to approve the updated app once.
+
 ### Required Permissions
 
 On first launch, the app will prompt you for the following:
