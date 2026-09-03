@@ -208,7 +208,11 @@ final class QuickKeyRestoreManager {
             lastCapsLockTapTime = now
             capsLockResetTimer?.invalidate()
             capsLockResetTimer = Timer.scheduledTimer(withTimeInterval: 0.65, repeats: false) { [weak self] _ in
-                self?.lastCapsLockTapTime = nil
+                // scheduledTimer runs on the current run loop, which is the main
+                // one here, so this already executes on the main actor. Saying so
+                // keeps the double-tap window exact; hopping instead would let a
+                // second tap land while the first is still being forgotten.
+                MainActor.assumeIsolated { self?.lastCapsLockTapTime = nil }
             }
         }
     }
@@ -344,10 +348,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: nil,
             queue: .main
         ) { _ in
-            if WindowManager.shared.store.quickKeyRestoreEnabled {
-                QuickKeyRestoreManager.shared.setup()
-            } else {
-                QuickKeyRestoreManager.shared.teardown()
+            // Delivered on .main by the queue: argument above, so this body runs
+            // on the main thread already.
+            MainActor.assumeIsolated {
+                if WindowManager.shared.store.quickKeyRestoreEnabled {
+                    QuickKeyRestoreManager.shared.setup()
+                } else {
+                    QuickKeyRestoreManager.shared.teardown()
+                }
             }
         }
     }
@@ -514,7 +522,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Activate app and open menu dropdown instantly
         NSApp.activate(ignoringOtherApps: true)
-        self.statusItem?.popUpMenu(menu)
+        // `popUpMenu(_:)` has been deprecated since 10.14. The documented
+        // replacement is to hand the menu to the status item — done on the line
+        // above — and then click its button, which opens the same dropdown in
+        // the same place.
+        self.statusItem?.button?.performClick(nil)
     }
 
     /// Tints and animates the menu bar button on left-click restore.
