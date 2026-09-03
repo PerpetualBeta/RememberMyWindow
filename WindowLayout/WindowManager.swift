@@ -2094,7 +2094,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 cachedAXWindowsByPID[pid] = axWins
                 lastCGWindowsByPID[pid] = currentCGWindows
                 result[pid] = axWins
-            } else if let cached = cachedAXWindowsByPID[pid] {
+            } else if let cached = cachedAXWindowsByPID[pid], !WindowSpaces.isAvailable {
                 // AX returned nothing useful (app is backgrounded / in its own full-screen Space).
                 // Use the last known good frames so ghost-window filtering still works correctly.
                 lastCGWindowsByPID[pid] = currentCGWindows
@@ -2171,9 +2171,19 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let opts = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(opts)
         refreshAccessibilityPermissionStatus()
+                //
+                // Only without the Space lookup. Reaching here means this app's CG
+                // geometry has changed since those frames were cached — the
+                // identical-geometry case returned early above — so the cache is
+                // stale by definition, and a stale frame matches nothing, which
+                // discards the real window as a ghost. Preview vanished from every
+                // capture that way. With Spaces available the window is recognised
+                // as parked instead, which is what the cache was standing in for.
     }
 
     /// Manually re-checks permissions (e.g. from user UI interaction).
+                cachedAXWindowsByPID.removeValue(forKey: pid)
+                lastCGWindowsByPID.removeValue(forKey: pid)
     func checkAccessibilityPermissionManually() {
         refreshAccessibilityPermissionStatus()
     }
@@ -3611,7 +3621,21 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // Clamp origin so the entire window fits inside visibleFrame without mutating dimensions
         let targetX = min(max(f.origin.x, vf.minX), max(vf.minX, vf.maxX - targetW))
         let targetY = min(max(f.origin.y, vf.minY), max(vf.minY, vf.maxY - targetH))
-        
+
+        // A window is allowed to hang over an edge, and people park them that
+        // way deliberately. Clamping every restore into visibleFrame meant a
+        // window saved at x=900 with width 708 on a 1512pt display came back at
+        // x=804 — the exact 96pt it was overhanging. Worse, the next capture
+        // recorded 804, so one restore rewrote the arrangement for good.
+        //
+        // The clamp is here for a different case: a layout captured on a display
+        // that is now smaller, or gone. So it belongs behind a test for that. If
+        // the display this window was captured on is still present with the same
+        // frame, the saved geometry was reachable then and is reachable now.
+        if let savedScreen = record.screenFrame, savedScreen == screen.frame {
+            return f
+        }
+
         return CGRect(x: targetX, y: targetY, width: targetW, height: targetH)
     }
 
