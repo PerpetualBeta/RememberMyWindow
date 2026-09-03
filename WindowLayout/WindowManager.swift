@@ -2491,6 +2491,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     struct AXWindowInfo {
         let frame: CGRect
         let isFullScreen: Bool
+        /// True when the window sits in the Dock rather than on a desktop.
+        ///
+        /// The accessibility tree still describes a minimised window, and it is
+        /// still a window the user owns, so it must stay in the layout. It is
+        /// also the only thing that separates a minimised window from one the
+        /// tree keeps describing after it was closed — both are off screen, and
+        /// both report the Space they were last on.
+        let isMinimized: Bool
     }
 
     struct CGWindowBriefInfo: Equatable {
@@ -2590,6 +2598,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                    let fsVal = fsRef as? Bool {
                     isFullScreen = fsVal
                 }
+
+                var minRef: CFTypeRef?
+                var isMinimized = false
+                if AXUIElementCopyAttributeValue(win, kAXMinimizedAttribute as CFString, &minRef) == .success,
+                   let minVal = minRef as? Bool {
+                    isMinimized = minVal
+                }
                 
                 // Only accept windows whose origin lands within a real connected screen (in CG coords).
                 // When an app is not frontmost and in its own full-screen Space, AX reports the window
@@ -2606,7 +2621,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // causing real full-screen windows to fail frame-matching on the next capture cycle.
                 let isSizeable = size.width > 50 && size.height > 50
                 if isOnAnyScreen && isSizeable {
-                    axWins.append(AXWindowInfo(frame: CGRect(origin: pos, size: size), isFullScreen: isFullScreen))
+                    axWins.append(AXWindowInfo(frame: CGRect(origin: pos, size: size),
+                                               isFullScreen: isFullScreen,
+                                               isMinimized: isMinimized))
                 }
             }
             
@@ -2615,8 +2632,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 let wasStale = cachedAXWindowsByPID[pid] == nil
                 let appLabel = app.localizedName ?? "pid\(pid)"
                 let fsSuffix = axWins.contains(where: { $0.isFullScreen }) ? " [fullscreen]" : ""
+                let minCount = axWins.filter { $0.isMinimized }.count
+                let minSuffix = minCount > 0 ? " [\(minCount) minimised]" : ""
                 if wasStale {
-                    log("💾 AX cache POPULATED for \(appLabel): \(axWins.count) frame(s)\(fsSuffix)", level: .verbose, type: .system)
+                    log("💾 AX cache POPULATED for \(appLabel): \(axWins.count) frame(s)\(fsSuffix)\(minSuffix)", level: .verbose, type: .system)
                 }
                 cachedAXWindowsByPID[pid] = axWins
                 lastCGWindowsByPID[pid] = currentCGWindows
