@@ -68,10 +68,12 @@ struct AutoLayoutHeroCard: View {
                 // strength undoes the point of muting the rest.
                 restoreButton
 
+                // Only the display mismatch gets a line, because that is a
+                // fact the card cannot show any other way. Age is carried by
+                // the muting alone: a stale card is meant to look stale, not to
+                // argue with the user about it.
                 if !matchesCurrentScreens {
                     footnote("Captured on a different display setup.")
-                } else if isStale {
-                    footnote("This capture is old. Check it is the arrangement you want.")
                 }
 
                 if !earlier.isEmpty {

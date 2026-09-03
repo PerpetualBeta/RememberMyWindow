@@ -66,9 +66,17 @@ struct SnapshotListView: View {
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @State private var hoveredKey: String? = nil
-    /// Saved Sessions is demoted once Auto is carrying the everyday case, so
-    /// it remembers being reopened. Collapsed by default only when Auto is on.
-    @AppStorage("savedSessionsExpanded") private var savedSessionsExpanded: Bool = true
+    /// Whether the user has opened Saved Sessions. Stored, so reopening sticks.
+    ///
+    /// Read through `sessionsExpanded`, never directly: the section is only
+    /// demoted while Auto is carrying the everyday case. With Auto off, saved
+    /// sessions are the only thing in this window, and collapsing them by
+    /// default would hide the app's entire content behind a disclosure triangle.
+    @AppStorage("savedSessionsOpened") private var savedSessionsOpened: Bool = false
+
+    private var sessionsExpanded: Bool {
+        savedSessionsOpened || !manager.store.autoSaveEnabled
+    }
 
     var liveSnapshot: (key: String, snapshot: LayoutSnapshot)? {
         guard !manager.liveRecords.isEmpty else { return nil }
@@ -153,15 +161,15 @@ struct SnapshotListView: View {
                 // Auto layout is doing the everyday work.
                 VStack(alignment: .leading, spacing: 8) {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { savedSessionsExpanded.toggle() }
+                        withAnimation(.easeInOut(duration: 0.18)) { savedSessionsOpened = !sessionsExpanded }
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 9, weight: .bold))
-                                .rotationEffect(.degrees(savedSessionsExpanded ? 90 : 0))
+                                .rotationEffect(.degrees(sessionsExpanded ? 90 : 0))
                             Text("SAVED SESSIONS".localized(appLanguage))
                                 .font(.system(size: 11, weight: .bold))
-                            if !savedSessionsExpanded, !savedSnapshots.isEmpty {
+                            if !sessionsExpanded, !savedSnapshots.isEmpty {
                                 Text("\(savedSnapshots.count)")
                                     .font(.system(size: 10, weight: .medium))
                                     .foregroundStyle(.tertiary)
@@ -174,7 +182,7 @@ struct SnapshotListView: View {
                     .buttonStyle(.plain)
                     .padding(.leading, 8)
 
-                    if !savedSessionsExpanded {
+                    if !sessionsExpanded {
                         EmptyView()
                     } else if savedSnapshots.isEmpty {
                         Text("No saved sessions".localized(appLanguage))
@@ -228,7 +236,13 @@ struct SnapshotListView: View {
         let entries = manager.autoSaveStore?.entries ?? []
         let entry = entries.first
         let currentKey = manager.currentFingerprint.key
-        return AutoLayoutHeroCard(
+        // Ticked once a minute. `now` was injectable so both states could be
+        // rendered, but nothing drove it: a card built once kept the `Date()`
+        // it was constructed with, so "3 minutes ago" froze and the stale
+        // threshold never arrived on a sidebar nobody touched. The age is the
+        // one thing here that changes without anyone doing anything.
+        return TimelineView(.periodic(from: .now, by: 60)) { context in
+        AutoLayoutHeroCard(
             capturedAt: entry?.capturedAt,
             windowCount: entry?.windowCount ?? 0,
             screenName: entry.map { $0.readableScreenKey ?? $0.screenKey },
@@ -243,8 +257,10 @@ struct SnapshotListView: View {
                     windowCount: $0.windowCount,
                     matchesCurrentScreens: $0.screenKey == currentKey)
             },
-            onRestoreEarlier: { manager.restoreAutoLayout(entryID: $0) }
+            onRestoreEarlier: { manager.restoreAutoLayout(entryID: $0) },
+            now: context.date
         )
+        }
     }
 
     func snapshotRow(_ snapshot: LayoutSnapshot, key: String, isLive: Bool) -> some View {

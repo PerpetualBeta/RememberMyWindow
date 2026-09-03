@@ -136,11 +136,16 @@ final class AutoSaveStore: ObservableObject {
         // windows still open are where the capture says they are.
         rememberLastKnown(records)
 
-        if let reason = collapseReason(newCount: records.count) {
-            log("auto-save: \(reason)")
-            scheduleWrite(now: now, force: false)
-            return
+        if let reason = collapseReason(newCount: records.count, screenKey: screenKey) {
+            consecutiveCollapseRefusals += 1
+            if consecutiveCollapseRefusals < Self.collapseRefusalLimit {
+                log("auto-save: \(reason) [\(consecutiveCollapseRefusals)/\(Self.collapseRefusalLimit)]")
+                scheduleWrite(now: now, force: false)
+                return
+            }
+            log("auto-save: \(reason) — accepting it, refused \(consecutiveCollapseRefusals) times running")
         }
+        consecutiveCollapseRefusals = 0
 
         pending = AutoSaveEntry(capturedAt: now,
                                 screenKey: screenKey,
@@ -237,13 +242,29 @@ final class AutoSaveStore: ObservableObject {
     }
 
     /// Nil when the capture is acceptable, otherwise why it was rejected.
-    func collapseReason(newCount: Int) -> String? {
-        guard let last = latest else { return nil }   // nothing to compare against
+    ///
+    /// Compared against the newest capture **for the same screen configuration**.
+    /// Comparing against whatever happened to be newest made the guard latch: a
+    /// 25-window docked desk became the floor for a 10-window laptop desk, the
+    /// laptop capture was refused, a refusal never becomes the new baseline, and
+    /// nothing on the laptop could clear it. That case cannot self-heal, because
+    /// a laptop desk is structurally smaller than a docked one.
+    func collapseReason(newCount: Int, screenKey: String) -> String? {
+        guard let last = entries.first(where: { $0.screenKey == screenKey }) else { return nil }
         guard last.windowCount > 0 else { return nil }
         let floor = Double(last.windowCount) * Self.collapseFraction
         guard Double(newCount) <= floor else { return nil }
         return "rejected a capture of \(newCount) window(s) against \(last.windowCount) recorded — a collapse, not an arrangement"
     }
+
+    /// How many refusals in a row before the desk is taken at its word.
+    ///
+    /// The guard is for a moment — everything closed before a meeting — not for
+    /// a state. If the smaller desk is still there several coalescing intervals
+    /// later it is not a moment, it is what the user is working in, and refusing
+    /// for ever would mean auto-save had quietly stopped recording.
+    private static let collapseRefusalLimit = 3
+    private var consecutiveCollapseRefusals = 0
 
     // MARK: - Disk
 

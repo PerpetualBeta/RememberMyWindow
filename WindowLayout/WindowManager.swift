@@ -170,7 +170,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         super.init()
 
         autoSaveStore = AutoSaveStore(directory: dir) { [weak self] message in
-            self?.log(message, level: .verbose, type: .autoSave)
+            // A refusal means auto-save is deliberately not recording, which the
+            // user has no other way to discover. Routine writes stay verbose;
+            // anything that declines to save is reportable at the default level.
+            let level: LogLevel = message.contains("rejected") || message.contains("refusing")
+                ? .moderate : .verbose
+            self?.log(message, level: level, type: .autoSave)
         }
 
         // Forced flush points. The coalescing interval is deliberately long, so
@@ -358,6 +363,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     func stopTracking() {
+        // First, before anything is torn down. `applicationWillTerminate` calls
+        // this, and the flush observer registered for that same notification is
+        // removed a few lines below — during the very post that should trigger
+        // it. Notification delivery order is not guaranteed, so relying on the
+        // observer to win that race would make the commonest exit, Command+Q,
+        // the one that loses the last arrangement. The observer stays as a
+        // backstop for the paths that do not come through here.
+        autoSaveStore?.flush()
+
         isTracking = false
         trackingTask?.cancel()
         axEventDebounceTask?.cancel()
@@ -3528,7 +3542,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     restoredCount: restoredCount,
                     totalCount: snapshot.records.count,
                     connectedDisplayNames: Array(self.pendingConnectedNames),
-                    shouldSendShortcut: self.store.refreshFrontmostOnFullRestore
+                    // Carries the same barrier: without it a restore that ran
+                    // against a locked screen queues a keystroke that fires
+                    // minutes later at unlock, against `foregroundBundleID` nil.
+                    shouldSendShortcut: self.store.refreshFrontmostOnFullRestore && !skipCommandSend
                 )
                 self.log("🔒 Layout restore completed while locked. Deferred notch overlay and shortcut queued for screen unlock.", level: .necessary, type: .restore)
             }
@@ -3559,7 +3576,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 self.log("Restoring layout for \(fp.readableName)", level: .necessary, type: .restore, details: details)
                 self.statusMessage = "Restore complete"
                 
-                if !isLocked && self.store.refreshFrontmostOnFullRestore {
+                // `!skipCommandSend` is the barrier Netanel asked for on
+                // discussion #12: an auto layout has no user-chosen
+                // `foregroundBundleID` and no `commandExcludedBundleIDs`, so
+                // there is no basis for sending a keystroke anywhere, and doing
+                // so could refresh a form or toggle reader mode in whatever
+                // happens to be focused. It was previously enforced only by the
+                // allow-list inside `sendCommandToFrontmostAppAsync`, which
+                // gives the right outcome for the wrong reason — the flag has to
+                // be read on the path it is passed to.
+                if !isLocked && self.store.refreshFrontmostOnFullRestore && !skipCommandSend {
                     await self.sendCommandToFrontmostAppAsync(targetBundleID: snapshot.foregroundBundleID, snapshot: snapshot)
                 }
 
