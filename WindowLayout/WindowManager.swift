@@ -650,12 +650,27 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     ///   display reconnecting, for instance. Those honour the Auto layout when
     ///   it is switched on. A restore the user asked for stays as it was.
     func restoreNow(animated: Bool? = nil, triggerSubtitle: String? = nil, automatic: Bool = false) {
-        if automatic, store.autoSaveEnabled, let auto = autoLayoutSnapshot {
-            log("Restoring the Auto layout rather than a saved session — Auto is switched on",
-                level: .necessary, type: .autoSave)
-            restore(snapshot: auto,
+        if automatic {
+            // Ask the one place that knows how to choose. Reading
+            // autoLayoutSnapshot directly here is what made a reconnected
+            // display restore nothing: that property only ever looks at the
+            // newest capture, which after a display change belongs to the setup
+            // just left, so it matched no fingerprint and there was no route to
+            // the capture that did belong here. The duplicated saved-snapshot
+            // fallback that used to follow is character-for-character
+            // currentApplicableSnapshot, which is the last thing
+            // automaticRestoreSnapshot() tries anyway.
+            guard let source = automaticRestoreSnapshot() else {
+                statusMessage = "No saved layout for current display config"
+                return
+            }
+            if source.isAuto {
+                log("Restoring the Auto layout rather than a saved session — Auto is switched on",
+                    level: .necessary, type: .autoSave)
+            }
+            restore(snapshot: source.snapshot,
                     animated: animated ?? store.restoreAnimated,
-                    skipCommandSend: true,
+                    skipCommandSend: source.isAuto,
                     triggerSubtitle: triggerSubtitle)
             return
         }
@@ -1284,28 +1299,35 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             if let auto = autoLayoutSnapshot, holdsTarget(auto) {
                 return (auto, true)
             }
-            // The newest capture is the one place that cannot say where a
-            // just-quit app used to be. It describes the live desk, and the desk
+            // The newest capture is not always the one that has the answer, and
+            // it fails in two different ways.
+            //
+            // For a relaunching app it describes the live desk, and the desk
             // stopped containing that app the moment it quit — measured at 85
-            // seconds from quit to the record disappearing. The captures behind
-            // it were taken while the app was still open, so walk back to the
-            // most recent one that knows about it.
-            if let bundleID {
-                for entry in (autoSaveStore?.entries ?? []).dropFirst() {
-                    if let earlier = snapshot(from: entry), holdsTarget(earlier) {
-                        log("Using an earlier auto capture for \(bundleID) — the newest one no longer has it",
-                            level: .verbose, type: .autoSave)
-                        return (earlier, true)
-                    }
-                }
-                // The ring has rolled past the capture taken before this app
-                // quit, which happens after five captures and no particular
-                // amount of time. The per-window memory does not expire.
-                if let remembered = lastKnownSnapshot(forAppLaunch: bundleID) {
-                    log("Using the remembered position for \(bundleID) — \(remembered.records.count) window(s), last seen \(remembered.updatedAt)",
+            // seconds from quit to the record disappearing.
+            //
+            // For a display change it describes the configuration just left. Plug
+            // a screen back in and the newest capture is the single-display
+            // wreckage recorded while it was unplugged, which matches no
+            // fingerprint the user is now looking at. `snapshot(from:)` returns
+            // nil for an entry taken on another setup, so walking the ring finds
+            // the most recent capture that belongs to the screens actually here —
+            // which, measured on a reconnect, was sitting two slots back with all
+            // 21 windows in the right places.
+            for entry in (autoSaveStore?.entries ?? []).dropFirst() {
+                if let earlier = snapshot(from: entry), holdsTarget(earlier) {
+                    log("Using an earlier auto capture\(bundleID.map { " for \($0)" } ?? "") — the newest one does not apply",
                         level: .verbose, type: .autoSave)
-                    return (remembered, true)
+                    return (earlier, true)
                 }
+            }
+            // The ring has rolled past the capture taken before this app quit,
+            // which happens after five captures and no particular amount of
+            // time. The per-window memory does not expire.
+            if let bundleID, let remembered = lastKnownSnapshot(forAppLaunch: bundleID) {
+                log("Using the remembered position for \(bundleID) — \(remembered.records.count) window(s), last seen \(remembered.updatedAt)",
+                    level: .verbose, type: .autoSave)
+                return (remembered, true)
             }
         }
         if let saved = currentApplicableSnapshot, holdsTarget(saved) {
