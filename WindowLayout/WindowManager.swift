@@ -144,7 +144,59 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     /// Creates an AXUIElement for an application PID with a safe messaging timeout (150ms default)
     /// to ensure unresponsive external apps never freeze the main thread or background scans.
-    static func createAXElement(for pid: pid_t, timeoutSeconds: Float = 0.15) -> AXUIElement {
+    /// Launch an application, giving up after `timeout` seconds.
+    ///
+    /// Replaces a `DispatchSemaphore.wait(timeout:)` around the callback form,
+    /// which blocks a thread and is an error in the Swift 6 language mode. The
+    /// bound is preserved: whichever finishes first decides, and a launch that
+    /// never returns reports failure rather than stalling the restore.
+    nonisolated static func launch(_ url: URL,
+                                   configuration: NSWorkspace.OpenConfiguration,
+                                   timeout: TimeInterval = 4.0) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                do {
+                    _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// Find an installed application by its name.
+    ///
+    /// `launchApplication(_:)` took a name and was deprecated in macOS 11 in
+    /// favour of `openApplication(at:configuration:)`, which takes a URL — so a
+    /// name has to be resolved to one. Searches the same standard locations the
+    /// old call did, and returns nil rather than guessing.
+    nonisolated static func applicationURL(named name: String) -> URL? {
+        let bare = name.hasSuffix(".app") ? String(name.dropLast(4)) : name
+        var directories = [URL(fileURLWithPath: "/Applications"),
+                           URL(fileURLWithPath: "/System/Applications"),
+                           URL(fileURLWithPath: "/Applications/Utilities"),
+                           URL(fileURLWithPath: "/System/Applications/Utilities")]
+        if let home = FileManager.default.urls(for: .applicationDirectory, in: .userDomainMask).first {
+            directories.insert(home, at: 0)
+        }
+        for directory in directories {
+            let candidate = directory.appendingPathComponent("\(bare).app")
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return nil
+    }
+
+    /// `nonisolated`: it reads no actor state, it just wraps two C calls on a
+    /// pid, and the background restore path needs it off the main actor.
+    nonisolated static func createAXElement(for pid: pid_t, timeoutSeconds: Float = 0.15) -> AXUIElement {
         let element = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(element, timeoutSeconds)
         return element
@@ -1451,7 +1503,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
     }
 
-    func deliverNotification(
+    /// `nonisolated`: the whole body runs inside `DispatchQueue.main.async`, so
+    /// it is safe from anywhere and being main-actor-bound only forced every
+    /// off-actor caller to hop twice.
+    nonisolated func deliverNotification(
         type: NotificationEventType,
         title: String,
         subtitle: String,
@@ -2185,10 +2240,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let appRecords = snapshot.records.filter { $0.windowID.appBundleID == bundleID || $0.windowID.appName == bundleID }
         guard !appRecords.isEmpty else { return }
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            guard self.hasAccessibilityPermission else { return }
+        // Read the main-actor state here, not inside the background block. The
+        // block genuinely runs off the main actor, so reaching back into it
+        // from there is a data race rather than a formality — and the target
+        // frames depend on the screen layout, which is main-actor state too.
+        guard hasAccessibilityPermission else { return }
+        let plannedFrames = appRecords.map { calculateTargetFrame(for: $0) }
 
+        DispatchQueue.global(qos: .userInitiated).async {
             let runningApps = NSWorkspace.shared.runningApplications
             guard let app = runningApps.first(where: { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID }) else { return }
 
@@ -2206,8 +2265,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             let primaryScreenH = screens.first?.frame.height ?? 1080
 
             for (idx, win) in wins.enumerated() {
-                let record = idx < appRecords.count ? appRecords[idx] : appRecords.first!
-                let targetFrame = self.calculateTargetFrame(for: record)
+                let recordIdx = idx < appRecords.count ? idx : 0
+                let record = appRecords[recordIdx]
+                let targetFrame = plannedFrames[recordIdx]
                 let axX = targetFrame.origin.x
                 let axY = primaryScreenH - targetFrame.origin.y - targetFrame.height
                 let axW = targetFrame.width
@@ -2382,21 +2442,28 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         }
 
                         let launched: Bool
-                        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                        // The bundle identifier is the reliable route. Falling
+                        // back to the app's name covers a bundle LaunchServices
+                        // has not registered, which is why the deprecated
+                        // name-based launch was here.
+                        let resolvedURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+                            ?? WindowManager.applicationURL(named: sampleName)
+                        if let appURL = resolvedURL {
                             let configuration = NSWorkspace.OpenConfiguration()
                             configuration.activates = false
                             configuration.addsToRecentItems = false
 
-                            var launchSuccess = false
-                            let semaphore = DispatchSemaphore(value: 0)
-                            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
-                                launchSuccess = (error == nil)
-                                semaphore.signal()
-                            }
-                            _ = semaphore.wait(timeout: .now() + 4.0)
-                            launched = launchSuccess
+                            // The async form, rather than blocking a thread on a
+                            // semaphore from inside an async function — which is
+                            // an error in the Swift 6 language mode, and risks
+                            // deadlocking the cooperative pool before then.
+                            //
+                            // The four second bound is kept: the semaphore had
+                            // one, and a launch that never returns would
+                            // otherwise stall the whole restore.
+                            launched = await WindowManager.launch(appURL, configuration: configuration)
                         } else {
-                            launched = NSWorkspace.shared.launchApplication(sampleName)
+                            launched = false
                         }
 
                         if launched {

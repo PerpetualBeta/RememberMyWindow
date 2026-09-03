@@ -80,14 +80,23 @@ final class CommandOverlayManager {
             
             // Auto dismiss panel after animation completes (1.6s display time)
             let timer = Timer(timeInterval: 1.6, repeats: false) { [weak self] _ in
-                guard let self = self else { return }
-                NSAnimationContext.runAnimationGroup({ context in
-                    context.duration = 0.35
-                    self.currentPanel?.animator().alphaValue = 0
-                }, completionHandler: {
-                    self.currentPanel?.orderOut(nil)
-                    self.currentPanel = nil
-                })
+                // The timer is added to RunLoop.main below, so this fires on the
+                // main thread. Its block is @Sendable, which is what the
+                // compiler objects to; assuming the isolation states the fact
+                // rather than adding a hop that would delay the fade by a turn
+                // of the run loop.
+                MainActor.assumeIsolated {
+                    guard let self = self else { return }
+                    NSAnimationContext.runAnimationGroup({ context in
+                        context.duration = 0.35
+                        self.currentPanel?.animator().alphaValue = 0
+                    }, completionHandler: {
+                        MainActor.assumeIsolated {
+                            self.currentPanel?.orderOut(nil)
+                            self.currentPanel = nil
+                        }
+                    })
+                }
             }
             RunLoop.main.add(timer, forMode: .common)
             self.dismissTimer = timer
