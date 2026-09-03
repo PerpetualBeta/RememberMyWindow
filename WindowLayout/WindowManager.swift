@@ -1480,7 +1480,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         // Opt-in, and it writes its own file — a drag never reaches layouts.json.
-        if store.autoSaveEnabled {
+        // Held off while a display change is being handled, so the arrangement
+        // the restore is about to undo does not become the arrangement it
+        // restores to.
+        if store.autoSaveEnabled && !isHandlingDisplayChange {
             autoSaveStore?.record(records: currentWindows,
                                   screenKey: fp.key,
                                   readableScreenKey: fp.readableName)
@@ -1819,6 +1822,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// dragged the user's windows off the external screen.
     private static let displaySettleInterval: UInt64 = 2_000_000_000
 
+    /// Suppresses auto-save while a display change is being handled, and a
+    /// counter so a superseded task can tell whether the hold is still its own
+    /// to release.
+    private var isHandlingDisplayChange = false
+    private var displayChangeGeneration = 0
+
     @objc private func screensChanged() {
         let newFP = ScreenFingerprint.current()
 
@@ -1883,9 +1892,37 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // Even if we don't know the name yet, remember that a screen was added
         let hasAnyAddedScreens = !addedScreens.isEmpty
 
+        // Nothing below starts a restore unless the branch just after this does,
+        // so release the hold on every other path or auto-save stays switched
+        // off for the rest of the session.
+        if !(store.autoRestoreEnabled && hasSavedSession) {
+            isHandlingDisplayChange = false
+        }
+
+        // Hold auto-save from here, not from inside the task. Between a display
+        // change being noticed and the restore finishing, the fingerprint has
+        // already become the arriving configuration while the windows are still
+        // where the departing one left them. A capture landing in that gap is
+        // filed under the NEW key and overwrites the very layout the restore is
+        // about to apply — measured, and it cost five windows on an external
+        // display that then "restored" to nothing.
+        isHandlingDisplayChange = true
+        displayChangeGeneration += 1
+
         if store.autoRestoreEnabled && hasSavedSession {
             screenChangeTask?.cancel()
+            let generation = displayChangeGeneration
             screenChangeTask = Task { @MainActor [weak self] in
+                // Released by whichever task owns the current generation, so a
+                // superseded one cannot clear a newer one's hold. Installed
+                // before the cancellation check: display changes arrive in
+                // bursts, and a cancelled task that skipped this would leave
+                // auto-save switched off for the rest of the session.
+                defer {
+                    if let self, self.displayChangeGeneration == generation {
+                        self.isHandlingDisplayChange = false
+                    }
+                }
                 // Wait 1.0 second for the display connection storm to settle
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled, let self = self else { return }
