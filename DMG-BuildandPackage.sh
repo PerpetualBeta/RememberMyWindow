@@ -29,6 +29,9 @@ swiftc -parse-as-library \
     WindowLayout/ThemeManager.swift \
     WindowLayout/WindowManager.swift \
     WindowLayout/ScreenFingerprint.swift \
+    WindowLayout/WindowSpaces.swift \
+    WindowLayout/AutoLayoutHeroCard.swift \
+    WindowLayout/AutoSaveStore.swift \
     WindowLayout/WindowRecord.swift \
     WindowLayout/LayoutsView.swift \
     WindowLayout/ActivityView.swift \
