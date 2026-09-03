@@ -4700,6 +4700,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         )
     }
 
+    /// One key, named once. The migration is consumed from two places — a
+    /// first run with no library, and a run that read one — and a literal
+    /// repeated at both would eventually drift.
+    private static let autoSaveOptInMarker = "autoSaveOptInMigrated"
+
+    private func consumeAutoSaveOptInMigration() {
+        UserDefaults.standard.set(true, forKey: Self.autoSaveOptInMarker)
+    }
+
     private func load() {
         // Missing and unreadable are different things. The first is a first
         // run; the second is a library that is still on disk and still wanted.
@@ -4707,8 +4716,19 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         do {
             data = try Data(contentsOf: saveURL)
         } catch CocoaError.fileReadNoSuchFile {
+            // No library yet, so there is no legacy `autoSaveEnabled` to clear
+            // and the decoder's own default applies. The migration must still
+            // be marked consumed here, or the first launch skips it and the
+            // SECOND one clears a choice the user made in between: they switch
+            // the toggle on, it persists, and the next launch mistakes their
+            // deliberate `true` for the legacy one and turns it back off.
+            consumeAutoSaveOptInMigration()
             return
         } catch {
+            // Deliberately NOT consumed. The library is still on disk and still
+            // wanted; it has simply not been read. Marking the migration done
+            // here would let a legacy `true` opt this user in the moment the
+            // file becomes readable again.
             markStoreUnreadable("could not be read (\(error.localizedDescription))")
             return
         }
@@ -4754,14 +4774,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // field round-tripped while nothing read it, and a present key beats
         // the decoder's default. Clearing it once keeps the feature genuinely
         // opt-in; after this the user's own choice is honoured normally.
-        let optInMarker = "autoSaveOptInMigrated"
-        if !UserDefaults.standard.bool(forKey: optInMarker) {
+        if !UserDefaults.standard.bool(forKey: Self.autoSaveOptInMarker) {
             if loaded.autoSaveEnabled {
                 loaded.autoSaveEnabled = false
                 log("Auto layout left off: the stored flag predates the setting and was never a choice",
-                    level: .verbose, type: .autoSave)
+                    level: .necessary, type: .autoSave)
             }
-            UserDefaults.standard.set(true, forKey: optInMarker)
+            consumeAutoSaveOptInMigration()
         }
 
         store = loaded
@@ -4976,6 +4995,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     func sendCommandToFrontmostAppAsync(targetBundleID: String? = nil, snapshot: LayoutSnapshot? = nil, delayOverride: Double? = nil) async {
         guard !isScreenLocked else {
             log("Command skipped: Screen is currently locked.", level: .verbose, type: .system)
+            return
+        }
+        // Belt and braces at the sink. Callers already pass skipCommandSend for
+        // every automatic path, but this types into somebody else's app, so the
+        // rule is restated where the keystroke actually leaves: an auto layout
+        // never sends one.
+        guard snapshot?.isAutoSave != true else {
+            log("Command skipped: an auto layout has no chosen frontmost app to send to.",
+                level: .verbose, type: .system)
             return
         }
         guard AXIsProcessTrusted() else { return }
