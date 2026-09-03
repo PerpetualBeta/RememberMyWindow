@@ -3123,7 +3123,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                             break
                         }
 
-                        let correctionTargets = verificationAppIDs.flatMap { appID in
+                        // Only the apps that are still wrong. Built from every
+                        // verified app, a single stubborn window had the frame
+                        // re-applied to all sixteen on each of seventeen passes
+                        // — 272 accessibility writes to fix one. Re-applying to
+                        // a window that is already correct is not merely wasted:
+                        // it fights the user if they move something while the
+                        // restore is still settling.
+                        let correctionTargets = mismatchesByApp.keys.flatMap { appID in
                             resolvedTargets.filter { $0.record.windowID.appBundleID == appID }
                         }
 
