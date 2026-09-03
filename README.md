@@ -10,7 +10,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?logo=swift&logoColor=white)](https://swift.org)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-[Features](#-features) · [Installation](#-building-from-source) · [How it works](#️-how-it-works) · [Contributing](#-contributing)
+[Features](#-features) · [Installation](#Installation) · [How it works](#️-how-it-works) · [Contributing](#-contributing)
 
 </div>
 
@@ -49,12 +49,13 @@ It silently tracks your window positions in the background, and the moment it re
 
 ---
 
-## 🔧 Building from Source
+## 🔧 Installation
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/netanel3000fine/RememberMyWindowMac.git
-cd RememberMyWindowMac
+git clone https://github.com/netanel3000fine/RememberMyWindow.git
+cd RememberMyWindow
+
 
 # 2. Open the Xcode project
 open WindowLayout/RememberMyWindows.xcodeproj
@@ -63,6 +64,8 @@ open WindowLayout/RememberMyWindows.xcodeproj
 Then in Xcode:
 1. Select your **Development Team** under *Signing & Capabilities*
 2. Press **⌘R** to build and run
+
+Or just download the latest DMG file 
 
 ### Required Permissions
 
