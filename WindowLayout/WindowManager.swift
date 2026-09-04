@@ -674,8 +674,21 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         didPerformLaunchRestore = true
         log("Live layout server ready. Scheduling launch full restore after settling delay...", level: .necessary, type: .restore)
 
+        // Held from the moment the restore is scheduled, not from the moment it
+        // starts. Only this branch raises it: the two guards above return without
+        // scheduling anything, and a capture taken when no restore is coming is
+        // the arrangement the user left the machine in, which is worth keeping.
+        //
+        // The delay below is the reason the hold cannot wait for `restore`. The
+        // capture that schedules this is still executing, and any further capture
+        // during the settling delay sees the desk the restore is about to replace.
+        restoresInFlight += 1
+
         Task { @MainActor [weak self] in
             guard let self = self else { return }
+            // Released here rather than by `restore`, which raises a hold of its
+            // own before this one drops, so the two never leave a gap.
+            defer { self.restoresInFlight -= 1 }
             // 1.75s settling delay to allow login apps to finish opening windows
             try? await Task.sleep(nanoseconds: 1_750_000_000)
 
@@ -1485,14 +1498,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // arrangement a restore is about to replace does not become the
         // arrangement it restores to.
         //
-        // The first capture after launch is skipped for that same reason one beat
-        // earlier. The launch restore is scheduled from this very capture and only
-        // runs a moment later, so no hold is up yet when the record would be made.
-        // What is on screen at that instant is how the apps happened to reopen,
-        // which is not an arrangement anyone chose, and the file already holds the
-        // one from the previous session. The next capture records normally.
+        // The launch case is covered by the same hold rather than by a separate
+        // rule. This used to skip the first capture outright, on the assumption
+        // that a launch restore always follows it. It does not:
+        // `triggerLaunchRestoreIfNeeded` returns without scheduling anything when
+        // onboarding has not been completed, and when no saved session matches the
+        // current displays. Skipping regardless threw away the one capture that
+        // holds the arrangement the user left the machine in, and the next thing
+        // to reach the file was whatever the desk looked like after it had been
+        // disturbed. Measured 2026-09-04: two windows on an external display were
+        // recorded only in that first capture, the display was then unplugged,
+        // macOS moved them to the built-in, and every later capture agreed with
+        // the move.
         if store.autoSaveEnabled && !isHandlingDisplayChange && !isSettlingContestedWindows
-            && !isRestoreInFlight && !isInitialServerCapture {
+            && !isRestoreInFlight {
             autoSaveStore?.record(records: currentWindows,
                                   screenKey: fp.key,
                                   readableScreenKey: fp.readableName)
