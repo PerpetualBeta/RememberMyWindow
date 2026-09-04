@@ -654,18 +654,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         guard UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") else { return }
 
         let fp = ScreenFingerprint.current()
-        let candidate: LayoutSnapshot?
-        if let defaultID = store.defaultSnapshotIDs[fp.key],
-           let snap = store.snapshots[defaultID], !snap.isAutoSave {
-            candidate = snap
-        } else {
-            candidate = store.snapshots.values
-                .filter { $0.screenKey == fp.key && !$0.isAutoSave }
-                .sorted { $0.updatedAt > $1.updatedAt }
-                .first
-        }
-
-        guard candidate != nil else {
+        // Asks the one place that knows how to choose, so the Auto layout wins
+        // here exactly as it does after a display change. This used to look only
+        // at hand-saved sessions, which made launching the app revert the desk to
+        // a checkpoint that could be days old — the opposite of what the setting
+        // promises, and the first thing a tester hit.
+        guard automaticRestoreSnapshot() != nil else {
             log("Launch restore: No saved layout for current display configuration (\(fp.readableName)), skipping auto-restore.", level: .moderate, type: .system)
             didPerformLaunchRestore = true
             return
@@ -694,7 +688,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
             guard self.isTracking else { return }
             self.log("🚀 Initiating launch full restore...", level: .necessary, type: .restore)
-            self.restoreNow()
+            self.restoreNow(automatic: true)
         }
     }
 
