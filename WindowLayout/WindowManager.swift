@@ -3362,7 +3362,17 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                                 attempt += 1
                                 try? await Task.sleep(nanoseconds: delay)
                                 guard let self, !contested.isEmpty else { return }
+                                // Whether a changed frame can be read as a person's
+                                // placement. It cannot while something else is moving
+                                // windows: a display change that is still settling, and a
+                                // restore held for another Space that fires when the user
+                                // arrives there, both move windows for reasons that have
+                                // nothing to do with the user's hand.
+                                let othersAreMovingWindows = self.settlingDisplayFingerprint != nil
+                                    || self.deferredRestoreCount > 0
                                 var stillContested: [(target: ResolvedTarget, wasAt: CGRect)] = []
+                                var settled = 0
+                                var abandoned = 0
                                 for entry in contested {
                                     let target = entry.target
                                     let wanted = target.targetFrame
@@ -3371,11 +3381,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
                                     if let live, Self.framesAgree(live, CGRect(x: wanted.origin.x, y: axY,
                                                                                width: wanted.width, height: wanted.height)) {
+                                        settled += 1
                                         continue   // it took
                                     }
-                                    if let live, !entry.wasAt.isNull, !Self.framesAgree(live, entry.wasAt) {
+                                    if let live, !entry.wasAt.isNull, !othersAreMovingWindows,
+                                       !Self.framesAgree(live, entry.wasAt) {
                                         self.log("↩︎ Leaving \(target.record.windowID.appName ?? "a window") where it was moved to.",
                                                  level: .verbose, type: .restore)
+                                        abandoned += 1
                                         continue   // somebody moved it on purpose
                                     }
 
@@ -3419,9 +3432,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                                     }
                                     stillContested.append((target: target, wasAt: live ?? entry.wasAt))
                                 }
-                                let settled = contested.count - stillContested.count
                                 if settled > 0 {
                                     self.log("✅ \(settled) contested window(s) settled into place.",
+                                             level: .moderate, type: .restore)
+                                }
+                                if abandoned > 0 {
+                                    self.log("↩︎ \(abandoned) window(s) left where they had been moved to.",
                                              level: .moderate, type: .restore)
                                 }
                                 contested = stillContested
