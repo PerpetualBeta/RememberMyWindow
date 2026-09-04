@@ -1529,6 +1529,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// window back on the wrong display while reporting success.
     private func holdingHeldWindows(_ records: [WindowRecord]) -> [WindowRecord] {
         guard let deferred = deferredRestore, !deferred.bundleIDs.isEmpty else { return records }
+        // A queue whose snapshot belongs to another display setup is already
+        // dead: `retryDeferredRestore` drops it at the next Space change. Until
+        // then it must not hold a frame back, because that frame describes a
+        // desk that is not in front of the user. The display setup can change
+        // without a restore replacing the queue, which is how a stale one
+        // survives: a resolution change with no capture for the new
+        // configuration schedules nothing.
+        guard deferred.snapshot.screenKey == currentFingerprint.key else { return records }
         // The queue is keyed by bundle identifier OR localised name, because that
         // is how records are matched elsewhere in this file.
         func isHeld(_ id: WindowID) -> Bool {
