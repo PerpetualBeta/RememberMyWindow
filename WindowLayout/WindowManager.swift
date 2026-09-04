@@ -1506,9 +1506,47 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // the move.
         if store.autoSaveEnabled && !isHandlingDisplayChange && !isSettlingContestedWindows
             && !isRestoreInFlight {
-            autoSaveStore?.record(records: currentWindows,
+            autoSaveStore?.record(records: holdingHeldWindows(currentWindows),
                                   screenKey: fp.key,
                                   readableScreenKey: fp.readableName)
+        }
+    }
+
+    /// The capture, with every window a restore is still waiting to place left at
+    /// the frame that restore intends for it.
+    ///
+    /// A held window is one a restore could not reach, because it sits on a Space
+    /// the user is not on. Nothing the user does can move it while it is held:
+    /// arriving at its Space is the event that releases the hold. So a change to
+    /// its frame in the meantime is not an arrangement anyone chose. macOS moves
+    /// windows off a display it is disconnecting, and that is what moves them.
+    ///
+    /// Measured 2026-09-04. One window was held for 143 minutes across two cable
+    /// events. Auto-save recorded it wherever macOS had left it, and by the end
+    /// every entry in the ring, and the per-window memory that never expires,
+    /// agreed on a position nobody had chosen. The restore waiting to correct it
+    /// then applied a snapshot that had gone stale the same way, and put the
+    /// window back on the wrong display while reporting success.
+    private func holdingHeldWindows(_ records: [WindowRecord]) -> [WindowRecord] {
+        guard let deferred = deferredRestore, !deferred.bundleIDs.isEmpty else { return records }
+        // The queue is keyed by bundle identifier OR localised name, because that
+        // is how records are matched elsewhere in this file.
+        func isHeld(_ id: WindowID) -> Bool {
+            deferred.bundleIDs.contains(id.appBundleID)
+                || (id.appName.map { deferred.bundleIDs.contains($0) } ?? false)
+        }
+        var intended: [WindowID: WindowRecord] = [:]
+        for r in deferred.snapshot.records where isHeld(r.windowID) {
+            intended[r.windowID] = r
+        }
+        guard !intended.isEmpty else { return records }
+        return records.map { live in
+            guard var keep = intended[live.windowID] else { return live }
+            // The identity and stacking order are the live ones; only the
+            // geometry is held back, so nothing downstream sees a new window.
+            keep.id = live.id
+            keep.zIndex = live.zIndex
+            return keep
         }
     }
 
