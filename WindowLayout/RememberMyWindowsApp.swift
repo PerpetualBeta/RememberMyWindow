@@ -249,7 +249,7 @@ final class QuickKeyRestoreManager {
 
             let targetAppID: String? = (frontAppID != nil && frontAppID != ourBundleID) ? frontAppID : nil
 
-            guard let snap = WindowManager.shared.currentApplicableSnapshot else {
+            guard let source = WindowManager.shared.automaticRestoreSnapshot(forAppLaunch: targetAppID) else {
                 WindowManager.shared.showNotchNotificationPublic(
                     title: String(format: lz("%@ is not in this layout"), frontAppName),
                     subtitle: triggerSubtitle ?? "",
@@ -262,12 +262,15 @@ final class QuickKeyRestoreManager {
                 return
             }
 
-            if let targetID = targetAppID, snap.records.contains(where: { $0.windowID.appBundleID == targetID }) {
+            if let targetID = targetAppID, source.snapshot.records.contains(where: { $0.windowID.appBundleID == targetID }) {
                 WindowManager.shared.restore(
-                    snapshot: snap,
+                    snapshot: source.snapshot,
                     specificAppBundleID: targetID,
                     showNotification: true,
-                    skipCommandSend: false,
+                    // Geometry only from an Auto layout. It has no chosen foreground
+                    // app and no exclusions, so nothing justifies sending
+                    // Command+Shift+R into whatever happens to be focused.
+                    skipCommandSend: source.isAuto,
                     triggerSubtitle: triggerSubtitle
                 )
             } else {
@@ -457,7 +460,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Right-click: native menu bar highlight + white tint, then restore full layout
             animateRightClickStatusButton()
             MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
-            WindowManager.shared.restoreNow()
+            // No layout was named, so the Auto layout wins when it is switched on.
+            WindowManager.shared.restoreNow(automatic: true)
         } else {
             // Left-click sequence:
             // 1. Trigger dynamic action state
@@ -469,10 +473,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.lastFrontmostAppID = appID
             }
             
+            // A left click names an app, never a layout, so the Auto layout wins
+            // when it is switched on. `automaticRestoreSnapshot` already refuses a
+            // layout that holds no record for the app, which is the test that used
+            // to sit on the line below.
             if restoreOnLeftClick,
                let appID = lastFrontmostAppID,
-               let snap = WindowManager.shared.currentApplicableSnapshot,
-               snap.records.contains(where: { $0.windowID.appBundleID == appID }) {
+               let source = WindowManager.shared.automaticRestoreSnapshot(forAppLaunch: appID) {
+                let snap = source.snapshot
                 
                 let hasCommandShortcut = snap.commandExcludedBundleIDs.contains(appID)
                 
@@ -603,7 +611,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem.separator())
 
         if let snap = WindowManager.shared.currentApplicableSnapshot {
-            let restoreTitle = String(format: lz("Full Restore '%@'"), snap.displayName)
+            // Named after the layout the item will actually restore, which is the
+            // Auto layout while that is on. `snap` stays the saved session for the
+            // update item below, because there is nothing to update on an Auto
+            // layout.
+            let restoreSource = WindowManager.shared.automaticRestoreSnapshot()?.snapshot ?? snap
+            let restoreTitle = String(format: lz("Full Restore '%@'"), restoreSource.displayName)
             let restoreItem = menu.addItem(withTitle: restoreTitle, action: #selector(restoreNow), keyEquivalent: "r")
             restoreItem.image = menuSymbolImage("arrow.counterclockwise")
 
@@ -811,14 +824,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func restoreNow() {
-        WindowManager.shared.restoreNow()
+        WindowManager.shared.restoreNow(automatic: true)
     }
 
     @objc private func restoreSelected() {
         if let key = WindowManager.shared.selectedSnapshotKey {
             WindowManager.shared.restore(key: key)
         } else {
-            WindowManager.shared.restoreNow()
+            WindowManager.shared.restoreNow(automatic: true)
         }
     }
 
@@ -831,8 +844,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func restoreSpecificApp(_ sender: NSMenuItem) {
         guard let bundleID = sender.representedObject as? String,
-              let snap = WindowManager.shared.currentApplicableSnapshot else { return }
-        WindowManager.shared.restore(snapshot: snap, specificAppBundleID: bundleID)
+              let source = WindowManager.shared.automaticRestoreSnapshot(forAppLaunch: bundleID) else { return }
+        WindowManager.shared.restore(snapshot: source.snapshot,
+                                     specificAppBundleID: bundleID,
+                                     skipCommandSend: source.isAuto)
     }
 
     @objc private func checkForUpdates() {
