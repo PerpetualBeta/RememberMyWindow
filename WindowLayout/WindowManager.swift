@@ -1480,10 +1480,17 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         // Opt-in, and it writes its own file — a drag never reaches layouts.json.
-        // Held off while a display change is being handled, so the arrangement
-        // the restore is about to undo does not become the arrangement it
-        // restores to.
-        if store.autoSaveEnabled && !isHandlingDisplayChange {
+        // Held off while a display change is being handled, and for the length of
+        // any restore, so the arrangement a restore is about to replace does not
+        // become the arrangement it restores to.
+        //
+        // The first capture after launch is skipped for that same reason one beat
+        // earlier. The launch restore is scheduled from this very capture and only
+        // runs a moment later, so no hold is up yet when the record would be made.
+        // What is on screen at that instant is how the apps happened to reopen,
+        // which is not an arrangement anyone chose, and the file already holds the
+        // one from the previous session. The next capture records normally.
+        if store.autoSaveEnabled && !isHandlingDisplayChange && !isRestoreInFlight && !isInitialServerCapture {
             autoSaveStore?.record(records: currentWindows,
                                   screenKey: fp.key,
                                   readableScreenKey: fp.readableName)
@@ -1827,6 +1834,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// to release.
     private var isHandlingDisplayChange = false
     private var displayChangeGeneration = 0
+
+    /// Suppresses auto-save for the length of a restore. `isHandlingDisplayChange`
+    /// covers the restore a display change asks for; this covers every other one,
+    /// including the full restore RememberMyWindows performs at launch. A count
+    /// rather than a flag, so a single-app restore finishing does not release the
+    /// hold a full restore is still relying on.
+    private var restoresInFlight = 0
+    private var isRestoreInFlight: Bool { restoresInFlight > 0 }
 
     @objc private func screensChanged() {
         let newFP = ScreenFingerprint.current()
@@ -3149,8 +3164,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
 
+        // Every restore funnels through here, so this is the one place the hold
+        // has to be raised. The class is @MainActor, so the Task below inherits
+        // that isolation and `defer` releases the hold on every path out of it,
+        // including the early returns.
+        restoresInFlight += 1
 
         Task {
+            defer { self.restoresInFlight -= 1 }
             let runningApps = Dictionary(
                 NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) },
                 uniquingKeysWith: { _, new in new }
