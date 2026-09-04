@@ -31,6 +31,8 @@ swiftc -parse-as-library \
     WindowLayout/ScreenFingerprint.swift \
     WindowLayout/WindowSpaces.swift \
     WindowLayout/WindowRecord.swift \
+    WindowLayout/AutoSaveStore.swift \
+    WindowLayout/AutoLayoutHeroCard.swift \
     WindowLayout/LayoutsView.swift \
     WindowLayout/ActivityView.swift \
     WindowLayout/SettingsView.swift \
