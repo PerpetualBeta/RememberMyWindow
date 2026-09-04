@@ -1480,9 +1480,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         // Opt-in, and it writes its own file — a drag never reaches layouts.json.
-        // Held off while a display change is being handled, and for the length of
-        // any restore, so the arrangement a restore is about to replace does not
-        // become the arrangement it restores to.
+        // Held off while a display change is being handled, while contested
+        // windows are still settling, and for the length of any restore, so the
+        // arrangement a restore is about to replace does not become the
+        // arrangement it restores to.
         //
         // The first capture after launch is skipped for that same reason one beat
         // earlier. The launch restore is scheduled from this very capture and only
@@ -1490,7 +1491,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // What is on screen at that instant is how the apps happened to reopen,
         // which is not an arrangement anyone chose, and the file already holds the
         // one from the previous session. The next capture records normally.
-        if store.autoSaveEnabled && !isHandlingDisplayChange && !isRestoreInFlight && !isInitialServerCapture {
+        if store.autoSaveEnabled && !isHandlingDisplayChange && !isSettlingContestedWindows
+            && !isRestoreInFlight && !isInitialServerCapture {
             autoSaveStore?.record(records: currentWindows,
                                   screenKey: fp.key,
                                   readableScreenKey: fp.readableName)
@@ -1712,6 +1714,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var screenChangeTask: Task<Void, Never>?
     private var pendingConnectedNames: Set<String> = []
 
+    /// Suppresses auto-save while a display change is being handled, and a
+    /// counter so a superseded task can tell whether the hold is still its own
+    /// to release.
+    private var isHandlingDisplayChange = false
+    private var displayChangeGeneration = 0
+
     /// True while contested windows are still being re-applied.
     ///
     /// Nothing should record the desk while this is set: it is not an
@@ -1828,13 +1836,6 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// mid-flap restored a single-display layout over a two-display desk and
     /// dragged the user's windows off the external screen.
     private static let displaySettleInterval: UInt64 = 2_000_000_000
-
-    /// Suppresses auto-save while a display change is being handled, and a
-    /// counter so a superseded task can tell whether the hold is still its own
-    /// to release.
-    private var isHandlingDisplayChange = false
-    private var displayChangeGeneration = 0
-
     /// Suppresses auto-save for the length of a restore. `isHandlingDisplayChange`
     /// covers the restore a display change asks for; this covers every other one,
     /// including the full restore RememberMyWindows performs at launch. A count
@@ -1843,12 +1844,26 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var restoresInFlight = 0
     private var isRestoreInFlight: Bool { restoresInFlight > 0 }
 
+
     @objc private func screensChanged() {
         let newFP = ScreenFingerprint.current()
 
         if currentFingerprint == newFP && settlingDisplayFingerprint == nil {
             log("🖥️ Display parameters changed (e.g. transparency), but physical configuration is identical. Ignoring.", level: .verbose, type: .system)
             return
+        }
+
+        // Raised here, not in the settled half. The gap between the two is a
+        // window where the fingerprint has already become the arriving
+        // configuration while the windows are still where the departing one
+        // left them, and a capture landing there overwrites the layout the
+        // restore is about to apply.
+        if settlingDisplayFingerprint == nil {
+            isHandlingDisplayChange = true
+            displayChangeGeneration += 1
+            // Not deferred to the settle: the arrangement being preserved is the
+            // one made before any of this started.
+            autoSaveStore?.flush()
         }
 
         settlingDisplayFingerprint = newFP
@@ -1873,6 +1888,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         if oldFP == newFP {
             log("🖥️ Display configuration settled back to \(newFP.readableName) — nothing to do",
                 level: .verbose, type: .system)
+            isHandlingDisplayChange = false
             return
         }
 
@@ -1887,7 +1903,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // faithfully restored a snapshot that predated half of it. The trailing
         // flush cannot cover this — it aims at `lastWrite + interval`, and a
         // display change arrives first.
-        autoSaveStore?.flush()
+        //
+        // Done by `screensChanged` on the first notification, because by the
+        // time this runs the settle has already elapsed.
 
         let hasSavedSession = store.snapshots.values.contains { $0.screenKey == newKey && !$0.isAutoSave }
         // Auto captures count too. This gate predates the auto layout and asked
@@ -1935,16 +1953,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             if !willRestore { isHandlingDisplayChange = false }
         }
 
-        // Hold auto-save from here, not from inside the task. Between a display
-        // change being noticed and the restore finishing, the fingerprint has
-        // already become the arriving configuration while the windows are still
-        // where the departing one left them. A capture landing in that gap is
-        // filed under the NEW key and overwrites the very layout the restore is
-        // about to apply — measured, and it cost five windows on an external
-        // display that then "restored" to nothing.
-        isHandlingDisplayChange = true
-        displayChangeGeneration += 1
-
+        // The hold is already up: `screensChanged` raises it on the first
+        // notification, which is earlier than here by the length of the settle.
         if store.autoRestoreEnabled && (hasSavedSession || hasAutoCapture) {
             willRestore = true
             screenChangeTask?.cancel()
