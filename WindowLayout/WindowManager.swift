@@ -3345,6 +3345,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         // the next restore reproduces.
                         self.isSettlingContestedWindows = true
                         Task { [weak self] in
+                            // Released on every path out, not just the end of the
+                            // loop. The loop returns early the moment the last
+                            // contested window takes its frame, which is the
+                            // success case and the common one, and a hold left set
+                            // there stops auto-save recording for the rest of the
+                            // session.
+                            defer { self?.isSettlingContestedWindows = false }
                             var contested = stubborn.map { (target: $0, wasAt: CGRect.null) }
                             var attempt = 0
                             // Announced once, not once per window and not once
@@ -3419,7 +3426,6 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                                 }
                                 contested = stillContested
                             }
-                            self?.isSettlingContestedWindows = false
                             if let self, !contested.isEmpty {
                                 self.log("⚠️ \(contested.count) window(s) kept their own frame; the app is overriding the layout.",
                                          level: .moderate, type: .restore)
