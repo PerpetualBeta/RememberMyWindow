@@ -220,8 +220,72 @@ struct NotchNotificationView: View {
         return themeColor.color ?? Color(red: 0.2, green: 0.9, blue: 0.5)
     }
 
+    // MARK: - Layout metrics
+    //
+    // Named once, and read by both the layout below and the fit test under them.
+    // A second copy of these numbers is what let the fit test drift away from the
+    // layout it was supposed to describe.
+    private var edgeInset: CGFloat { isCompact ? 8 : 14 }
+    private var rowGap: CGFloat { isCompact ? 8 : 10 }
+    private var badgeGap: CGFloat { 6 }
+    private var iconSide: CGFloat { isCompact ? 18 : 22 }
+    private var iconInset: CGFloat { isCompact ? 8 : 12 }
+    private var titleSize: CGFloat { isCompact ? 11 : 12.5 }
+
+    /// The face `.system(size:weight:design:)` resolves to, so a string can be
+    /// measured with the one that will draw it.
+    private static func systemFont(size: CGFloat, design: NSFontDescriptor.SystemDesign) -> NSFont {
+        let base = NSFont.systemFont(ofSize: size, weight: .bold)
+        guard let descriptor = base.fontDescriptor.withDesign(design),
+              let font = NSFont(descriptor: descriptor, size: size) else { return base }
+        return font
+    }
+
+    private static func drawnWidth(_ text: String, font: NSFont) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    /// What the subtitle badge takes out of the row it shares with the title.
+    private var badgeWidth: CGFloat {
+        guard isCompact, !data.subtitle.isEmpty,
+              NotchNotificationWindow.isAllowedSubtitle(data.subtitle) else { return 0 }
+        let isSymbol = data.subtitle.contains("⇪")
+        let font = Self.systemFont(size: isSymbol ? 13 : 9.5,
+                                   design: isSymbol ? .default : .monospaced)
+        return badgeGap + Self.drawnWidth(data.subtitle, font: font) + (isSymbol ? 6 : 5.5) * 2
+    }
+
+    /// Width left for the title once the centred layout has taken its share.
+    ///
+    /// The centred layout is `icon | Spacer | text | Spacer | balance space`. The
+    /// balance space matches the leading icon so the title sits in the middle of
+    /// the pill, and it plus the two extra gaps cost the title 38pt at compact
+    /// size that the left-aligned layout would have given it.
+    private var centredTitleWidth: CGFloat {
+        pillWidth
+            - edgeInset * 2
+            - (iconInset + iconSide)    // the leading icon
+            - rowGap * 4                // icon | Spacer | text | Spacer | balance
+            - (iconSide + iconInset)    // the balance space
+            - badgeWidth
+    }
+
+    /// True when the title really fits the centred layout.
+    ///
+    /// This was `data.title.count <= 18`. A character count cannot answer the
+    /// question, because the centred layout is the narrower of the two: on a
+    /// 180pt pill it runs out at 15 lowercase "n" or at 9 capital "W", and the
+    /// count allowed 18 of either. So the titles needing the most room were the
+    /// ones sent to the branch with the least.
+    ///
+    /// Reported by Netanel on a MacBook Air 15-inch, 2026-09-04, and measured
+    /// here: "Telegram Restored" is 17 characters, draws at 103pt, and was given
+    /// 100pt. It was cut to "Telegram Resto…" with the right of the pill empty.
     private var isShortText: Bool {
-        isCompact && data.title.count <= 18
+        guard isCompact else { return false }
+        return Self.drawnWidth(data.title,
+                               font: Self.systemFont(size: titleSize, design: .rounded))
+            <= centredTitleWidth
     }
 
     var body: some View {
@@ -255,7 +319,7 @@ struct NotchNotificationView: View {
             }
             .frame(width: pillWidth, height: pillHeight)
 
-            HStack(spacing: isCompact ? 8 : 10) {
+            HStack(spacing: rowGap) {
                 // Far-Left Icon/Dot dropping down from top-left
                 Group {
                     if let icon = data.appIcon ?? (data.bundleID.flatMap { bID in
@@ -266,7 +330,7 @@ struct NotchNotificationView: View {
                             .resizable()
                             .interpolation(.high)
                             .antialiased(true)
-                            .frame(width: isCompact ? 18 : 22, height: isCompact ? 18 : 22)
+                            .frame(width: iconSide, height: iconSide)
                             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                             .shadow(color: accentColor.opacity(0.4), radius: 3)
                             .offset(y: iconDrop ? 0 : -35)
@@ -299,16 +363,16 @@ struct NotchNotificationView: View {
                         .animation(.spring(response: 0.42, dampingFraction: 0.65), value: iconDrop)
                     }
                 }
-                .padding(.leading, isCompact ? 8 : 12)
+                .padding(.leading, iconInset)
 
                 if isShortText {
                     Spacer(minLength: 0)
                 }
 
-                HStack(spacing: 6) {
+                HStack(spacing: badgeGap) {
                     VStack(alignment: isShortText ? .center : .leading, spacing: 1) {
                         Text(data.title)
-                            .font(.system(size: isCompact ? 11 : 12.5, weight: .bold, design: .rounded))
+                            .font(.system(size: titleSize, weight: .bold, design: .rounded))
                             .foregroundColor(.white)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
@@ -358,13 +422,13 @@ struct NotchNotificationView: View {
 
                     // Symmetrical balance space matching the leading icon + padding
                     Color.clear
-                        .frame(width: isCompact ? 18 : 22, height: isCompact ? 18 : 22)
-                        .padding(.trailing, isCompact ? 8 : 12)
+                        .frame(width: iconSide, height: iconSide)
+                        .padding(.trailing, iconInset)
                 } else {
                     Spacer(minLength: 4)
                 }
             }
-            .padding(.horizontal, isCompact ? 8 : 14)
+            .padding(.horizontal, edgeInset)
             .padding(.bottom, isCompact ? 4 : 8)
             .frame(height: isCompact ? 26 : 40)
             .opacity(appeared ? 1.0 : 0.0)
