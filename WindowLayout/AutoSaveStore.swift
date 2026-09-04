@@ -99,7 +99,21 @@ final class AutoSaveStore: ObservableObject {
     /// while true, for the same reason `WindowManager.persist()` refuses.
     @Published private(set) var isUnreadable = false
 
-    var latest: AutoSaveEntry? { entries.first }
+    /// The newest capture, which is the one still inside the coalescing interval
+    /// whenever there is one.
+    ///
+    /// Reading only what had reached disk made a restore undo a deliberate move.
+    /// Drag a window, press Restore within the interval, and the arrangement
+    /// applied was the one from before the drag, because that was the newest
+    /// entry on disk. The automatic paths never saw this: a display change
+    /// flushes before it restores. Every restore the user asks for by hand did.
+    var latest: AutoSaveEntry? { pending ?? entries.first }
+
+    /// Every capture a caller can reach, newest first.
+    ///
+    /// The unwritten one belongs at the front, so `first` is `latest` and any
+    /// walk that skips the first entry skips the one already tried.
+    var visibleEntries: [AutoSaveEntry] { pending.map { [$0] + entries } ?? entries }
 
     private let fileURL: URL
     private var pending: AutoSaveEntry?

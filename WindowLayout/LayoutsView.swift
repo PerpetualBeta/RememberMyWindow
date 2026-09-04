@@ -233,7 +233,11 @@ struct SnapshotListView: View {
     /// Thin adapter. The card itself takes plain values so it can be rendered
     /// and looked at without a WindowManager behind it.
     private var autoLayoutHero: some View {
-        let entries = manager.autoSaveStore?.entries ?? []
+        // The unwritten capture is included, so the card describes the same
+        // arrangement the Restore button would apply. `pending` is not published,
+        // so the label can be up to one tick behind; the tick below is what moves
+        // it, and the age it shows is approximate anyway.
+        let entries = manager.autoSaveStore?.visibleEntries ?? []
         let entry = entries.first
         let currentKey = manager.currentFingerprint.key
         // Ticked once a minute. `now` was injectable so both states could be

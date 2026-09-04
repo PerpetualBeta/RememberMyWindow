@@ -1362,7 +1362,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             // the most recent capture that belongs to the screens actually here —
             // which, measured on a reconnect, was sitting two slots back with all
             // 21 windows in the right places.
-            for entry in (autoSaveStore?.entries ?? []).dropFirst() {
+            for entry in (autoSaveStore?.visibleEntries ?? []).dropFirst() {
                 if let earlier = snapshot(from: entry), holdsTarget(earlier) {
                     log("Using an earlier auto capture\(bundleID.map { " for \($0)" } ?? "") — the newest one does not apply",
                         level: .verbose, type: .autoSave)
@@ -1394,7 +1394,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// refresh a form or toggle reader mode in an unrelated app. The empty
     /// `commandExcludedBundleIDs` below blocks the same path a second time.
     func restoreAutoLayout(entryID: UUID? = nil, showNotification: Bool = true) {
-        let chosen = entryID.flatMap { id in autoSaveStore?.entries.first { $0.id == id } }
+        let chosen = entryID.flatMap { id in autoSaveStore?.visibleEntries.first { $0.id == id } }
             ?? autoSaveStore?.latest
         guard let entry = chosen else {
             log("No auto layout recorded yet", level: .moderate, type: .autoSave)
