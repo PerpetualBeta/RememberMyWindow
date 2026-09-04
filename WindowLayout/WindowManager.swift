@@ -3725,7 +3725,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // The live layout is built from CGWindowList, so it is the source of truth for the
                 // frames that macOS has actually committed. Run verification and minor nudge corrections
                 // quietly in the background so full restore never hangs waiting on Space transitions.
+                //
+                // The restore hold is handed over to this task rather than ending with
+                // the placement pass. Verification runs up to twenty correction passes
+                // and moves windows the whole time, so the desk is not an arrangement
+                // yet. Measured 2026-09-04: the outer task released the hold when it
+                // spawned this one, a capture landed 200ms later, and the four windows
+                // still held for another Space were recorded at their old frames.
+                restoresInFlight += 1
                 Task {
+                    defer { self.restoresInFlight -= 1 }
                     self.log("🔎 Verifying each restored app against the live WindowServer layout...", level: .verbose, type: .restore)
                     func isFrameClose(to target: CGRect, current: CGRect, tolerance: CGFloat = 15.0) -> Bool {
                         abs(current.origin.x - target.origin.x) <= tolerance &&
