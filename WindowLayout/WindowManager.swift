@@ -1019,6 +1019,42 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// next full restore and emptied when its apps quit, so it cannot outlive
     /// the arrangement it belongs to.
     func retryDeferredRestore(reason: String) {
+        restoreReachableHeldApps(reason: reason)
+        scheduleDeferredRecheck()
+    }
+
+    /// When to look again for held apps after a Space change.
+    ///
+    /// Reachability is one instantaneous read of `AXWindows`, taken when the
+    /// Space-change notification arrives, and accessibility does not always
+    /// answer for an app at that instant. Measured 2026-09-04: two apps sat side
+    /// by side on the same Space, the notification found one of them, and the
+    /// other reported a window 26 milliseconds later. Nothing tried it again,
+    /// because a Space change is the only trigger and it had already happened,
+    /// so it stayed on the wrong display for the rest of the session.
+    private static let deferredRecheckDelays: [UInt64] = [
+        500_000_000, 1_500_000_000, 3_000_000_000,
+    ]
+    private var deferredRecheckTask: Task<Void, Never>?
+
+    /// Looks again a few times, and stops as soon as nothing is held.
+    private func scheduleDeferredRecheck() {
+        guard deferredRestore != nil else { return }
+        deferredRecheckTask?.cancel()
+        deferredRecheckTask = Task { @MainActor [weak self] in
+            for delay in Self.deferredRecheckDelays {
+                try? await Task.sleep(nanoseconds: delay)
+                // A cancelled sleep throws, `try?` swallows it, and the loop
+                // would otherwise run every remaining round back to back.
+                if Task.isCancelled { return }
+                guard let self, self.deferredRestore != nil else { return }
+                self.restoreReachableHeldApps(reason: "a held window became reachable")
+            }
+        }
+    }
+
+    /// Restores every held app that can be reached now, and forgets it.
+    private func restoreReachableHeldApps(reason: String) {
         guard let deferred = deferredRestore, !deferred.bundleIDs.isEmpty else { return }
         guard deferred.snapshot.screenKey == currentFingerprint.key else {
             log("Dropping \(deferredRestoreCount) held window(s) — the display setup changed",
@@ -1044,6 +1080,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         guard !reachable.isEmpty else { return }
         log("\(reason) — restoring \(reachable.count) app(s) held from the last restore",
             level: .necessary, type: .restore)
+        // Dropped from the queue before the restores run, so a re-check that
+        // fires while they are still settling does not move the same window a
+        // second time.
+        var remaining = deferred
+        for bundleID in reachable { remaining.bundleIDs.remove(bundleID) }
+        deferredRestore = remaining.bundleIDs.isEmpty ? nil : remaining
         for bundleID in reachable {
             restore(snapshot: deferred.snapshot,
                     animated: store.restoreAnimated,
