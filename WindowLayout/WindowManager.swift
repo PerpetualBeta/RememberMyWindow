@@ -1506,14 +1506,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // the move.
         if store.autoSaveEnabled && !isHandlingDisplayChange && !isSettlingContestedWindows
             && !isRestoreInFlight {
-            autoSaveStore?.record(records: holdingHeldWindows(currentWindows),
+            autoSaveStore?.record(records: holdingHeldWindows(currentWindows, screenKey: fp.key),
                                   screenKey: fp.key,
                                   readableScreenKey: fp.readableName)
         }
     }
 
     /// The capture, with every window a restore is still waiting to place left at
-    /// the frame that restore intends for it.
+    /// the frame the auto layout last recorded for it.
     ///
     /// A held window is one a restore could not reach, because it sits on a Space
     /// the user is not on. Nothing the user does can move it while it is held:
@@ -1524,18 +1524,21 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// Measured 2026-09-04. One window was held for 143 minutes across two cable
     /// events. Auto-save recorded it wherever macOS had left it, and by the end
     /// every entry in the ring, and the per-window memory that never expires,
-    /// agreed on a position nobody had chosen. The restore waiting to correct it
-    /// then applied a snapshot that had gone stale the same way, and put the
-    /// window back on the wrong display while reporting success.
-    private func holdingHeldWindows(_ records: [WindowRecord]) -> [WindowRecord] {
+    /// agreed on a position nobody had chosen.
+    ///
+    /// The frame comes from the auto layout's own previous capture, never from
+    /// the snapshot the pending restore is going to apply. That restore may be
+    /// applying a hand-saved session, and one on this machine holds thirteen
+    /// records sharing a single fallback frame. Reading geometry from it here
+    /// wrote a two-day-old stacked layout into the auto layout as though it had
+    /// been observed, which is how the first version of this fix made things
+    /// worse rather than better.
+    private func holdingHeldWindows(_ records: [WindowRecord], screenKey: String) -> [WindowRecord] {
         guard let deferred = deferredRestore, !deferred.bundleIDs.isEmpty else { return records }
         // A queue whose snapshot belongs to another display setup is already
-        // dead: `retryDeferredRestore` drops it at the next Space change. Until
-        // then it must not hold a frame back, because that frame describes a
-        // desk that is not in front of the user. The display setup can change
-        // without a restore replacing the queue, which is how a stale one
-        // survives: a resolution change with no capture for the new
-        // configuration schedules nothing.
+        // dead: `retryDeferredRestore` drops it at the next Space change. Those
+        // windows are not being held for the desk in front of the user, so
+        // nothing should be held back for them.
         guard deferred.snapshot.screenKey == currentFingerprint.key else { return records }
         // The queue is keyed by bundle identifier OR localised name, because that
         // is how records are matched elsewhere in this file.
@@ -1543,13 +1546,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             deferred.bundleIDs.contains(id.appBundleID)
                 || (id.appName.map { deferred.bundleIDs.contains($0) } ?? false)
         }
-        var intended: [WindowID: WindowRecord] = [:]
-        for r in deferred.snapshot.records where isHeld(r.windowID) {
-            intended[r.windowID] = r
-        }
-        guard !intended.isEmpty else { return records }
+        // The newest capture for this configuration, which is the one this
+        // capture is about to replace. Each capture inherits from the last, so a
+        // held window's frame stays frozen from the moment the hold began.
+        guard let previous = autoSaveStore?.visibleEntries.first(where: { $0.screenKey == screenKey })
+        else { return records }
+        var kept: [WindowID: WindowRecord] = [:]
+        for r in previous.records where isHeld(r.windowID) { kept[r.windowID] = r }
+        guard !kept.isEmpty else { return records }
         return records.map { live in
-            guard var keep = intended[live.windowID] else { return live }
+            guard var keep = kept[live.windowID] else { return live }
             // The identity and stacking order are the live ones; only the
             // geometry is held back, so nothing downstream sees a new window.
             keep.id = live.id
