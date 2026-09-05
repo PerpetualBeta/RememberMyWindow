@@ -4,9 +4,20 @@
 
 # RememberMyWindows
 
-**A native macOS app that remembers where your windows were — and puts them back.** [Features](#-features) · [Installation](#-installation) · [How it works](#️-how-it-works) ·  [Contributing](#-contributing) 
+**A native macOS app that remembers where your windows were — and puts them back.**
 
-[![macOS](https://img.shields.io/badge/macOS-15.0%2B-blue?logo=apple&logoColor=white)](https://www.apple.com/macos/) [![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?logo=swift&logoColor=white)](https://swift.org) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[Features](#-features) · [Installation](#-installation) · [How it works](#️-how-it-works) · [Project Structure](#-project-structure) · [Contributing](#-contributing)
+
+[![Release](https://img.shields.io/github/v/release/netanel3000fine/RememberMyWindow?color=brightgreen&logo=github)](https://github.com/netanel3000fine/RememberMyWindow/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-14.0%2B-blue?logo=apple&logoColor=white)](https://www.apple.com/macos/)
+[![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?logo=swift&logoColor=white)](https://swift.org)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
+<br/>
+
+<a href="https://github.com/netanel3000fine/RememberMyWindow/releases/latest">
+  <img src="https://img.shields.io/badge/Download_Latest_Release-DMG_%26_ZIP-007AFF?style=for-the-badge&logo=apple&logoColor=white" alt="Download DMG"/>
+</a>
 
 </div>
 
@@ -14,191 +25,199 @@
 
 ## ✨ What it does
 
-Every time you plug in a monitor, disconnect from a dock, or rearrange your displays — your windows end up in the wrong place. **RememberMyWindows** fixes that.
+Every time you plug in a monitor, disconnect from a dock, wake from sleep, or rearrange your displays — macOS scatters your windows across screens. **RememberMyWindows** fixes that seamlessly.
 
-It silently tracks your window positions in the background, and the moment it recognises your display setup, it puts every window exactly where you left it.
+It continuously tracks window arrangements in the background. The moment it recognises your display setup, it restores every window across every application to its exact saved size and position.
 
-<img width="1419" height="893" alt="Screenshot of RememberMyWindows" src="https://github.com/user-attachments/assets/4fcaa48b-c658-46eb-afff-776e05e02ebd" />
+<div align="center">
+  <img width="1419" height="893" alt="Screenshot of RememberMyWindows" src="https://github.com/user-attachments/assets/4fcaa48b-c658-46eb-afff-776e05e02ebd" />
+</div>
 
 ---
 
 ## 🚀 Features
 
-| Feature | Description |
-|---|---|
-| 🖥️ **Screen Fingerprinting** | Identifies every display by hardware ID — layouts are tied to your exact physical monitors |
-| 💾 **Auto-Save** | Records window positions as you move or resize them (800ms debounce, no disk spam) |
-| 🗂️ **Persistent Auto Layout** | Optional. Keeps that live arrangement across quits, sleep and reboots in its own file, so a restart does not cost you the layout you were working in. Off by default — turn it on in Settings |
-| ♻️ **Auto-Restore** | When a known display configuration reconnects, your saved layout is applied automatically |
-| 🏷️ **Named Layouts** | Create, rename, and manage multiple layouts per screen configuration |
-| ⌨️ **Quick Restore Shortcut** | Trigger a restore instantly with a keyboard shortcut |
-| 🔔 **Notch Notifications** | Subtle notch-style alerts keep you informed without interrupting your flow |
-| 📋 **Live Activity Log** | See every tracking event in real time |
-| 🌙 **Dark Mode & Themes** | Fully native, looks great in light and dark mode |
-| 🌍 **English & Hebrew** | Fully localised UI with automatic language detection |
+### 🖥️ Display & Window Intelligence
+- **Screen Fingerprinting**: Identifies display arrangements by hardware IDs and physical resolutions — layouts are uniquely matched to your exact monitors.
+- **Multi-Space Awareness (WindowServer)**: Directly queries macOS WindowServer (`CGSCopySpacesForWindows`) to distinguish open windows on other Spaces from closed windows, deferring restoration until you navigate to that Space.
+- **Cable & Reconnect Debounce**: Automatically debounces rapid display plug/unplug events, waiting for screen configurations to settle before applying layouts.
+- **Contested Window Recovery**: Wins back stubborn windows from apps that try to fight the restore layout, using retry backoff and gentle multi-display nudging.
+- **Edge Overhang Preservation**: Preserves windows deliberately positioned partially over display borders on matching setups.
+
+### 💾 Auto-Save & Named Layouts
+- **Live Auto-Save**: Automatically records window moves and resizes with an 800ms debounce buffer (no unnecessary disk writes).
+- **Persistent Auto Layout**: Keeps a rolling 5-entry history across restarts and sleep in `auto-layout.json`, with a dedicated hero card in the UI.
+- **Named Layout Presets**: Create, rename, snapshot, and manually restore custom named layouts per monitor configuration.
+- **Launch & Login Restore**: Optionally launches closed apps and automatically restores the full layout immediately when RememberMyWindows starts.
+
+### 🎛️ Control & Shortcuts
+- **Dual-Action Menu Bar**:
+  - **Left-click**: Restores the currently focused frontmost application and opens the window list.
+  - **Right-click**: Instantly triggers a full layout restore for all open applications.
+- **Desktop Toggle (Cmd+D)**: A Carbon-powered hotkey instantly hides/unhides all desktop windows (collapsing Finder windows) with optional automatic layout restore upon unhiding.
+- **Quick Key Restore**: Long-press `Fn` / Globe (🌐) or double-tap `⇪ Caps Lock` to restore layouts immediately.
+- **⌘⇧R Post-Restore Automation**: Automatically fires ⌘⇧R to active apps post-restore (e.g. Reader Mode in Safari, Hard Reload in Chrome, or Picture-in-Picture).
+
+### 🎨 Visuals, Audio & Localization
+- **Dynamic Notch Notifications**: Sleek pill-shaped alerts sliding down from the MacBook notch, with typography-measured sizing and physical bezel clearance.
+- **Interactive Soundboard**: Built-in sound library with Encore tones, classic macOS alerts, and meme effects, with per-event toggles and master volume control.
+- **Liquid Glass Interface & Themes**: Customizable primary accent hues and smooth translucent glass design.
+- **English & Hebrew Localization**: Complete bi-directional localization with native RTL layout support.
+- **Convenient GitHub Updates**: Built-in update checker with one-click in-app ZIP updates.
 
 ---
 
 ## 📋 Requirements
 
-- **macOS 15.0 (Sequoia)** or later
-- **Xcode 16+** (to build from source)
+- **macOS 14.0 (Sonoma)**, **macOS 15.0 (Sequoia)**, or later
+- **Apple Silicon (M-series)** or **Intel Mac**
+- **Xcode 15+** (if building from source)
 
 ---
 
 ## 🔧 Installation
+
+### Option 1: Pre-Built Download (Recommended)
+
+1. Download the latest **`RememberMyWindows.dmg`** from the **[Releases Page](https://github.com/netanel3000fine/RememberMyWindow/releases/latest)**.
+2. Open the DMG and drag **RememberMyWindows.app** to your **Applications** folder.
+3. Launch the app and follow the onboarding setup to grant permissions.
+
+### Option 2: Build from Source
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/netanel3000fine/RememberMyWindow.git
 cd RememberMyWindow
 
-# 2. Open the Xcode project
+# 2. Build and run with the shell script
+./Build-RememberMyWindows.sh
+
+# Or open in Xcode
 open WindowLayout/RememberMyWindows.xcodeproj
 ```
 
-Then in Xcode:
-1. Select your **Development Team** under *Signing & Capabilities*
-2. Press **⌘R** to build and run
+In Xcode:
+1. Select your target and **Signing & Capabilities** (select your development team).
+2. Press **⌘R** to build and run.
 
-Or just download the latest DMG file 
+---
 
-### Updates
+### 🔑 Required Permissions
 
-RememberMyWindows checks the latest public GitHub release automatically a few seconds after the app starts, at most once per day. You can also use **Check for Updates…** from the menu bar. Releases should include `RememberMyWindows.zip` alongside the DMG; the ZIP is used for the one-click update flow. Because releases are ad-hoc signed, macOS may ask users to approve the updated app once.
+On first launch, macOS will prompt you for the following permissions:
 
-### Required Permissions
+| Permission | Why it's needed | Where to manage |
+|---|---|---|
+| **Accessibility** | Required to read and reposition windows across third-party applications via `AXUIElement`. | *System Settings → Privacy & Security → Accessibility* |
+| **Automation / Apple Events** | Used for Desktop Toggle integration to collapse and restore Finder windows. | *System Settings → Privacy & Security → Automation* |
 
-On first launch, the app will prompt you for the following:
-
-| Permission | Why it's needed |
-|---|---|
-| **Accessibility** | To read and move windows in other apps *(System Settings → Privacy & Security → Accessibility)* |
-| **Automation / Apple Events** | Granted automatically on first use when restoring another app's window |
-
-> ℹ️ **Note:** Permissions can be revoked at any time in *System Settings → Privacy & Security*.
+> [!TIP]
+> Permissions can be reviewed and adjusted at any time in macOS **System Settings → Privacy & Security**.
 
 ---
 
 ## 🏗️ How it works
 
-### Screen Fingerprinting
-Each physical display has a unique `NSScreenNumber`. RememberMyWindows combines all connected screen IDs and resolutions into a fingerprint key:
+### 1. Screen Fingerprinting
+Each connected display provides a unique hardware ID and bounds. RememberMyWindows computes a composite fingerprint string representing your physical display topology:
 
-```
+```text
 12345678@2560x1600+87654321@2560x1440
 ```
 
-When your displays change, a new key is computed and matched against your saved layouts.
+When monitors connect, disconnect, or rearrange, a new fingerprint is computed and matched against your saved layout database.
 
-### Window Capture
-Uses `CGWindowListCopyWindowInfo` to snapshot all visible windows across all apps. Tiny utility windows under 50px are automatically ignored to keep the log clean.
+### 2. Multi-Space Window Capture
+Uses `CGWindowListCopyWindowInfo` paired with private WindowServer resolution (`CGSCopySpacesForWindows` via `dlsym`) to inspect open windows across all virtual Spaces. This guarantees:
+- Non-active Spaces don't register false window closures.
+- Minimized and hidden windows are recognized and respected.
+- Background utility elements under 50px are excluded.
 
-### Coordinate System
-- `CGWindowList` uses a **top-left** origin
-- `AppKit / NSWindow` uses a **bottom-left** origin
-- RememberMyWindows converts between them automatically using the primary screen height
+### 3. Native Accessibility Restoration Engine
+Unlike legacy AppleScript-based tools, RememberMyWindows uses native macOS Accessibility APIs (`AXUIElement`):
+- Direct nonisolated element handles allow adjusting multiple windows per application concurrently.
+- Re-verifies live geometry with WindowServer after repositioning.
+- Exponential backoff handles apps that contest window placement on display reconnection.
 
-### Restoring Other Apps
-Window positions in third-party apps are restored via AppleScript:
-
-```applescript
-tell application "AppName"
-    set bounds of front window to {x, y, x2, y2}
-end tell
-```
+### 4. Dual-Origin Coordinate Translation
+- macOS WindowServer / `CGWindowList` coordinates originate from the **top-left** of the primary display.
+- AppKit / `NSScreen` coordinates originate from the **bottom-left**.
+- RememberMyWindows translates between coordinate spaces in real time using the primary screen's visible frame height.
 
 ---
 
 ## 📁 Project Structure
 
-```
+```text
 RememberMyWindow/
-├── LICENSE                         ← GPLv3
-├── README.md                       ← You are here
-├── Build-RememberMyWindows.sh      ← Build script
-├── DMG-BuildandPackage.sh          ← DMG packaging script
-└── WindowLayout/                   ← All source code
-    ├── RememberMyWindows.xcodeproj
-    ├── RememberMyWindowsApp.swift  ← App entry point
-    ├── WindowManager.swift         ← Core tracking, save & restore engine
-    ├── ScreenFingerprint.swift     ← Display config identification
-    ├── WindowRecord.swift          ← Data models
-    ├── ContentView.swift           ← Main navigation shell
-    ├── LayoutsView.swift           ← Saved layouts browser
-    ├── SettingsView.swift          ← Preferences panel
-    ├── ActivityView.swift          ← Live event log
-    ├── NotchNotification.swift     ← Notch-style alerts
-    ├── ThemeManager.swift          ← Theme system
-    ├── Localization.swift          ← String localisation helpers
-    ├── Sounds/                     ← Notification sounds
-    ├── en.lproj/                   ← English strings
-    └── he.lproj/                   ← Hebrew strings
+├── LICENSE                             ← GNU General Public License v3.0
+├── README.md                           ← Project documentation
+├── CHANGELOG.md                        ← Detailed version history
+├── Build-RememberMyWindows.sh          ← Development compilation & signing script
+├── DMG-BuildandPackage.sh              ← DMG & ZIP release packager
+└── WindowLayout/                       ← Application source code
+    ├── RememberMyWindowsApp.swift      ← SwiftUI app lifecycle & menu bar setup
+    ├── WindowManager.swift             ← Core window tracking, save & restore engine
+    ├── WindowSpaces.swift              ← WindowServer Space query SPI (CGSCopySpacesForWindows)
+    ├── WindowRecord.swift              ← Data models for windows, layouts, and apps
+    ├── AutoSaveStore.swift             ← Continuous auto-save engine & ring buffer
+    ├── AutoLayoutHeroCard.swift        ← Interactive Auto Layout preview card
+    ├── ScreenFingerprint.swift         ← Display configuration identification
+    ├── DesktopToggleManager.swift      ← Cmd+D desktop toggle & window hide manager
+    ├── Hotkey.swift                    ← Carbon-based global keyboard shortcut engine
+    ├── NotchNotification.swift         ← Dynamic notch pill overlay notification
+    ├── CommandOverlayManager.swift     ← ⌘⇧R command trigger & visual overlay HUD
+    ├── WebAppDetector.swift            ← Web app, PWA, and browser detection
+    ├── MenuBarIconManager.swift        ← Menu bar icon styles, animations & theme tints
+    ├── UpdateManager.swift             ← GitHub release update checker & ZIP updater
+    ├── ThemeManager.swift              ← Accent colors, themes & Liquid Glass styling
+    ├── Localization.swift              ← Hebrew & English bi-directional translation
+    ├── ContentView.swift               ← Main settings & navigation shell
+    ├── LayoutsView.swift               ← Saved layouts & snapshots browser
+    ├── SettingsView.swift              ← Preferences & configuration panel
+    ├── ActivityView.swift              ← Real-time activity log viewer
+    ├── OnboardingView.swift            ← First-launch feature tour & setup wizard
+    ├── ShortcutMigrationView.swift     ← Legacy shortcut migration helper
+    ├── WindowPreviewComponents.swift   ← Minimap & display layout preview canvas
+    ├── Sounds/                         ← Curated notification audio assets (.m4a)
+    ├── en.lproj/                       ← English localization string catalog
+    └── he.lproj/                       ← Hebrew localization string catalog
 ```
 
 ---
 
 ## 💾 Data Storage
 
-Window layouts are saved locally to:
+All data is stored strictly locally on your Mac — no network analytics, no telemetry:
 
-```
-~/Library/Application Support/RememberMyWindows/layouts.json
-```
-
-With **Persistent Auto Layout** switched on, the rolling automatic capture is kept
-separately, so an ordinary window drag never rewrites your named layouts:
-
-```
-~/Library/Application Support/RememberMyWindows/auto-layout.json
+```text
+~/Library/Application Support/RememberMyWindows/
+├── layouts.json          ← Named snapshots & saved layout configurations
+└── auto-layout.json      ← Rolling 5-entry persistent auto-save ring buffer
 ```
 
-That file holds the five most recent captures rather than one, so a moment you did
-not mean to keep — closing everything before a meeting, say — does not cost you the
-arrangement before it. A capture whose window count collapses is refused outright.
-Writes are coalesced to at most one every 90 seconds, with a forced flush on quit,
-sleep and log-out.
-
-No data ever leaves your Mac. 📴
-
----
-
-## ⚠️ Known Limitations
-
-- **Background windows:** AppleScript can only restore the **frontmost window** of each app. Background windows require the app to be focused first.
-- **Sandboxed apps:** Some Mac App Store apps may reject Apple Events for security reasons.
-- **Multi-window restore:** Precise control over every window in every app could be achieved with `AXUIElement` (the Accessibility API) — a possible future enhancement (see comments in `WindowManager.swift`)
-
----
-
-## 🗺️ Roadmap
-
-- [ ] Restore **all** windows per app using the Accessibility API (`AXUIElement`)
-- [ ] Menu bar quick actions
-- [ ] Export / import layouts between Macs
+> [!NOTE]
+> No layout data, window titles, or credentials ever leave your machine. 📴
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are very welcome! This project is licensed under **GPLv3**, which means:
+Contributions are warmly welcomed! This project is licensed under **GPLv3**:
 
-- ✅ You can fork, modify, and redistribute
-- ✅ Your contributions stay open-source
-- ❌ You cannot redistribute closed-source or proprietary versions
+- ✅ You can fork, inspect, modify, and redistribute.
+- ✅ All derivative works remain free and open source.
+- ❌ Closed-source or proprietary redistribution is not permitted.
 
-Please open an **Issue** to discuss a bug or feature before submitting a **Pull Request**.
-
-> 💬 *Note: New interface strings should be submitted in English — the author will add Hebrew translations.*
+Feel free to open an **[Issue](https://github.com/netanel3000fine/RememberMyWindow/issues)** for feature suggestions or bug reports, or submit a **Pull Request**.
 
 ---
 
 ## 📄 License
 
-RememberMyWindows is licensed under the **GNU General Public License v3.0**.
-See [LICENSE](LICENSE) for the full text.
-
----
+RememberMyWindows is licensed under the **GNU General Public License v3.0**.  
+See [LICENSE](LICENSE) for full details.
 
 <div align="center">
 Made with ❤️ by <a href="https://github.com/netanel3000fine">Netanel</a>
