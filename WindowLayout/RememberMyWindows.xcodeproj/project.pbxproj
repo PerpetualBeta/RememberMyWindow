@@ -371,7 +371,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 13.4;
+				MARKETING_VERSION = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.netanel.remembermywindows;
 				PRODUCT_NAME = RememberMyWindows;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -404,7 +404,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 13.4;
+				MARKETING_VERSION = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.netanel.remembermywindows;
 				PRODUCT_NAME = RememberMyWindows;
 				SWIFT_EMIT_LOC_STRINGS = YES;

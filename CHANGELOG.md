@@ -2,6 +2,34 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v14.0] — 2026-09-05
+
+### 💾 "Always In Place: Auto-Save Meets Multi-Space"
+
+#### 🔄 Persistent Live Layout & Auto-Save Ring
+- **Persistent Auto-Save (`autosave.json`)**: Live arrangements are now saved continuously and reliably across sessions without expiration, giving you an automated safety net for every monitor setup.
+- **Auto Layout Hero Card**: A sleek hero card in LayoutsView gives you instant visibility and quick control over your live auto-saved layout.
+- **Closed & Minimized App Awareness**: Intelligently ignores closed windows while tracking minimized apps and windows across all workspaces, so quit apps return right where you left them.
+- **Diagnostic Log Mirroring**: Optional mirroring of real-time activity events to a persistent disk log for easier troubleshooting.
+
+#### 🌌 WindowServer Spaces Intelligence
+- **Deep Space Detection**: Dynamically queries macOS WindowServer private APIs via `dlsym` (`CGSCopySpacesForWindows`) to accurately distinguish live windows on other Spaces from stale/closed leftover windows.
+- **Space-Deferred Restoration**: Windows located on inactive Spaces are gracefully held in queue and restored smoothly the moment you navigate to that Space.
+
+#### 🔌 Unshakable Display Reconnects & Contested Window Recovery
+- **Cable Settle Buffer**: Automatically debounces rapid multi-event display reconfigurations on monitor plug/unplug, waiting for the screen list to stabilize before applying restorations.
+- **Contested Window Recovery**: Wins back stubborn windows from apps that try to fight the restore layout, using exponential retry backoff and gentle multi-display nudging.
+- **Edge Overhang Preservation**: Preserves intentional window positioning that hangs slightly off screen edges on matching displays instead of clamping them prematurely.
+
+#### 🔮 Dynamic Notch Fit & Physical Bezel Clearance
+- **Physical Bezel Clearance**: Added a verified 6pt side clearance (`notchClearance` default) so notch notification borders clear the physical camera housing on MacBook Pro displays.
+- **Dynamic Text Measurement**: Notch pill geometry now measures actual rendered title typography width rather than character counts for balanced margins.
+
+#### ⚡ Concurrency Hardening & Modern Swift
+- **Swift 6 Concurrency**: Resolved compiler warnings and concurrency boundary hops across timer blocks, notification observers, and off-actor calls for rock-solid stability.
+
+---
+
 ## [v13.4] — 2026-09-03
 
 ### 🚀 "Rise and Shine, Windows In Line"
