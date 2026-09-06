@@ -206,7 +206,6 @@ private let translationDict: [String: String] = [
     "Full Restore": "שחזור מלא",
     "Full restore & single app restore controls": "בקרות שחזור מלא ושחזור יישום יחיד",
     "Auto Layout is on": "סידור אוטומטי מופעל",
-    "Some restore settings are unavailable while Auto Layout is active. Switch to Saved Sessions to edit them.": "חלק מהגדרות השחזור אינן זמינות כאשר הסידור האוטומטי פעיל. עבור למפגשים שמורים כדי לערוך אותן.",
     "Feature Guide": "מדריך תכונות",
     "Display reconnects, startup & polling": "חיבור מסכים מחדש, הפעלה בדיקה מחזורית",
     "Auto-restore on launch & delays": "שחזור אוטומטי בהפעלה והשהיות",

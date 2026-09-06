@@ -68,6 +68,8 @@ struct WindowID: Codable, Hashable {
 struct WindowRecord: Codable, Identifiable {
     var id: UUID = UUID()
     let windowID: WindowID
+    /// macOS system-level window ID (unique and stable for the lifetime of this window).
+    var cgWindowID: CGWindowID? = nil
     /// Frame in global screen coordinates (origin = bottom-left of primary screen).
     let globalFrame: CGRect
     /// Screen fingerprint the window was on when saved.

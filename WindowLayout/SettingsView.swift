@@ -488,31 +488,6 @@ struct SettingsView: View {
                 }
             }
 
-            if isAutoLayoutActive {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "info.circle.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Auto Layout is on".localized(appLanguage))
-                            .font(.system(size: 12, weight: .semibold))
-                        Text("Some restore settings are unavailable while Auto Layout is active. Switch to Saved Sessions to edit them.".localized(appLanguage))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
-                }
-                .accessibilityElement(children: .combine)
-            }
-
             SettingsSection(title: "Full Restore".localized(appLanguage), icon: "display.2") {
                 VStack(spacing: 0) {
                     SettingsToggle(
@@ -524,6 +499,10 @@ struct SettingsView: View {
                             set: { manager.store.autoRestoreEnabled = $0 }
                         )
                     )
+
+                    if isAutoLayoutActive {
+                        autoLayoutDisabledNotice
+                    }
 
                     HStack(spacing: 10) {
                         Image(systemName: "square.3.layers.3d.top.filled")
@@ -544,7 +523,8 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(isAutoLayoutActive ? 0.45 : 1.0)
+                    .opacity(isAutoLayoutActive ? 0.32 : 1.0)
+                    .grayscale(isAutoLayoutActive ? 0.9 : 0.0)
 
                     Divider().padding(.horizontal, 12)
 
@@ -604,6 +584,10 @@ struct SettingsView: View {
 
                     Divider().padding(.horizontal, 12)
 
+                    if isAutoLayoutActive {
+                        autoLayoutDisabledNotice
+                    }
+
                     SettingsToggle(
                         title: "Restore focused app on left click",
                         subtitle: "Left-clicking the menu bar icon restores the window position of the frontmost app",
@@ -611,7 +595,8 @@ struct SettingsView: View {
                         isOn: $restoreFocusedAppOnLeftClick
                     )
                     .disabled(isAutoLayoutActive)
-                    .opacity(isAutoLayoutActive ? 0.45 : 1.0)
+                    .opacity(isAutoLayoutActive ? 0.32 : 1.0)
+                    .grayscale(isAutoLayoutActive ? 0.9 : 0.0)
 
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.turn.down.right")
@@ -625,11 +610,16 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(isAutoLayoutActive ? 0.45 : 1.0)
+                    .opacity(isAutoLayoutActive ? 0.32 : 1.0)
+                    .grayscale(isAutoLayoutActive ? 0.9 : 0.0)
                 }
             }
 
             // Subcategory 3: Quick Key Restore (Fn Long-Press / Double-Tap Caps Lock)
+            if isAutoLayoutActive {
+                autoLayoutDisabledNotice
+            }
+
             SettingsSection(title: "Quick Key Restore".localized(appLanguage), icon: "keyboard.fill") {
                 VStack(spacing: 0) {
                     SettingsToggle(
@@ -751,8 +741,24 @@ struct SettingsView: View {
                 }
             }
             .disabled(isAutoLayoutActive)
-            .opacity(isAutoLayoutActive ? 0.45 : 1.0)
+            .opacity(isAutoLayoutActive ? 0.32 : 1.0)
+            .grayscale(isAutoLayoutActive ? 0.9 : 0.0)
         }
+    }
+
+    private var autoLayoutDisabledNotice: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Auto Layout is on".localized(appLanguage))
+                .font(.system(size: 10.5, weight: .semibold))
+        }
+        .foregroundStyle(Color.accentColor)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - 3. Experimental Content (Desktop Toggle & Active App Command Trigger)
