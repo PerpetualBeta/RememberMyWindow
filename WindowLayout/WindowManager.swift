@@ -25,6 +25,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     @Published var selectedSnapshotKey: String? = nil
     /// The app selected in the main window from the most recently opened menu bar list.
     @Published var selectedAppBundleID: String? = nil
+    /// The specific auto save capture entry currently selected for preview. Nil means the latest entry.
+    @Published var selectedAutoSaveEntryID: UUID? = nil
+    /// The specific window record currently selected for preview highlighting.
+    @Published var selectedRecordID: UUID? = nil
     /// Live-updating window list (never persisted). Updated only after a window event,
     /// or by the legacy poller when it detects a change.
     @Published private(set) var liveRecords: [WindowRecord] = []
@@ -198,6 +202,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         UNUserNotificationCenter.current().delegate = self
         
         load()
+        if !store.autoSaveEnabled {
+            selectedSnapshotKey = Self.liveKey
+        }
         startPermissionMonitoring()
     }
 
@@ -264,6 +271,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     // MARK: - Public API
+
+    /// Switches between the automatic live layout and named saved sessions.
+    /// Saved Sessions always opens on the live layout so the center pane never
+    /// starts without a meaningful selection.
+    func setAutoSaveEnabled(_ enabled: Bool) {
+        store.autoSaveEnabled = enabled
+        selectedSnapshotKey = enabled ? nil : Self.liveKey
+        selectedAutoSaveEntryID = nil
+        selectedRecordID = nil
+        selectedAppBundleID = nil
+        persist()
+    }
 
     func startTracking() {
         guard !isTracking else { return }
@@ -1299,19 +1318,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     // MARK: - Auto layout
 
-    /// True when the newest auto capture was taken on the display setup in
-    /// front of the user right now. Restore is offered only then: the frames
-    /// are absolute, so applying them to a different arrangement would put
-    /// windows where nothing is.
+    /// True when an auto capture for the display setup in front of the user
+    /// exists. Restore is offered only then: the frames are absolute, so
+    /// applying a different arrangement would put windows where nothing is.
     var autoLayoutMatchesCurrentScreens: Bool {
-        guard let entry = autoSaveStore?.latest else { return false }
-        return entry.screenKey == currentFingerprint.key
+        autoSaveStore?.entry(forScreenKey: currentFingerprint.key) != nil
     }
 
-    /// The newest auto capture as a snapshot, when there is one and it was
-    /// taken on the display setup in front of the user now.
+    /// The newest auto capture for the display setup in front of the user, when
+    /// there is one. Display configurations are retained independently, so a
+    /// newer capture on another monitor setup does not hide this one.
     var autoLayoutSnapshot: LayoutSnapshot? {
-        autoSaveStore?.latest.flatMap { snapshot(from: $0) }
+        autoSaveStore?.entry(forScreenKey: currentFingerprint.key).flatMap { snapshot(from: $0) }
     }
 
     /// One ring entry as a snapshot, when it was taken on the display setup in
@@ -1389,8 +1407,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             if let auto = autoLayoutSnapshot, holdsTarget(auto) {
                 return (auto, true)
             }
-            // The newest capture is not always the one that has the answer, and
-            // it fails in two different ways.
+            // The newest capture for the current display is not always the one
+            // that has the answer, and it fails in two different ways.
             //
             // For a relaunching app it describes the live desk, and the desk
             // stopped containing that app the moment it quit — measured at 85
@@ -1404,7 +1422,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             // the most recent capture that belongs to the screens actually here —
             // which, measured on a reconnect, was sitting two slots back with all
             // 21 windows in the right places.
-            for entry in (autoSaveStore?.visibleEntries ?? []).dropFirst() {
+            var candidates = autoSaveStore?.visibleDisplayEntries ?? []
+            let knownIDs = Set(candidates.map(\.id))
+            candidates.append(contentsOf: (autoSaveStore?.visibleEntries ?? []).filter {
+                !knownIDs.contains($0.id)
+            })
+            for entry in candidates {
                 if let earlier = snapshot(from: entry), holdsTarget(earlier) {
                     log("Using an earlier auto capture\(bundleID.map { " for \($0)" } ?? "") — the newest one does not apply",
                         level: .verbose, type: .autoSave)
@@ -1437,6 +1460,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// `commandExcludedBundleIDs` below blocks the same path a second time.
     func restoreAutoLayout(entryID: UUID? = nil, showNotification: Bool = true) {
         let chosen = entryID.flatMap { id in autoSaveStore?.visibleEntries.first { $0.id == id } }
+            ?? entryID.flatMap { id in autoSaveStore?.visibleDisplayEntries.first { $0.id == id } }
+            ?? autoSaveStore?.entry(forScreenKey: currentFingerprint.key)
             ?? autoSaveStore?.latest
         guard let entry = chosen else {
             log("No auto layout recorded yet", level: .moderate, type: .autoSave)
@@ -1591,7 +1616,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // The newest capture for this configuration, which is the one this
         // capture is about to replace. Each capture inherits from the last, so a
         // held window's frame stays frozen from the moment the hold began.
-        guard let previous = autoSaveStore?.visibleEntries.first(where: { $0.screenKey == screenKey })
+        guard let previous = autoSaveStore?.entry(forScreenKey: screenKey)
         else { return records }
         var kept: [WindowID: WindowRecord] = [:]
         for r in previous.records where isHeld(r.windowID) { kept[r.windowID] = r }
@@ -2021,7 +2046,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // Save on skipped the restore entirely — no attempt, no log line. On a
         // desk where auto-save is doing the remembering, that is every display.
         let hasAutoCapture = store.autoSaveEnabled
-            && (autoSaveStore?.entries.contains { $0.screenKey == newKey } ?? false)
+            && (autoSaveStore?.entry(forScreenKey: newKey) != nil)
 
         // Detect added / removed displays
         let oldScreens = Set(oldFP.displays.map { $0.screenNumber })
@@ -2132,10 +2157,17 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let (title, subtitle, isCompact, bundleID): (String, String, Bool, String?) = {
             switch eventType {
             case .fullRestore:
-                let snapName = self.store.snapshots.values.first?.name ?? lz("Home")
-                let count = self.store.snapshots.values.first?.records.count ?? 5
-                let winWord = lz("Windows").lowercased()
-                return (lz("Layout Restored"), "\(snapName) · \(count)/\(count) \(winWord)", false, nil)
+                if self.store.autoSaveEnabled {
+                    let count = 5
+                    let format = lz("Captured %@ · %d/%d windows")
+                    let timeText = String(format: lz("%@ ago"), "5m")
+                    return (lz("Auto Layout Restored"), String(format: format, timeText, count, count), false, nil)
+                } else {
+                    let snapName = self.store.snapshots.values.first?.name ?? lz("Home")
+                    let count = self.store.snapshots.values.first?.records.count ?? 5
+                    let winWord = lz("Windows").lowercased()
+                    return (lz("Layout Restored"), "\(snapName) · \(count)/\(count) \(winWord)", false, nil)
+                }
             case .singleRestore:
                 return ("Safari \(lz("Restored"))", "", true, "com.apple.Safari")
             case .displayChange:
@@ -2182,7 +2214,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     soundEnabled = true
                     soundName = self.store.defaultNotificationSound
                 }
-                if soundEnabled { SystemSound.playSound(named: soundName, volume: Float(self.store.notchSoundVolume)) }
+                if soundEnabled { SystemSound.playSound(named: soundName, volume: self.effectiveNotchSoundVolume) }
             } else {
                 // Force system notification only — bypass showNotchNotification check
                 let content = UNMutableNotificationContent()
@@ -2212,7 +2244,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     soundName = self.store.defaultNotificationSound
                 }
                 content.sound = soundEnabled ? .default : nil
-                if soundEnabled { SystemSound.playSound(named: soundName, volume: Float(self.store.systemSoundVolume)) }
+                if soundEnabled { SystemSound.playSound(named: soundName, volume: self.effectiveSystemSoundVolume) }
                 let request = UNNotificationRequest(identifier: "preview-\(UUID().uuidString)", content: content, trigger: nil)
                 UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
             }
@@ -2278,7 +2310,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     }
 
                     if notchSoundEnabled && !silent {
-                        SystemSound.playSound(named: notchSoundName, volume: Float(self.store.notchSoundVolume))
+                        SystemSound.playSound(named: notchSoundName, volume: self.effectiveNotchSoundVolume)
                     }
                 }
             }
@@ -2363,12 +2395,22 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         if playSound {
-            SystemSound.playSound(named: soundName, volume: Float(self.store.systemSoundVolume))
+            SystemSound.playSound(named: soundName, volume: self.effectiveSystemSoundVolume)
         }
     }
 
+    /// Effective volume for notch sounds, accounting for the 'Auto: 20% below system' setting.
+    var effectiveNotchSoundVolume: Float {
+        store.notchAutoVolumeBelowSystem ? 0.80 : Float(store.notchSoundVolume)
+    }
+
+    /// Effective volume for macOS system notifications, accounting for the 'Auto: 20% below system' setting.
+    var effectiveSystemSoundVolume: Float {
+        store.systemAutoVolumeBelowSystem ? 0.80 : Float(store.systemSoundVolume)
+    }
+
     func previewSound(named soundName: String, volume: Float? = nil) {
-        let vol = volume ?? Float(self.store.notchSoundVolume)
+        let vol = volume ?? self.effectiveNotchSoundVolume
         SystemSound.playSound(named: soundName, volume: vol)
     }
 
@@ -3787,19 +3829,45 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
 
                 if showNotification {
-                    // Saying "23/23 windows" while ten of them were skipped is
-                    // the part of this that was actually misleading. What is
-                    // waiting, and what it is waiting for, both belong here.
-                    var subtitle = "\(snapshot.name) · \(restoredCount)/\(snapshot.records.count) \(lz("windows"))"
-                    if deferredCount > 0 {
-                        subtitle += " · \(deferredCount) \(lz("waiting for their Space"))"
+                    if snapshot.isAutoSave {
+                        let seconds = Date().timeIntervalSince(snapshot.updatedAt)
+                        let ageStr: String = {
+                            if seconds < 60 { return lz("just now") }
+                            let f = DateComponentsFormatter()
+                            f.unitsStyle = .full
+                            f.maximumUnitCount = 1
+                            f.allowedUnits = seconds < 3600 ? [.minute] : (seconds < 86_400 ? [.hour] : [.day])
+                            let spelled = f.string(from: seconds) ?? ""
+                            guard !spelled.isEmpty else { return lz("just now") }
+                            return String(format: lz("%@ ago"), spelled)
+                        }()
+                        let count = snapshot.records.count
+                        let format = count == 1 ? lz("Captured %@ · 1/1 window") : lz("Captured %@ · %d/%d windows")
+                        var subtitle = count == 1 ? String(format: format, ageStr) : String(format: format, ageStr, restoredCount, count)
+                        if deferredCount > 0 {
+                            subtitle += " · \(deferredCount) \(lz("waiting for their Space"))"
+                        }
+                        self.deliverNotification(
+                            type: .fullRestore,
+                            title: lz("Auto Layout Restored"),
+                            subtitle: subtitle,
+                            triggerKey: triggerSubtitle
+                        )
+                    } else {
+                        // Saying "23/23 windows" while ten of them were skipped is
+                        // the part of this that was actually misleading. What is
+                        // waiting, and what it is waiting for, both belong here.
+                        var subtitle = "\(snapshot.name) · \(restoredCount)/\(snapshot.records.count) \(lz("windows"))"
+                        if deferredCount > 0 {
+                            subtitle += " · \(deferredCount) \(lz("waiting for their Space"))"
+                        }
+                        self.deliverNotification(
+                            type: .fullRestore,
+                            title: "Layout Restored",
+                            subtitle: subtitle,
+                            triggerKey: triggerSubtitle
+                        )
                     }
-                    self.deliverNotification(
-                        type: .fullRestore,
-                        title: "Layout Restored",
-                        subtitle: subtitle,
-                        triggerKey: triggerSubtitle
-                    )
                 }
 
                 // Fire completion handler on MainActor immediately so UI is responsive

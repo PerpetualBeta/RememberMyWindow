@@ -38,6 +38,17 @@ struct ContentView: View {
             // Content: Selected Snapshot Detail
             LayoutsView()
                 .navigationSplitViewColumnWidth(min: 400, ideal: 500)
+                .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        liquidGlassHeaderSlider
+                    }
+                    ToolbarItem(placement: .principal) {
+                        actionButtonsToolbar
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        settingsToolbarButton
+                    }
+                }
                 .background {
                     if themeColor.isGalaxy {
                         ZStack {
@@ -102,8 +113,81 @@ struct ContentView: View {
                 withAnimation { desktopToggleManager.acknowledgeShortcutChange() }
             }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
+        .frame(minWidth: 1000, idealWidth: 1150, minHeight: 600, idealHeight: 750)
+        .onOpenURL { url in
+            if url.host == "toggle-desktop" {
+                DesktopToggleManager.shared.toggleDesktop()
+            }
+        }
+        .background {
+            if themeColor.isGalaxy {
+                GalaxyCosmicBackgroundView()
+            }
+        }
+        .background(WindowTransparencyAccessor())
+    }
+
+    // MARK: - Inspector Column
+
+    private var inspectorColumn: some View {
+        VStack(spacing: 0) {
+            // Layout Preview (Mini-map) — shown only when Auto Layout is OFF (when ON, it is in the center pane)
+            if !manager.store.autoSaveEnabled {
+                let previewSnapshot: LayoutSnapshot? = {
+                    guard let key = manager.selectedSnapshotKey else { return nil }
+                    if key == WindowManager.liveKey {
+                        let fp = manager.currentFingerprint
+                        return LayoutSnapshot(
+                            id: UUID(),
+                            name: fp.readableName,
+                            screenKey: fp.key,
+                            readableScreenKey: fp.readableName,
+                            records: manager.liveRecords,
+                            createdAt: Date(),
+                            updatedAt: Date(),
+                            location: nil,
+                            isAutoSave: true
+                        )
+                    }
+                    return manager.store.snapshots[key]
+                }()
+
+                if let snapshot = previewSnapshot {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("VISUAL PREVIEW".localized(appLanguage))
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.secondary)
+
+                        LayoutPreviewView(snapshot: snapshot, selectedRecordID: nil, tint: themeColor.color(seed: 2))
+                            .frame(height: 160)
+                            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snapshot.records.count)
+                    }
+                    .padding(16)
+                    // Slides out to the left (-x) when switching to Auto Layout;
+                    // slides in from the left (-x -> 0) when returning to Saved Sessions.
+                    // Mirrors the center-pane card to create seamless continuity between columns.
+                    .transition(.asymmetric(
+                        insertion: .offset(x: -260).combined(with: .opacity),
+                        removal:   .offset(x: -260).combined(with: .opacity)
+                    ))
+
+                    Divider()
+                }
+            }
+            
+            // Activity Log
+            ActivityView()
+                .frame(maxHeight: .infinity)
+        }
+        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: manager.store.autoSaveEnabled)
+        .clipped()
+    }
+
+    @ViewBuilder
+    private var actionButtonsToolbar: some View {
+        HStack(spacing: 6) {
+
+            if !manager.store.autoSaveEnabled {
                 Button {
                     manager.saveNow()
                 } label: {
@@ -151,71 +235,37 @@ struct ContentView: View {
                     }
                     return false
                 }())
+            }
 
-                Button {
-                    openSettings()
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .help("Settings".localized(appLanguage))
-            }
         }
-        .onOpenURL { url in
-            if url.host == "toggle-desktop" {
-                DesktopToggleManager.shared.toggleDesktop()
-            }
-        }
-        .background {
-            if themeColor.isGalaxy {
-                GalaxyCosmicBackgroundView()
-            }
-        }
-        .background(WindowTransparencyAccessor())
     }
 
-    // MARK: - Inspector Column
-
-    private var inspectorColumn: some View {
-        VStack(spacing: 0) {
-            // Layout Preview (Mini-map) — shown for both live layout and saved sessions
-            let previewSnapshot: LayoutSnapshot? = {
-                guard let key = manager.selectedSnapshotKey else { return nil }
-                if key == WindowManager.liveKey {
-                    let fp = manager.currentFingerprint
-                    return LayoutSnapshot(
-                        id: UUID(),
-                        name: fp.readableName,
-                        screenKey: fp.key,
-                        readableScreenKey: fp.readableName,
-                        records: manager.liveRecords,
-                        createdAt: Date(),
-                        updatedAt: Date(),
-                        location: nil,
-                        isAutoSave: true
-                    )
-                }
-                return manager.store.snapshots[key]
-            }()
-
-            if let snapshot = previewSnapshot {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("VISUAL PREVIEW".localized(appLanguage))
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.secondary)
-
-                    LayoutPreviewView(snapshot: snapshot, selectedRecordID: nil, tint: themeColor.color(seed: 2))
-                        .frame(height: 160)
-                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snapshot.records.count)
-                }
-                .padding(16)
-
-                Divider()
-            }
-            
-            // Activity Log
-            ActivityView()
-                .frame(maxHeight: .infinity)
+    private var settingsToolbarButton: some View {
+        Button {
+            openSettings()
+        } label: {
+            Image(systemName: "gearshape")
         }
+        .help("Settings".localized(appLanguage))
+    }
+
+    private var liquidGlassHeaderSlider: some View {
+        Picker("", selection: Binding(
+            get: { manager.store.autoSaveEnabled ? 0 : 1 },
+            set: { val in
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+                    manager.setAutoSaveEnabled(val == 0)
+                }
+            }
+        )) {
+            Text("\(Image(systemName: "clock.arrow.circlepath")) \("Auto Layout".localized(appLanguage))").tag(0)
+            Text("\(Image(systemName: "folder")) \("Saved Sessions".localized(appLanguage))").tag(1)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .overlay(HoverBlockerView())
+        .help("Switch between Auto Layout mode and Saved Sessions mode".localized(appLanguage))
     }
 
     private var permissionBanner: some View {
@@ -269,4 +319,35 @@ struct ContentView: View {
         .padding(16)
         .transition(.move(edge: .top).combined(with: .opacity))
     }
+}
+
+// MARK: - HoverBlockerView (from iPhonePhotosBackup)
+
+/// A transparent NSView overlay that absorbs mouse-entered/moved/exited events
+/// so the underlying NSSegmentedControl never sees hover and therefore never
+/// draws its hover-highlight state. Left-click events are NOT consumed —
+/// they fall through to the control below via hitTest returning nil.
+class HoverBlockingNSView: NSView {
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) { /* swallow */ }
+    override func mouseMoved(with event: NSEvent)   { /* swallow */ }
+    override func mouseExited(with event: NSEvent)  { /* swallow */ }
+
+    // Pass clicks through so the Picker still works.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+struct HoverBlockerView: NSViewRepresentable {
+    func makeNSView(context: Context) -> HoverBlockingNSView { HoverBlockingNSView() }
+    func updateNSView(_ nsView: HoverBlockingNSView, context: Context) { }
 }

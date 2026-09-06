@@ -194,7 +194,7 @@ All data is stored strictly locally on your Mac — no network analytics, no tel
 ```text
 ~/Library/Application Support/RememberMyWindows/
 ├── layouts.json          ← Named snapshots & saved layout configurations
-└── auto-layout.json      ← Rolling 5-entry persistent auto-save ring buffer
+└── auto-layout.json      ← Recent captures plus one persistent layout per display setup
 ```
 
 > [!NOTE]

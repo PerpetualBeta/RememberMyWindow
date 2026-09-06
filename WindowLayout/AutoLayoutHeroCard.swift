@@ -29,6 +29,8 @@ struct AutoLayoutHeroCard: View {
     /// The rest of the ring, newest first. Empty hides the control entirely.
     var earlier: [EarlierCapture] = []
     var onRestoreEarlier: (UUID) -> Void = { _ in }
+    var selectedCaptureID: UUID? = nil
+    var onSelectEarlier: ((UUID) -> Void)? = nil
 
     /// How old a capture may be before the card stops looking confident.
     /// Restoring a days-old layout is worse than not restoring, so past this
@@ -47,20 +49,20 @@ struct AutoLayoutHeroCard: View {
             header
             if let capturedAt {
                 Text(relativeAge)
-                    .font(.system(size: 19, weight: .semibold, design: .rounded))
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .foregroundStyle(isStale ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     .accessibilityLabel(Text(String(format: "Captured %@".localized(language),
                                                     age(of: capturedAt))))
 
                 HStack(spacing: 6) {
                     Image(systemName: "macwindow")
-                    Text(windowCount == 1 ? "1 window" : "\(windowCount) windows")
+                    Text(windowCount == 1 ? "1 window".localized(language) : "\(windowCount) \("windows".localized(language))")
                     if let screenName {
                         Text("·").foregroundStyle(.tertiary)
                         Text(screenName).lineLimit(1).truncationMode(.middle)
                     }
                 }
-                .font(.system(size: 11))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
 
                 // A stale card mutes its heading and its age, so the button
@@ -117,30 +119,36 @@ struct AutoLayoutHeroCard: View {
     /// disk with no way to reach them is not a safeguard.
     private var earlierCaptures: some View {
         DisclosureGroup {
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(earlier) { capture in
-                    EarlierRow(age: age(of: capture.capturedAt),
-                               windowCount: capture.windowCount,
-                               isApplicable: capture.matchesCurrentScreens,
-                               tint: tint,
-                               language: language,
-                               action: { onRestoreEarlier(capture.id) })
+                    EarlierRow(
+                        isSelected: selectedCaptureID == capture.id,
+                        age: age(of: capture.capturedAt),
+                        windowCount: capture.windowCount,
+                        isApplicable: capture.matchesCurrentScreens,
+                        tint: tint,
+                        language: language,
+                        action: {
+                            if let onSelect = onSelectEarlier {
+                                onSelect(capture.id)
+                            } else {
+                                onRestoreEarlier(capture.id)
+                            }
+                        }
+                    )
                 }
             }
             .padding(.top, 3)
         } label: {
-            Text(earlier.count == 1 ? "1 earlier capture" : "\(earlier.count) earlier captures")
-                .font(.system(size: 10, weight: .medium))
+            Text(earlier.count == 1 ? "1 earlier capture".localized(language) : "\(earlier.count) \("earlier captures".localized(language))")
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         }
     }
 
-    /// A row that restores one earlier capture.
-    ///
-    /// Rendered first as plain text with the age and the count, which looked
-    /// exactly like the two static lines above it and gave no sign it could be
-    /// clicked. It carries the restore glyph and a hover fill for that reason.
+    /// A row that displays or restores one earlier capture.
     private struct EarlierRow: View {
+        var isSelected: Bool = false
         let age: String
         let windowCount: Int
         let isApplicable: Bool
@@ -152,26 +160,26 @@ struct AutoLayoutHeroCard: View {
 
         var body: some View {
             Button(action: action) {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Image(systemName: isApplicable
-                          ? "arrow.uturn.backward"
+                          ? (isSelected ? "checkmark.circle.fill" : "arrow.uturn.backward")
                           : "display.trianglebadge.exclamationmark")
                         .font(.system(size: 8, weight: .semibold))
                         .frame(width: 10)
                     Text(age)
                     Spacer(minLength: 8)
-                    Text(windowCount == 1 ? "1 window" : "\(windowCount) windows")
+                    Text(windowCount == 1 ? "1 window".localized(language) : "\(windowCount) \("windows".localized(language))")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 .foregroundStyle(isApplicable ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 3)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(tint.opacity(isHovering && isApplicable ? 0.12 : 0))
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isSelected ? tint.opacity(0.18) : (tint.opacity(isHovering && isApplicable ? 0.08 : 0)))
                 )
                 .contentShape(Rectangle())
             }
@@ -179,11 +187,9 @@ struct AutoLayoutHeroCard: View {
             .disabled(!isApplicable)
             .onHover { isHovering = $0 }
             .help(isApplicable
-                  ? Text("Restore this capture".localized(language))
+                  ? Text("Select and view this capture".localized(language))
                   : Text("Captured on a different display setup.".localized(language)))
-            // Four rows all described as "Restore" would be no more use through
-            // accessibility than no rows at all.
-            .accessibilityLabel(Text(String(format: "Restore the capture from %@, %d windows".localized(language),
+            .accessibilityLabel(Text(String(format: "Capture from %@, %d windows".localized(language),
                                             age, windowCount)))
         }
     }
@@ -191,14 +197,14 @@ struct AutoLayoutHeroCard: View {
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
             Text("AUTO LAYOUT".localized(language))
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 12, weight: .bold))
             Spacer()
             if hasCapture && !matchesCurrentScreens {
                 Text("OTHER DISPLAYS".localized(language))
-                    .font(.system(size: 9, weight: .bold))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .font(.system(size: 10, weight: .bold))
+                    .padding(.horizontal, 6).padding(.vertical, 1.5)
                     .background(Capsule().fill(Color.secondary.opacity(0.18)))
                     .foregroundStyle(.secondary)
             }
@@ -208,7 +214,7 @@ struct AutoLayoutHeroCard: View {
 
     private func footnote(_ text: String) -> some View {
         Text(text.localized(language))
-            .font(.system(size: 10))
+            .font(.system(size: 11))
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
     }
