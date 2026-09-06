@@ -147,23 +147,37 @@ struct LayoutPreviewView: View {
     let snapshot: LayoutSnapshot
     let selectedRecordID: UUID?
     let tint: Color
+    var enable3DHover: Bool = false
+    var onSelectRecord: ((UUID) -> Void)? = nil
+    
+    @State private var isHovered: Bool = false
+    @State private var hoveredRecordID: UUID? = nil
+    @State private var cursorHorizontalPosition: CGFloat = 0.5
     
     var body: some View {
+        if !enable3DHover {
+            classic2DBody
+        } else {
+            interactive3DBody
+        }
+    }
+    
+    // MARK: - Classic 2D Preview (Exact restoration from last week for Saved Sessions & Inspector Mini-Map)
+    
+    private var classic2DBody: some View {
         GeometryReader { geo in
             let boundingBox = calculateBoundingBox()
             let scale = calculateScale(for: geo.size, boundingBox: boundingBox)
             
             ZStack {
                 // Screens
-                // Keyed by position, not by origin.x: two displays stacked
-                // vertically share an x, and ForEach silently drops the duplicate.
                 ForEach(Array(getScreenFrames().enumerated()), id: \.offset) { _, frame in
-                    screenView(frame: frame, boundingBox: boundingBox, scale: scale)
+                    classicScreenView(frame: frame, boundingBox: boundingBox, scale: scale)
                 }
                 
                 // Windows
                 ForEach(snapshot.records) { record in
-                    windowView(record: record, boundingBox: boundingBox, scale: scale)
+                    classicWindowView(record: record, boundingBox: boundingBox, scale: scale)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -172,7 +186,7 @@ struct LayoutPreviewView: View {
         .liquidGlass(cornerRadius: 16, style: .card)
     }
     
-    private func screenView(frame: CGRect, boundingBox: CGRect, scale: CGFloat) -> some View {
+    private func classicScreenView(frame: CGRect, boundingBox: CGRect, scale: CGFloat) -> some View {
         let x = (frame.origin.x - boundingBox.origin.x) * scale
         let y = (boundingBox.height - (frame.origin.y - boundingBox.origin.y + frame.height)) * scale
         let w = frame.width * scale
@@ -200,7 +214,7 @@ struct LayoutPreviewView: View {
         .position(x: x + w/2, y: y + h/2)
     }
     
-    private func windowView(record: WindowRecord, boundingBox: CGRect, scale: CGFloat) -> some View {
+    private func classicWindowView(record: WindowRecord, boundingBox: CGRect, scale: CGFloat) -> some View {
         let isSelected = record.id == selectedRecordID
         let x = (record.globalFrame.origin.x - boundingBox.origin.x) * scale
         let y = (boundingBox.height - (record.globalFrame.origin.y - boundingBox.origin.y + record.globalFrame.height)) * scale
@@ -242,11 +256,127 @@ struct LayoutPreviewView: View {
         .frame(width: max(8, w), height: max(8, h))
         .position(x: x + w/2, y: y + h/2)
         .scaleEffect(isSelected ? 1.05 : 1.0)
+        .onTapGesture {
+            onSelectRecord?(record.id)
+        }
         .animation(.spring(response: 0.4, dampingFraction: 0.7), value: record.globalFrame)
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSelected)
     }
     
-    // Helpers
+    // MARK: - Interactive 3D Preview (For Auto Layout Mode)
+    
+    private var interactive3DBody: some View {
+        GeometryReader { geo in
+            let boundingBox = calculateBoundingBox()
+            let scale = calculateScale(for: geo.size, boundingBox: boundingBox)
+            let is3D = isHovered && enable3DHover
+            
+            let layoutW = boundingBox.width * scale
+            let layoutH = boundingBox.height * scale
+            let centerOffsetX = max(0, (geo.size.width - layoutW) / 2)
+            let centerOffsetY = max(0, (geo.size.height - layoutH) / 2)
+            
+            let totalRecords = max(1, snapshot.records.count)
+            // Layer step expands from 14pt (at x=0) to 88pt (at x=1), resting at ~51pt (at x=0.5)
+            let dynamicLayerStep: CGFloat = {
+                let base = 14.0 + cursorHorizontalPosition * 74.0
+                if totalRecords > 6 {
+                    let scaled = (base * 6.0) / CGFloat(totalRecords)
+                    let minAtPosition = 12.0 + cursorHorizontalPosition * 36.0 // 12pt at left, 48pt at right
+                    return max(minAtPosition, scaled)
+                }
+                return base
+            }()
+            let maxExplosion = CGFloat(max(0, totalRecords - 1)) * dynamicLayerStep * 0.9
+            // Horizontal cursor position (0 = left, 0.5 = center, 1 = right) sweeps side tilt from -15° to -45°
+            let dynamicYaw = is3D ? (-15.0 - Double(cursorHorizontalPosition) * 30.0) : 0
+            // Auto-fill card space: expands from 0.98 at left up to 1.28x at max right to compensate for -45° yaw foreshortening
+            let dynamicScale = is3D ? (0.98 + Double(cursorHorizontalPosition) * 0.30) : 1.0
+            
+            ZStack(alignment: .topLeading) {
+                // Screens (Fixed on 3D plane, side-tilts with canvas)
+                ForEach(Array(getScreenFrames().enumerated()), id: \.offset) { _, frame in
+                    screenView(frame: frame, boundingBox: boundingBox, scale: scale, offsetX: centerOffsetX, offsetY: centerOffsetY)
+                }
+                
+                // Windows (Single Unified Glass Tablets with dynamic forward layer spacing)
+                ForEach(snapshot.records) { record in
+                    WindowPreviewTileView(
+                        record: record,
+                        snapshot: snapshot,
+                        selectedRecordID: selectedRecordID,
+                        hoveredRecordID: $hoveredRecordID,
+                        tint: tint,
+                        is3D: is3D,
+                        layerStep: dynamicLayerStep,
+                        scale: scale,
+                        boundingBox: boundingBox,
+                        offsetX: centerOffsetX,
+                        offsetY: centerOffsetY,
+                        onSelectRecord: onSelectRecord
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .rotation3DEffect(
+                .degrees(is3D ? 14 : 0),
+                axis: (x: 1, y: 0, z: 0),
+                perspective: 0.55
+            )
+            .rotation3DEffect(
+                .degrees(dynamicYaw),
+                axis: (x: 0, y: 1, z: 0),
+                perspective: 0.55
+            )
+            .scaleEffect(dynamicScale)
+            .offset(x: is3D ? (maxExplosion * 0.30) : 0, y: is3D ? (maxExplosion * 0.05) : 0)
+            .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.84), value: cursorHorizontalPosition)
+        }
+        .padding(16)
+        .liquidGlass(cornerRadius: 16, style: .card)
+        .overlay {
+            PreviewCursorTracker { position in
+                cursorHorizontalPosition = position
+            }
+        }
+        .onHover { hovering in
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.72)) {
+                isHovered = hovering
+                if !hovering {
+                    hoveredRecordID = nil
+                    cursorHorizontalPosition = 0.5
+                }
+            }
+        }
+    }
+    
+    private func screenView(frame: CGRect, boundingBox: CGRect, scale: CGFloat, offsetX: CGFloat, offsetY: CGFloat) -> some View {
+        let x = offsetX + (frame.origin.x - boundingBox.origin.x) * scale
+        let y = offsetY + (boundingBox.height - (frame.origin.y - boundingBox.origin.y + frame.height)) * scale
+        let w = frame.width * scale
+        let h = frame.height * scale
+        
+        let cornerR: CGFloat = 10 * scale
+        
+        return ZStack {
+            // Main Panel
+            RoundedRectangle(cornerRadius: cornerR, style: .continuous)
+                .fill(Color(red: 0.04, green: 0.07, blue: 0.18).opacity(0.85))
+            
+            // Inner glow / bezel detail
+            RoundedRectangle(cornerRadius: cornerR, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.38), Color.white.opacity(0.12), Color.white.opacity(0.22)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.2
+                )
+        }
+        .frame(width: w, height: h)
+        .offset(x: x, y: y)
+    }
     
     private func getScreenFrames() -> [CGRect] {
         var uniqueFrames: [CGRect] = []
@@ -269,9 +399,250 @@ struct LayoutPreviewView: View {
     }
     
     private func calculateScale(for size: CGSize, boundingBox: CGRect) -> CGFloat {
-        let horizontalScale = size.width / boundingBox.width
-        let verticalScale = size.height / boundingBox.height
-        return min(horizontalScale, verticalScale) * 0.9 // Add some padding
+        guard boundingBox.width > 0, boundingBox.height > 0 else { return 1.0 }
+        let horizontalScale = (size.width - 24) / boundingBox.width
+        let verticalScale = (size.height - 24) / boundingBox.height
+        return min(horizontalScale, verticalScale) * 0.98
+    }
+}
+
+// MARK: - Preview Cursor Tracking
+
+/// A transparent AppKit tracking surface gives SwiftUI the cursor position
+/// inside a view. It deliberately passes clicks through to the window tiles.
+private struct PreviewCursorTracker: NSViewRepresentable {
+    var onMove: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> PreviewCursorTrackingNSView {
+        PreviewCursorTrackingNSView(onMove: onMove)
+    }
+
+    func updateNSView(_ nsView: PreviewCursorTrackingNSView, context: Context) {
+        nsView.onMove = onMove
+    }
+}
+
+private final class PreviewCursorTrackingNSView: NSView {
+    var onMove: (CGFloat) -> Void
+    private var trackingAreaReference: NSTrackingArea?
+    private var lastReportedX: CGFloat = 0.5
+
+    init(onMove: @escaping (CGFloat) -> Void) {
+        self.onMove = onMove
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func updateTrackingAreas() {
+        if let trackingAreaReference {
+            removeTrackingArea(trackingAreaReference)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        trackingAreaReference = trackingArea
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) { report(event) }
+    override func mouseMoved(with event: NSEvent) { report(event) }
+
+    private func report(_ event: NSEvent) {
+        guard bounds.width > 0 else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let raw = min(1, max(0, point.x / bounds.width))
+        // Dead-band threshold: filter out micro hand tremors (0.015)
+        if abs(raw - lastReportedX) >= 0.015 {
+            lastReportedX = raw
+            onMove(raw)
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+// MARK: - Individual Window 3D Tablet View (Native Precision Dwell & Thick Solid Border)
+
+private struct WindowPreviewTileView: View {
+    let record: WindowRecord
+    let snapshot: LayoutSnapshot
+    let selectedRecordID: UUID?
+    @Binding var hoveredRecordID: UUID?
+    let tint: Color
+    let is3D: Bool
+    let layerStep: CGFloat
+    let scale: CGFloat
+    let boundingBox: CGRect
+    let offsetX: CGFloat
+    let offsetY: CGFloat
+    let onSelectRecord: ((UUID) -> Void)?
+    
+    @State private var dwellTask: Task<Void, Never>? = nil
+    
+    private var isSelected: Bool { record.id == selectedRecordID }
+    private var isFocused: Bool { is3D && hoveredRecordID == record.id }
+    private var hasHoverFocus: Bool { is3D && hoveredRecordID != nil }
+    
+    private var rank: Int {
+        let sorted = snapshot.records.sorted { a, b in
+            let za = a.zIndex ?? 0
+            let zb = b.zIndex ?? 0
+            if za != zb { return za > zb }
+            let idxA = snapshot.records.firstIndex(where: { $0.id == a.id }) ?? 0
+            let idxB = snapshot.records.firstIndex(where: { $0.id == b.id }) ?? 0
+            return idxA > idxB
+        }
+        return sorted.firstIndex(where: { $0.id == record.id }) ?? 0
+    }
+    
+    var body: some View {
+        let layerOffset = is3D ? (CGFloat(rank) * layerStep) : 0
+        let focusLift: CGFloat = isFocused ? 18.0 : 0
+        
+        let x = offsetX + (record.globalFrame.origin.x - boundingBox.origin.x) * scale
+        let y = offsetY + (boundingBox.height - (record.globalFrame.origin.y - boundingBox.origin.y + record.globalFrame.height)) * scale
+        let w = max(8, record.globalFrame.width * scale)
+        let h = max(8, record.globalFrame.height * scale)
+        
+        // Base resting position in the 3D stack (stationary during hover)
+        let baseX = x + (is3D ? -layerOffset * 0.9 : 0)
+        let baseY = y + (is3D ? -layerOffset * 0.12 : 0)
+        
+        let baseTint = (tint == .black || tint == Color.black) ? Color(white: 0.8) : tint
+        let winCorner: CGFloat = max(4, 8 * scale)
+        
+        let fillOpacity: Double = {
+            if isSelected { return 0.48 }
+            if isFocused { return 0.42 }
+            if is3D { return hasHoverFocus ? 0.05 : 0.08 }
+            return 0.25
+        }()
+        
+        let strokeOpacity: Double = {
+            if isSelected || isFocused { return 1.0 }
+            if is3D { return hasHoverFocus ? 0.35 : 0.50 }
+            return 0.60
+        }()
+        
+        return ZStack {
+            // Visual Tablet (Lifts forward & expands on focus, without displacing hit-test bounds)
+            ZStack {
+                // Single Unified Glass Tablet with Thick Solid Dual-Layer Border (NO offset duplicate!)
+                RoundedRectangle(cornerRadius: winCorner, style: .continuous)
+                    .fill(baseTint.opacity(fillOpacity))
+                    .overlay {
+                        // Outer solid rim (2.2pt)
+                        RoundedRectangle(cornerRadius: winCorner, style: .continuous)
+                            .stroke(
+                                baseTint.opacity(strokeOpacity),
+                                lineWidth: (isSelected || isFocused) ? 2.8 : 2.2
+                            )
+                    }
+                    .overlay {
+                        // Inner contrast bevel highlight (1.0pt)
+                        RoundedRectangle(cornerRadius: max(2, winCorner - 1.5), style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(isFocused ? 0.65 : 0.25),
+                                        Color.white.opacity(isFocused ? 0.25 : 0.08)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.0
+                            )
+                            .padding(1.5)
+                    }
+                    .shadow(
+                        color: isSelected ? baseTint.opacity(0.75) : (isFocused ? baseTint.opacity(0.60) : Color.black.opacity(is3D ? (0.20 + Double(rank) * 0.025) : 0.0)),
+                        radius: isSelected ? 14 : (isFocused ? 18 : (is3D ? (5 + CGFloat(rank) * 1.5) : 0)),
+                        x: is3D ? (CGFloat(rank) * 1.4) : 0,
+                        y: is3D ? (CGFloat(rank) * 2.2) : 0
+                    )
+                
+                // Special Place Handle: App Icon & Title Pill
+                let iconSize: CGFloat = {
+                    if is3D {
+                        let maxTarget: CGFloat = isFocused ? 54.0 : 48.0
+                        return min(max(w * 0.75, 28), maxTarget)
+                    }
+                    return min(w * 0.7, 32)
+                }()
+                
+                VStack(spacing: 3) {
+                    AppIconView(bundleID: record.windowID.appBundleID)
+                        .frame(width: iconSize, height: iconSize)
+                        .shadow(color: .black.opacity(0.35), radius: 3)
+                        .opacity(isFocused || isSelected ? 1.0 : (hasHoverFocus ? 0.75 : 0.95))
+                    
+                    if (w > 44 && h > 26) || isFocused || isSelected {
+                        Text(record.windowID.appName?.prefix(14) ?? "")
+                            .font(.system(size: is3D ? max(9, 11 * scale) : max(8, 10 * scale), weight: (isFocused || isSelected) ? .bold : .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2.5)
+                            .background {
+                                if is3D {
+                                    Capsule()
+                                        .fill(Color.black.opacity(isFocused ? 0.80 : 0.40))
+                                }
+                            }
+                            .shadow(color: .black.opacity(0.7), radius: 2)
+                    }
+                }
+            }
+            .frame(width: w, height: h)
+            .scaleEffect(isSelected ? 1.06 : (isFocused ? 1.05 : (is3D ? (1.0 + Double(rank) * 0.01) : 1.0)))
+            .offset(
+                x: (is3D && isFocused) ? (-focusLift * 0.9) : 0,
+                y: (is3D && isFocused) ? (-focusLift * 0.15) : 0
+            )
+            .allowsHitTesting(false) // Hit-testing is strictly owned by the stationary base container!
+        }
+        .frame(width: w, height: h)
+        .contentShape(Rectangle()) // Strictly anchored to base footprint
+        .onHover { hovering in
+            guard is3D else { return }
+            handleHover(hovering)
+        }
+        .onTapGesture {
+            onSelectRecord?(record.id)
+        }
+        .offset(x: baseX, y: baseY) // Stationary base position! Never shifts on hover!
+        .zIndex(Double(rank) + (isFocused ? 100 : 0) + (isSelected ? 50 : 0))
+        .animation(.spring(response: 0.42, dampingFraction: 0.75), value: record.globalFrame)
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSelected)
+        .animation(.spring(response: 0.45, dampingFraction: 0.72), value: is3D)
+        .animation(.spring(response: 0.28, dampingFraction: 0.72), value: isFocused)
+        .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.84), value: layerStep)
+    }
+    
+    private func handleHover(_ hovering: Bool) {
+        dwellTask?.cancel()
+        if hovering {
+            dwellTask = Task { @MainActor in
+                // 150ms dwell debounce
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) {
+                    hoveredRecordID = record.id
+                }
+            }
+        } else {
+            dwellTask?.cancel()
+            if hoveredRecordID == record.id {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) {
+                    hoveredRecordID = nil
+                }
+            }
+        }
     }
 }
 
@@ -695,3 +1066,83 @@ struct MenuWindowListView: View {
     }
 }
 
+// MARK: - Auto Save Hover Preview Card
+
+struct AutoSavePreviewCardView: View {
+    let snapshot: LayoutSnapshot
+    let capturedAt: Date
+    let tint: Color
+    let language: AppLanguage
+    let onRestore: () -> Void
+
+    @State private var isButtonHovered: Bool = false
+
+    private var relativeAge: String {
+        let seconds = Date().timeIntervalSince(capturedAt)
+        if seconds < 60 { return "just now".localized(language) }
+        let f = DateComponentsFormatter()
+        f.unitsStyle = .full
+        f.maximumUnitCount = 1
+        f.allowedUnits = seconds < 3600 ? [.minute] : (seconds < 86_400 ? [.hour] : [.day])
+        let spelled = f.string(from: seconds) ?? ""
+        guard !spelled.isEmpty else { return "just now".localized(language) }
+        return String(format: "%@ ago".localized(language), spelled)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Header
+            HStack(spacing: 6) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(relativeAge)
+                    .font(.system(size: 12, weight: .bold))
+                Spacer()
+                Text(snapshot.records.count == 1 ? "1 window".localized(language) : "\(snapshot.records.count) \("windows".localized(language))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+
+            // Visual monitor & window layout
+            LayoutPreviewView(snapshot: snapshot, selectedRecordID: nil, tint: tint)
+                .frame(width: 260, height: 155)
+                .allowsHitTesting(false)
+
+            // Restore action button / hint with subtle hover highlight
+            Button(action: onRestore) {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Restore this layout".localized(language))
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer()
+                }
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(tint.opacity(isButtonHovered ? 0.28 : 0.14))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(tint.opacity(isButtonHovered ? 0.45 : 0.0), lineWidth: 1)
+                )
+                .foregroundStyle(tint)
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isButtonHovered = hovering
+                }
+            }
+        }
+        .padding(10)
+        .frame(width: 280, height: 230)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onRestore()
+        }
+    }
+}

@@ -12,9 +12,10 @@ import Foundation
 /// - It coalesces far more slowly than the AX tracker, and takes a **forced
 ///   flush** on terminate, sleep and log-out so the last state before a
 ///   shutdown is the one kept.
-/// - It keeps a short **ring** rather than one slot, and refuses to record a
-///   capture whose window count has collapsed, so closing everything before a
-///   meeting cannot become the layout you restore to.
+/// - It keeps a short **ring** for recent captures, plus one durable latest
+///   capture for every display configuration, and refuses to record a capture
+///   whose window count has collapsed, so closing everything before a meeting
+///   cannot become the layout you restore to.
 struct AutoSaveEntry: Codable, Identifiable {
     var id: UUID = UUID()
     let capturedAt: Date
@@ -26,14 +27,21 @@ struct AutoSaveEntry: Codable, Identifiable {
 }
 
 struct AutoSaveFile: Codable {
-    /// Newest first.
+    /// Newest first. This is the recent-capture history.
     var entries: [AutoSaveEntry] = []
+    /// One latest capture per screen fingerprint. Unlike `entries`, this does
+    /// not roll away just because another display configuration was used more
+    /// recently.
+    var displayEntries: [AutoSaveEntry] = []
     /// Last frame seen for each window, newest first, and it never expires.
     /// See `AutoSaveStore.lastKnown`.
     var lastKnown: [WindowRecord] = []
 
-    init(entries: [AutoSaveEntry] = [], lastKnown: [WindowRecord] = []) {
+    init(entries: [AutoSaveEntry] = [],
+         displayEntries: [AutoSaveEntry] = [],
+         lastKnown: [WindowRecord] = []) {
         self.entries = entries
+        self.displayEntries = displayEntries
         self.lastKnown = lastKnown
     }
 
@@ -45,6 +53,7 @@ struct AutoSaveFile: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         entries = try c.decodeIfPresent([AutoSaveEntry].self, forKey: .entries) ?? []
+        displayEntries = try c.decodeIfPresent([AutoSaveEntry].self, forKey: .displayEntries) ?? []
         lastKnown = try c.decodeIfPresent([WindowRecord].self, forKey: .lastKnown) ?? []
     }
 }
@@ -79,7 +88,13 @@ final class AutoSaveStore: ObservableObject {
 
     // MARK: - State
 
+    /// The recent capture history, newest first.
     @Published private(set) var entries: [AutoSaveEntry] = []
+
+    /// The newest capture for each display configuration, newest first.
+    /// Unlike `entries`, this is the durable source for the Remembered Displays
+    /// list and survives ordinary captures on another monitor setup.
+    @Published private(set) var displayEntries: [AutoSaveEntry] = []
 
     /// Where each window was the last time it was seen, regardless of how long
     /// ago that was or whether the app is still running.
@@ -115,6 +130,22 @@ final class AutoSaveStore: ObservableObject {
     /// walk that skips the first entry skips the one already tried.
     var visibleEntries: [AutoSaveEntry] { pending.map { [$0] + entries } ?? entries }
 
+    /// The unwritten capture replaces the stored capture for its display while
+    /// it is pending, so the UI and a manual restore always see the same state.
+    var visibleDisplayEntries: [AutoSaveEntry] {
+        var result = displayEntries
+        if let pending {
+            result.removeAll { $0.screenKey == pending.screenKey }
+            result.append(pending)
+        }
+        return result.sorted { $0.capturedAt > $1.capturedAt }
+    }
+
+    /// The latest remembered capture for one display configuration.
+    func entry(forScreenKey screenKey: String) -> AutoSaveEntry? {
+        visibleDisplayEntries.first { $0.screenKey == screenKey }
+    }
+
     private let fileURL: URL
     private var pending: AutoSaveEntry?
     private var lastWrite: Date?
@@ -123,6 +154,9 @@ final class AutoSaveStore: ObservableObject {
     /// Set when `lastKnown` has changed but not yet reached disk, so a flush
     /// with no pending capture still writes.
     private var lastKnownIsDirty = false
+    /// Set when an older file was hydrated with per-display entries, or when a
+    /// display entry is replaced during a flush.
+    private var displayEntriesIsDirty = false
     private var log: (String) -> Void
 
     init(directory: URL, log: @escaping (String) -> Void = { _ in }) {
@@ -238,7 +272,7 @@ final class AutoSaveStore: ObservableObject {
     func flush(now: Date = Date()) {
         trailingTimer?.invalidate()
         trailingTimer = nil
-        guard pending != nil || lastKnownIsDirty else { return }
+        guard pending != nil || lastKnownIsDirty || displayEntriesIsDirty else { return }
         guard !isUnreadable else {
             log("auto-save: refusing to write over a file that could not be read")
             return
@@ -249,8 +283,12 @@ final class AutoSaveStore: ObservableObject {
             if entries.count > Self.ringCapacity {
                 entries.removeSubrange(Self.ringCapacity...)
             }
+            displayEntries.removeAll { $0.screenKey == entry.screenKey }
+            displayEntries.insert(entry, at: 0)
+            displayEntriesIsDirty = true
         }
         lastKnownIsDirty = false
+        displayEntriesIsDirty = false
         lastWrite = now
         write()
     }
@@ -264,7 +302,7 @@ final class AutoSaveStore: ObservableObject {
     /// nothing on the laptop could clear it. That case cannot self-heal, because
     /// a laptop desk is structurally smaller than a docked one.
     func collapseReason(newCount: Int, screenKey: String) -> String? {
-        guard let last = entries.first(where: { $0.screenKey == screenKey }) else { return nil }
+        guard let last = visibleDisplayEntries.first(where: { $0.screenKey == screenKey }) else { return nil }
         guard last.windowCount > 0 else { return nil }
         let floor = Double(last.windowCount) * Self.collapseFraction
         guard Double(newCount) <= floor else { return nil }
@@ -284,12 +322,30 @@ final class AutoSaveStore: ObservableObject {
 
     private func write() {
         do {
-            let data = try JSONEncoder().encode(AutoSaveFile(entries: entries, lastKnown: lastKnown))
+            let data = try JSONEncoder().encode(AutoSaveFile(entries: entries,
+                                                             displayEntries: displayEntries,
+                                                             lastKnown: lastKnown))
             try data.write(to: fileURL, options: .atomic)
-            log("auto-save: wrote \(entries.first?.windowCount ?? 0) window(s), \(entries.count) in ring, \(lastKnown.count) remembered")
+            log("auto-save: wrote \(entries.first?.windowCount ?? 0) window(s), \(entries.count) in ring, \(displayEntries.count) display configuration(s), \(lastKnown.count) remembered")
         } catch {
             log("auto-save: write failed — \(error.localizedDescription)")
         }
+    }
+
+    /// Picks the newest capture for each screen fingerprint while retaining the
+    /// full entry, including its window frames.
+    private static func latestEntryPerDisplay(_ entries: [AutoSaveEntry]) -> [AutoSaveEntry] {
+        var latest: [String: AutoSaveEntry] = [:]
+        for entry in entries {
+            guard let existing = latest[entry.screenKey] else {
+                latest[entry.screenKey] = entry
+                continue
+            }
+            if entry.capturedAt > existing.capturedAt {
+                latest[entry.screenKey] = entry
+            }
+        }
+        return latest.values.sorted { $0.capturedAt > $1.capturedAt }
     }
 
     private func load() {
@@ -307,6 +363,29 @@ final class AutoSaveStore: ObservableObject {
             let file = try JSONDecoder().decode(AutoSaveFile.self, from: data)
             entries = file.entries
             lastKnown = file.lastKnown
+
+            // Files written before per-display retention only have the recent
+            // ring. Merge it with the new field, then recover configurations
+            // that have already rolled out of the ring from the per-window
+            // memory that was added for app relaunch restores.
+            var hydrated = Self.latestEntryPerDisplay(file.displayEntries + file.entries)
+            let hydratedKeys = Set(hydrated.map(\.screenKey))
+            let recovered = Dictionary(grouping: file.lastKnown, by: { $0.screenKey })
+                .filter { !hydratedKeys.contains($0.key) }
+                .map { item in
+                    let screenKey = item.key
+                    let records = item.value
+                    return AutoSaveEntry(
+                        capturedAt: records.map(\.savedAt).max() ?? Date(),
+                        screenKey: screenKey,
+                        readableScreenKey: ScreenFingerprint.from(key: screenKey).readableName,
+                        records: records.sorted { $0.savedAt > $1.savedAt }
+                    )
+                }
+            hydrated.append(contentsOf: recovered)
+            displayEntries = hydrated.sorted { $0.capturedAt > $1.capturedAt }
+            displayEntriesIsDirty = Set(file.displayEntries.map(\.id)) != Set(displayEntries.map(\.id))
+
             // The coalescing floor is a promise about writes to this file, and
             // the file outlives the process. Without this, a relaunch starts
             // with no memory of when it last wrote and flushes on its first
@@ -314,7 +393,7 @@ final class AutoSaveStore: ObservableObject {
             // floor. The file's own modification date is that memory.
             lastWrite = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?
                 .contentModificationDate
-            log("auto-save: loaded \(entries.count) entr(ies), \(lastKnown.count) remembered window(s)")
+            log("auto-save: loaded \(entries.count) entr(ies), \(displayEntries.count) display configuration(s), \(lastKnown.count) remembered window(s)")
         } catch {
             isUnreadable = true
             log("auto-save: \(fileURL.lastPathComponent) could not be decoded — \(error.localizedDescription)")

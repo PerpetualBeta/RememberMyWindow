@@ -28,6 +28,11 @@ All notable changes to RememberMyWindows will be documented here.
 #### ⚡ Concurrency Hardening & Modern Swift
 - **Swift 6 Concurrency**: Resolved compiler warnings and concurrency boundary hops across timer blocks, notification observers, and off-actor calls for rock-solid stability.
 
+#### 🔉 Polite Notification Acoustics (Auto: 20% Below System)
+- **Auto Sound Level**: New per-channel "Auto: 20% below system" toggle for Notch and System notification sounds, locking notification gain to a calibrated 80% (-2 dB) of macOS master output.
+- **Media-Friendly**: Ensures notifications never blare or startle you during music, videos, or calls while staying crisp and audible.
+- **Smart Settings UI**: Automatically hides the manual slider when Auto is active while keeping the quick Test button readily available.
+
 ---
 
 ## [v13.4] — 2026-09-03

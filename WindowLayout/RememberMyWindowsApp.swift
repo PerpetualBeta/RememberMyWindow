@@ -31,6 +31,7 @@ struct RememberMyWindowsApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        .defaultSize(width: 1150, height: 750)
         .handlesExternalEvents(matching: ["main"])
 
         Settings {
@@ -66,14 +67,17 @@ final class QuickKeyRestoreManager {
     // MARK: Install / Remove
 
     func setup() {
-        guard WindowManager.shared.store.quickKeyRestoreEnabled else { return }
+        guard WindowManager.shared.store.quickKeyRestoreEnabled,
+              !WindowManager.shared.store.autoSaveEnabled else { return }
         guard eventTap == nil else { return }
 
         guard AXIsProcessTrusted() else {
             retryTimer?.invalidate()
             retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
                 Task { @MainActor in
-                    if WindowManager.shared.store.quickKeyRestoreEnabled && self?.eventTap == nil {
+                    if WindowManager.shared.store.quickKeyRestoreEnabled,
+                       !WindowManager.shared.store.autoSaveEnabled,
+                       self?.eventTap == nil {
                         self?.setup()
                     }
                 }
@@ -116,7 +120,9 @@ final class QuickKeyRestoreManager {
             retryTimer?.invalidate()
             retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
                 Task { @MainActor in
-                    if WindowManager.shared.store.quickKeyRestoreEnabled && self?.eventTap == nil {
+                    if WindowManager.shared.store.quickKeyRestoreEnabled,
+                       !WindowManager.shared.store.autoSaveEnabled,
+                       self?.eventTap == nil {
                         self?.setup()
                     }
                 }
@@ -147,7 +153,8 @@ final class QuickKeyRestoreManager {
     // MARK: Event Handling
 
     private func handleFlagsChanged(flags: CGEventFlags, keycode: Int64) {
-        guard WindowManager.shared.store.quickKeyRestoreEnabled else { return }
+        guard WindowManager.shared.store.quickKeyRestoreEnabled,
+              !WindowManager.shared.store.autoSaveEnabled else { return }
 
         let trigger = WindowManager.shared.store.quickKeyTrigger
 
@@ -231,7 +238,8 @@ final class QuickKeyRestoreManager {
 
     private func fireRestore(triggerSubtitle: String? = nil) {
         guard !WindowManager.shared.isScreenLocked else { return }
-        guard WindowManager.shared.store.quickKeyRestoreEnabled else { return }
+        guard WindowManager.shared.store.quickKeyRestoreEnabled,
+              !WindowManager.shared.store.autoSaveEnabled else { return }
 
         let mode = WindowManager.shared.store.quickKeyRestoreMode
         WindowManager.shared.log("🚀 Quick Key Restore fired! Mode: \(mode.rawValue)", level: LogLevel.necessary, type: EventType.restore)
@@ -336,8 +344,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = DesktopToggleManager.shared
         WindowManager.shared.startTracking()
 
-        // Start Quick Key restore tap if enabled
-        if WindowManager.shared.store.quickKeyRestoreEnabled {
+        // Start Quick Key restore tap if enabled and compatible with the active mode.
+        if WindowManager.shared.store.quickKeyRestoreEnabled,
+           !WindowManager.shared.store.autoSaveEnabled {
             QuickKeyRestoreManager.shared.setup()
         }
 
@@ -354,7 +363,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Delivered on .main by the queue: argument above, so this body runs
             // on the main thread already.
             MainActor.assumeIsolated {
-                if WindowManager.shared.store.quickKeyRestoreEnabled {
+                if WindowManager.shared.store.quickKeyRestoreEnabled,
+                   !WindowManager.shared.store.autoSaveEnabled {
                     QuickKeyRestoreManager.shared.setup()
                 } else {
                     QuickKeyRestoreManager.shared.teardown()
@@ -453,6 +463,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Status Item Click
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        if WindowManager.shared.store.autoSaveEnabled {
+            let frontmostAppID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            if let appID = frontmostAppID, appID != "com.netanel.remembermywindows" {
+                self.lastFrontmostAppID = appID
+            }
+            openMenuDropdown(forAppID: lastFrontmostAppID)
+            return
+        }
+
         let event = NSApp.currentEvent
         let isRightClick = event?.type == .rightMouseUp || (NSEvent.modifierFlags.contains(.control))
 
@@ -586,6 +605,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         self.menu = menu
         menu.delegate = self
+
+        if WindowManager.shared.store.autoSaveEnabled {
+            setupAutoSaveMenu(menu)
+            return
+        }
 
         let activeAppID = lastFrontmostAppID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let activeAppName: String? = {
@@ -744,6 +768,103 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quitItem.image = menuSymbolImage("power")
     }
 
+    private func setupAutoSaveMenu(_ menu: NSMenu) {
+        let openItem = menu.addItem(withTitle: lz("Open RememberMyWindows"), action: #selector(openMainWindow), keyEquivalent: "o")
+        openItem.image = menuSymbolImage("macwindow.on.rectangle")
+        menu.addItem(NSMenuItem.separator())
+
+        let headerItem = NSMenuItem(title: lz("Recent Auto Captures"), action: nil, keyEquivalent: "")
+        headerItem.isEnabled = false
+        menu.addItem(headerItem)
+
+        let matchingEntries = (WindowManager.shared.autoSaveStore?.visibleDisplayEntries ?? []).compactMap { entry -> (AutoSaveEntry, LayoutSnapshot)? in
+            guard let snap = WindowManager.shared.snapshot(from: entry) else { return nil }
+            return (entry, snap)
+        }
+
+        if matchingEntries.isEmpty {
+            let emptyItem = NSMenuItem(title: lz("No auto captures yet"), action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            menu.addItem(emptyItem)
+        } else {
+            let themeStr = UserDefaults.standard.string(forKey: "themeColor") ?? "Default"
+            let currentTheme = ThemeColor(rawValue: themeStr) ?? .default
+            let tint = currentTheme.color(seed: 0)
+            let langStr = UserDefaults.standard.string(forKey: "appLanguage") ?? "system"
+            let appLanguage = AppLanguage(rawValue: langStr) ?? .auto
+
+            for (index, (entry, snap)) in matchingEntries.enumerated() {
+                let ageStr = formatAutoSaveAge(of: entry.capturedAt)
+                let count = entry.windowCount
+                let title: String
+                if index == 0 {
+                    let format = count == 1 ? lz("Latest (%@) · 1 window") : lz("Latest (%@) · %d windows")
+                    title = count == 1 ? String(format: format, ageStr) : String(format: format, ageStr, count)
+                } else {
+                    let format = count == 1 ? lz("%@ · 1 window") : lz("%@ · %d windows")
+                    title = count == 1 ? String(format: format, ageStr) : String(format: format, ageStr, count)
+                }
+
+                let item = NSMenuItem(title: title, action: #selector(restoreAutoSaveEntry(_:)), keyEquivalent: "")
+                item.representedObject = entry.id.uuidString
+                item.image = menuSymbolImage("clock.arrow.circlepath")
+
+                // Hover flyout submenu showing visual preview
+                let previewMenu = NSMenu()
+                let previewMenuItem = NSMenuItem()
+                let entryID = entry.id
+
+                let previewView = AutoSavePreviewCardView(
+                    snapshot: snap,
+                    capturedAt: entry.capturedAt,
+                    tint: tint,
+                    language: appLanguage,
+                    onRestore: {
+                        NSApp.sendAction(#selector(NSMenu.cancelTracking), to: nil, from: nil)
+                        WindowManager.shared.restoreAutoLayout(entryID: entryID, showNotification: true)
+                    }
+                )
+
+                let hostingView = NSHostingView(rootView: previewView)
+                hostingView.wantsLayer = true
+                hostingView.frame = CGRect(x: 0, y: 0, width: 280, height: 230)
+                previewMenuItem.view = hostingView
+                previewMenu.addItem(previewMenuItem)
+
+                item.submenu = previewMenu
+                menu.addItem(item)
+            }
+        }
+
+        menu.addItem(NSMenuItem.separator())
+        let updateItem = menu.addItem(withTitle: lz("Check for Updates…"), action: #selector(checkForUpdates), keyEquivalent: "")
+        updateItem.image = menuSymbolImage("arrow.down.circle")
+
+        menu.addItem(NSMenuItem.separator())
+        let quitItem = menu.addItem(withTitle: lz("Quit"), action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.image = menuSymbolImage("power")
+    }
+
+    private func formatAutoSaveAge(of date: Date) -> String {
+        let seconds = Date().timeIntervalSince(date)
+        if seconds < 60 {
+            return lz("just now")
+        }
+        let f = DateComponentsFormatter()
+        f.unitsStyle = .full
+        f.maximumUnitCount = 1
+        f.allowedUnits = seconds < 3600 ? [.minute] : (seconds < 86_400 ? [.hour] : [.day])
+        let spelled = f.string(from: seconds) ?? ""
+        guard !spelled.isEmpty else { return lz("just now") }
+        return String(format: lz("%@ ago"), spelled)
+    }
+
+    @objc private func restoreAutoSaveEntry(_ sender: NSMenuItem) {
+        guard let idString = sender.representedObject as? String,
+              let id = UUID(uuidString: idString) else { return }
+        WindowManager.shared.restoreAutoLayout(entryID: id, showNotification: true)
+    }
+
     /// Native macOS menu bar item background highlight + white icon tint for 0.3s on right-click restore.
     private func animateRightClickStatusButton() {
         guard let button = statusItem?.button else { return }
@@ -762,13 +883,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openMainWindow() {
         let manager = WindowManager.shared
         manager.selectedAppBundleID = nil
-        if let snapshot = manager.currentApplicableSnapshot,
-           let key = manager.store.snapshots.first(where: { $0.value.id == snapshot.id })?.key {
-            manager.selectedSnapshotKey = key
-            let currentAppID = lastFrontmostAppID
-            manager.selectedAppBundleID = snapshot.records.contains { $0.windowID.appBundleID == currentAppID }
-                ? currentAppID
-                : nil
+        if !manager.store.autoSaveEnabled {
+            manager.selectedSnapshotKey = WindowManager.liveKey
         }
         showMainWindow()
     }

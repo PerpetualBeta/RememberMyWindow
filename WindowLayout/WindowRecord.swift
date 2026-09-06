@@ -493,6 +493,10 @@ struct LayoutStore: Codable {
     var notchSoundVolume: Double = 1.0
     var systemSoundVolume: Double = 1.0
 
+    /// Auto-adjust volume to 20% below system master volume (0.80 gain factor)
+    var notchAutoVolumeBelowSystem: Bool = true
+    var systemAutoVolumeBelowSystem: Bool = true
+
     /// Per-event sound for notch notifications
     var notchSoundOnFullRestore: Bool = true
     var notchSoundOnSingleRestore: Bool = true
@@ -582,6 +586,8 @@ struct LayoutStore: Codable {
         // In-app volume
         notchSoundVolume                      = try c.decodeIfPresent(Double.self,                 forKey: .notchSoundVolume) ?? 1.0
         systemSoundVolume                     = try c.decodeIfPresent(Double.self,                 forKey: .systemSoundVolume) ?? 1.0
+        notchAutoVolumeBelowSystem            = try c.decodeIfPresent(Bool.self,                   forKey: .notchAutoVolumeBelowSystem) ?? true
+        systemAutoVolumeBelowSystem           = try c.decodeIfPresent(Bool.self,                   forKey: .systemAutoVolumeBelowSystem) ?? true
 
         // Per-event sound flags (notch)
         defaultNotificationSound              = migrateSound(try c.decodeIfPresent(String.self, forKey: .defaultNotificationSound), fallback: SystemSound.stargaze.rawValue)

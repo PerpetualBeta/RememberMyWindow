@@ -6,36 +6,39 @@ struct LayoutsView: View {
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
 
+    private var liveLayoutSnapshot: LayoutSnapshot {
+        let fp = manager.currentFingerprint
+        return LayoutSnapshot(
+            id: UUID(),
+            name: fp.readableName,
+            screenKey: fp.key,
+            readableScreenKey: fp.readableName,
+            records: manager.liveRecords,
+            createdAt: Date(),
+            updatedAt: Date(),
+            location: nil,
+            isAutoSave: true
+        )
+    }
+
     var body: some View {
-        let hasSaved = !manager.store.snapshots.filter({ !$0.value.isAutoSave }).isEmpty
-        if manager.liveRecords.isEmpty && !hasSaved {
-            emptyState
-        } else if let key = manager.selectedSnapshotKey {
-            if key == WindowManager.liveKey {
-                let fp = manager.currentFingerprint
-                let liveSnap = LayoutSnapshot(
-                    id: UUID(),
-                    name: fp.readableName,
-                    screenKey: fp.key,
-                    readableScreenKey: fp.readableName,
-                    records: manager.liveRecords,
-                    createdAt: Date(),
-                    updatedAt: Date(),
-                    location: nil,
-                    isAutoSave: true
-                )
-                SnapshotDetailView(snapshot: liveSnap, key: key)
-            } else if let snapshot = manager.store.snapshots[key] {
-                SnapshotDetailView(snapshot: snapshot, key: key)
-            } else {
-                Text("Select a layout to view details".localized(appLanguage))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+        if manager.store.autoSaveEnabled {
+            AutoLayoutCenterView()
         } else {
-            Text("Select a layout to view details".localized(appLanguage))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            let hasSaved = !manager.store.snapshots.filter({ !$0.value.isAutoSave }).isEmpty
+            if manager.liveRecords.isEmpty && !hasSaved {
+                emptyState
+            } else if let key = manager.selectedSnapshotKey {
+                if key == WindowManager.liveKey {
+                    SnapshotDetailView(snapshot: liveLayoutSnapshot, key: key)
+                } else if let snapshot = manager.store.snapshots[key] {
+                    SnapshotDetailView(snapshot: snapshot, key: key)
+                } else {
+                    SnapshotDetailView(snapshot: liveLayoutSnapshot, key: WindowManager.liveKey)
+                }
+            } else {
+                SnapshotDetailView(snapshot: liveLayoutSnapshot, key: WindowManager.liveKey)
+            }
         }
     }
 
@@ -103,129 +106,129 @@ struct SnapshotListView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // AUTO LAYOUT HERO — the everyday path when persistence is on.
-                if manager.store.autoSaveEnabled {
-                    autoLayoutHero
-                }
-
-                // LIVE LAYOUT SECTION
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("LIVE LAYOUT".localized(appLanguage))
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 8)
-                    
-                    if let live = liveSnapshot {
-                        snapshotRow(live.snapshot, key: live.key, isLive: true)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .liquidGlass(
-                                isSelected: manager.selectedSnapshotKey == live.key,
-                                prominent: true,
-                                tint: themeColor.color(seed: 1),
-                                isHovered: hoveredKey == live.key
-                            )
-                            .contentShape(Rectangle())
-                            .onHover { isHovered in
-                                if isHovered { hoveredKey = live.key }
-                                else if hoveredKey == live.key { hoveredKey = nil }
-                            }
-                            .onTapGesture {
-                                manager.selectedSnapshotKey = live.key
-                                manager.selectedAppBundleID = nil
-                            }
-                    } else {
-                        Text("No active layout for this screen config".localized(appLanguage))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+        if manager.store.autoSaveEnabled {
+            AutoLayoutSidebarWindowListView()
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // LIVE LAYOUT SECTION
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("LIVE LAYOUT".localized(appLanguage))
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.secondary)
                             .padding(.leading, 8)
-                    }
-
-                    // SCREEN ID — fixed below the live layout row
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("SCREEN ID".localized(appLanguage))
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.tertiary)
-                        Text(manager.currentFingerprint.key)
-                            .font(.system(size: 8).monospaced())
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(.horizontal, 8)
-                }
-
-                // SAVED SESSIONS SECTION — demoted, and collapsible, once the
-                // Auto layout is doing the everyday work.
-                VStack(alignment: .leading, spacing: 8) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { savedSessionsOpened = !sessionsExpanded }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 9, weight: .bold))
-                                .rotationEffect(.degrees(sessionsExpanded ? 90 : 0))
-                            Text("SAVED SESSIONS".localized(appLanguage))
-                                .font(.system(size: 11, weight: .bold))
-                            if !sessionsExpanded, !savedSnapshots.isEmpty {
-                                Text("\(savedSnapshots.count)")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            Spacer()
-                        }
-                        .foregroundStyle(.secondary)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.leading, 8)
-
-                    if !sessionsExpanded {
-                        EmptyView()
-                    } else if savedSnapshots.isEmpty {
-                        Text("No saved sessions".localized(appLanguage))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .padding(.leading, 8)
-                    } else {
-                        ForEach(savedSnapshots, id: \.key) { item in
-                            snapshotRow(item.snapshot, key: item.key, isLive: false)
+                        
+                        if let live = liveSnapshot {
+                            snapshotRow(live.snapshot, key: live.key, isLive: true)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 10)
                                 .liquidGlass(
-                                    isSelected: manager.selectedSnapshotKey == item.key,
-                                    prominent: false,
-                                    tint: themeColor.color(seed: 2),
-                                    isHovered: hoveredKey == item.key
+                                    isSelected: manager.selectedSnapshotKey == live.key,
+                                    prominent: true,
+                                    tint: themeColor.color(seed: 1),
+                                    isHovered: hoveredKey == live.key
                                 )
                                 .contentShape(Rectangle())
                                 .onHover { isHovered in
-                                    if isHovered { hoveredKey = item.key }
-                                    else if hoveredKey == item.key { hoveredKey = nil }
+                                    if isHovered { hoveredKey = live.key }
+                                    else if hoveredKey == live.key { hoveredKey = nil }
                                 }
                                 .onTapGesture {
-                                    manager.selectedSnapshotKey = item.key
+                                    manager.selectedSnapshotKey = live.key
                                     manager.selectedAppBundleID = nil
                                 }
-                                .contextMenu {
-                                    Button("Restore") { manager.restore(key: item.key) }
-                                        .disabled(!manager.canRestore(snapshot: item.snapshot))
-                                    Divider()
-                                    Button("Delete", role: .destructive) {
-                                        manager.deleteSnapshot(key: item.key)
-                                        if manager.selectedSnapshotKey == item.key { manager.selectedSnapshotKey = nil }
-                                    }
+                        } else {
+                            Text("No active layout for this screen config".localized(appLanguage))
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .padding(.leading, 8)
+                        }
+
+                        // SCREEN ID — fixed below the live layout row
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("SCREEN ID".localized(appLanguage))
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.tertiary)
+                            Text(manager.currentFingerprint.key)
+                                .font(.system(size: 8).monospaced())
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.horizontal, 8)
+                    }
+
+                    // SAVED SESSIONS SECTION — demoted, and collapsible, once the
+                    // Auto layout is doing the everyday work.
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) { savedSessionsOpened = !sessionsExpanded }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .rotationEffect(.degrees(sessionsExpanded ? 90 : 0))
+                                Text("SAVED SESSIONS".localized(appLanguage))
+                                    .font(.system(size: 11, weight: .bold))
+                                if !sessionsExpanded, !savedSnapshots.isEmpty {
+                                    Text("\(savedSnapshots.count)")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundStyle(.tertiary)
                                 }
+                                Spacer()
+                            }
+                            .foregroundStyle(.secondary)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, 8)
+
+                        if sessionsExpanded {
+                            if savedSnapshots.isEmpty {
+                                Text("No saved sessions".localized(appLanguage))
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.leading, 8)
+                            } else {
+                                ForEach(savedSnapshots, id: \.key) { item in
+                                    snapshotRow(item.snapshot, key: item.key, isLive: false)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 10)
+                                        .liquidGlass(
+                                            isSelected: manager.selectedSnapshotKey == item.key,
+                                            prominent: false,
+                                            tint: themeColor.color(seed: 1),
+                                            isHovered: hoveredKey == item.key
+                                        )
+                                        .contentShape(Rectangle())
+                                        .onHover { isHovered in
+                                            if isHovered { hoveredKey = item.key }
+                                            else if hoveredKey == item.key { hoveredKey = nil }
+                                        }
+                                        .onTapGesture {
+                                            manager.selectedSnapshotKey = item.key
+                                            manager.selectedAppBundleID = nil
+                                        }
+                                        .contextMenu {
+                                            Button("Restore") {
+                                                manager.restore(key: item.key)
+                                            }
+                                            Divider()
+                                            Button("Delete", role: .destructive) {
+                                                manager.deleteSnapshot(key: item.key)
+                                                if manager.selectedSnapshotKey == item.key { manager.selectedSnapshotKey = nil }
+                                            }
+                                        }
+                                }
+                            }
                         }
                     }
                 }
+                .padding(12)
             }
-            .padding(12)
+            .scrollContentBackground(.hidden)
+            .navigationTitle("Remember")
         }
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Remember")
     }
 
     // MARK: - Auto layout hero
@@ -238,7 +241,8 @@ struct SnapshotListView: View {
         // so the label can be up to one tick behind; the tick below is what moves
         // it, and the age it shows is approximate anyway.
         let entries = manager.autoSaveStore?.visibleEntries ?? []
-        let entry = entries.first
+        let entry = manager.autoSaveStore?.entry(forScreenKey: manager.currentFingerprint.key)
+            ?? entries.first
         let currentKey = manager.currentFingerprint.key
         // Ticked once a minute. `now` was injectable so both states could be
         // rendered, but nothing drove it: a card built once kept the `Date()`
@@ -817,5 +821,503 @@ struct BringToFrontButton: View {
         .help(isActive
               ? "Click to unset Bring to Front".localized(appLanguage)
               : "Bring to Front".localized(appLanguage))
+    }
+}
+
+// MARK: - Auto Layout Mode Views (Active strictly when autoSaveEnabled is true)
+
+struct AutoLayoutCenterView: View {
+    @EnvironmentObject var manager: WindowManager
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+
+    private var entries: [AutoSaveEntry] {
+        manager.autoSaveStore?.visibleEntries ?? []
+    }
+
+    private var rememberedEntries: [AutoSaveEntry] {
+        manager.autoSaveStore?.visibleDisplayEntries ?? []
+    }
+
+    private var currentEntry: AutoSaveEntry? {
+        manager.autoSaveStore?.entry(forScreenKey: manager.currentFingerprint.key)
+            ?? entries.first
+    }
+
+    private var activeEntry: AutoSaveEntry? {
+        if let id = manager.selectedAutoSaveEntryID,
+           let found = (rememberedEntries + entries).first(where: { $0.id == id }) {
+            return found
+        }
+        return currentEntry
+    }
+
+    private var activeSnapshot: LayoutSnapshot? {
+        if let entry = activeEntry {
+            return LayoutSnapshot(
+                name: entry.readableScreenKey ?? manager.currentFingerprint.readableName,
+                screenKey: entry.screenKey,
+                readableScreenKey: entry.readableScreenKey,
+                records: entry.records,
+                createdAt: entry.capturedAt,
+                updatedAt: entry.capturedAt,
+                location: nil,
+                isAutoSave: true,
+                foregroundBundleID: nil,
+                commandExcludedBundleIDs: []
+            )
+        }
+        return manager.autoLayoutSnapshot
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                // Return to latest banner if an earlier capture is selected
+                if let selectedID = manager.selectedAutoSaveEntryID,
+                   selectedID != currentEntry?.id,
+                   let entry = activeEntry {
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(themeColor.color(seed: 0))
+                        Text("Viewing Earlier Capture".localized(appLanguage))
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("(\(entry.capturedAt.formatted(.relative(presentation: .named))))")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                manager.selectedAutoSaveEntryID = nil
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.forward.circle")
+                                Text("Return to Latest".localized(appLanguage))
+                            }
+                            .font(.system(size: 12, weight: .semibold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .tint(themeColor.color(seed: 0))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(themeColor.color(seed: 0).opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+
+                // 1. Visual Preview at the top
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("VISUAL PREVIEW".localized(appLanguage))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if let count = activeEntry?.windowCount ?? activeSnapshot?.records.count {
+                            Text(count == 1 ? "1 window".localized(appLanguage) : "\(count) \("windows".localized(appLanguage))")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    if let snap = activeSnapshot {
+                        LayoutPreviewView(
+                            snapshot: snap,
+                            selectedRecordID: manager.selectedRecordID,
+                            tint: themeColor.color(seed: 0),
+                            enable3DHover: true,
+                            onSelectRecord: { recID in
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    manager.selectedRecordID = (manager.selectedRecordID == recID ? nil : recID)
+                                }
+                            }
+                        )
+                        .frame(minHeight: 420, idealHeight: 460, maxHeight: 520)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snap.records.count)
+                    } else {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                            .frame(height: 420)
+                            .overlay {
+                                Text("No layout captured yet".localized(appLanguage))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.tertiary)
+                            }
+                    }
+                }
+                // Slides in from the right (+x -> 0, moving leftward) when Auto Layout is activated,
+                // matching the inspector card that slides out leftward towards this pane.
+                // Slides back out to the right (0 -> +x, moving rightward) when returning to Saved Sessions.
+                .transition(.asymmetric(
+                    insertion: .offset(x: 260).combined(with: .opacity),
+                    removal:   .offset(x: 260).combined(with: .opacity)
+                ))
+                .animation(.spring(response: 0.42, dampingFraction: 0.82), value: manager.store.autoSaveEnabled)
+                .clipped()
+
+                Divider()
+
+                // 2. Auto Layout Card directly below it
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    let currentKey = manager.currentFingerprint.key
+                    let entry = activeEntry
+                    AutoLayoutHeroCard(
+                        capturedAt: entry?.capturedAt,
+                        windowCount: entry?.windowCount ?? 0,
+                        screenName: entry.map { $0.readableScreenKey ?? $0.screenKey },
+                        matchesCurrentScreens: entry?.screenKey == currentKey,
+                        tint: themeColor.color(seed: 0),
+                        language: appLanguage,
+                        onRestore: {
+                            if let id = entry?.id {
+                                manager.restoreAutoLayout(entryID: id)
+                            } else {
+                                manager.restoreAutoLayout()
+                            }
+                        },
+                        earlier: entries.dropFirst().map {
+                            AutoLayoutHeroCard.EarlierCapture(
+                                id: $0.id,
+                                capturedAt: $0.capturedAt,
+                                windowCount: $0.windowCount,
+                                matchesCurrentScreens: $0.screenKey == currentKey
+                            )
+                        },
+                        onRestoreEarlier: { manager.restoreAutoLayout(entryID: $0) },
+                        selectedCaptureID: manager.selectedAutoSaveEntryID,
+                        onSelectEarlier: { tappedID in
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                if manager.selectedAutoSaveEntryID == tappedID {
+                                    manager.selectedAutoSaveEntryID = nil
+                                } else {
+                                    manager.selectedAutoSaveEntryID = tappedID
+                                }
+                            }
+                        },
+                        now: context.date
+                    )
+                    .liquidGlass(cornerRadius: 16, style: .card)
+                }
+            }
+            .padding(20)
+        }
+        .scrollContentBackground(.hidden)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct AutoLayoutSidebarWindowListView: View {
+    @EnvironmentObject var manager: WindowManager
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+
+    private var entries: [AutoSaveEntry] {
+        manager.autoSaveStore?.visibleEntries ?? []
+    }
+
+    private var rememberedEntries: [AutoSaveEntry] {
+        manager.autoSaveStore?.visibleDisplayEntries ?? []
+    }
+
+    /// Remembered display configurations, newest first, with the live setup on top.
+    private var rememberedDisplays: [AutoSaveEntry] {
+        let currentKey = manager.currentFingerprint.key
+        return rememberedEntries.sorted { a, b in
+            let aIsLive = a.screenKey == currentKey
+            let bIsLive = b.screenKey == currentKey
+            if aIsLive != bIsLive { return aIsLive }
+            return a.capturedAt > b.capturedAt
+        }
+    }
+
+    private var activeEntry: AutoSaveEntry? {
+        if let id = manager.selectedAutoSaveEntryID,
+           let found = (rememberedEntries + entries).first(where: { $0.id == id }) {
+            return found
+        }
+        return manager.autoSaveStore?.entry(forScreenKey: manager.currentFingerprint.key)
+            ?? rememberedEntries.first
+            ?? entries.first
+    }
+
+    private var records: [WindowRecord] {
+        activeEntry?.records.filter { !$0.windowID.appBundleID.isEmpty } ?? []
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                // 1. REMEMBERED DISPLAYS Section (Above Windows List)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("REMEMBERED DISPLAYS".localized(appLanguage))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if !rememberedDisplays.isEmpty {
+                            Text("\(rememberedDisplays.count)")
+                                .font(.system(size: 11, weight: .bold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(themeColor.color(seed: 0).opacity(0.15))
+                                .foregroundStyle(themeColor.color(seed: 0))
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.top, 4)
+
+                    if rememberedDisplays.isEmpty {
+                        Text("No remembered displays".localized(appLanguage))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 8)
+                    } else {
+                        LazyVStack(spacing: 6) {
+                            ForEach(rememberedDisplays) { displayEntry in
+                                let isSelected = (activeEntry?.screenKey == displayEntry.screenKey)
+                                let isLive = displayEntry.screenKey == manager.currentFingerprint.key
+
+                                AutoLayoutRememberedDisplayRow(
+                                    entry: displayEntry,
+                                    isSelected: isSelected,
+                                    isLive: isLive,
+                                    themeColor: themeColor,
+                                    appLanguage: appLanguage
+                                )
+                                .onTapGesture {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        manager.selectedAutoSaveEntryID = displayEntry.id
+                                        manager.selectedRecordID = nil
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+                    .padding(.horizontal, 6)
+
+                // 2. LATEST CAPTURED WINDOWS Section (Below Displays List)
+                VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("LATEST CAPTURED WINDOWS".localized(appLanguage))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if !records.isEmpty {
+                                Text("\(records.count)")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(themeColor.color(seed: 0).opacity(0.15))
+                                    .foregroundStyle(themeColor.color(seed: 0))
+                                    .clipShape(Capsule())
+                            }
+                        }
+
+                        if let entry = activeEntry {
+                            Text(String(format: "From capture %@".localized(appLanguage), entry.capturedAt.formatted(.relative(presentation: .named))))
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+
+                    if records.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "macwindow.badge.plus")
+                                .font(.system(size: 28))
+                                .foregroundStyle(.tertiary)
+                            Text("No windows captured yet".localized(appLanguage))
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                            Text("Windows are captured automatically as you rearrange them.".localized(appLanguage))
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                        .padding(.horizontal, 12)
+                    } else {
+                        LazyVStack(spacing: 6) {
+                            ForEach(records) { record in
+                                AutoLayoutSidebarWindowRow(
+                                    record: record,
+                                    isSelected: manager.selectedRecordID == record.id,
+                                    themeColor: themeColor,
+                                    appLanguage: appLanguage
+                                )
+                                .onTapGesture {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        if manager.selectedRecordID == record.id {
+                                            manager.selectedRecordID = nil
+                                        } else {
+                                            manager.selectedRecordID = record.id
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(10)
+        }
+        .scrollContentBackground(.hidden)
+        .navigationTitle("Remember")
+    }
+}
+
+// MARK: - Remembered Display Row (for Auto Layout sidebar)
+
+struct AutoLayoutRememberedDisplayRow: View {
+    let entry: AutoSaveEntry
+    let isSelected: Bool
+    let isLive: Bool
+    let themeColor: ThemeColor
+    let appLanguage: AppLanguage
+
+    @State private var isHovered = false
+
+    var body: some View {
+        let displayCount = ScreenFingerprint.from(key: entry.screenKey).displays.count
+        let systemIcon = displayCount > 1 ? "display.2" : "display"
+        let displayName = entry.readableScreenKey ?? ScreenFingerprint.from(key: entry.screenKey).readableName
+        let tint = isLive ? themeColor.color(seed: 0) : Color.primary
+
+        HStack(spacing: 10) {
+            Image(systemName: systemIcon)
+                .font(.system(size: 16))
+                .foregroundStyle(isLive ? themeColor.color(seed: 0) : .secondary)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(displayName)
+                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+
+                    if isLive {
+                        Text("Live".localized(appLanguage))
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(themeColor.color(seed: 3).opacity(0.15))
+                            .foregroundStyle(themeColor.color(seed: 3))
+                            .clipShape(Capsule())
+                    }
+                }
+
+                Text(String(format: "%d windows · %@", entry.windowCount, entry.capturedAt.formatted(.relative(presentation: .named))))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 4)
+
+            ScreenLayoutThumbnail(
+                screenKey: entry.screenKey,
+                tint: tint,
+                isLive: isLive,
+                isHighlighted: isSelected
+            )
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .liquidGlass(
+            isSelected: isSelected,
+            prominent: isLive,
+            tint: themeColor.color(seed: 1),
+            isHovered: isHovered
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
+    }
+}
+
+struct AutoLayoutSidebarWindowRow: View {
+    let record: WindowRecord
+    let isSelected: Bool
+    let themeColor: ThemeColor
+    let appLanguage: AppLanguage
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // App Icon
+            AppIconView(bundleID: record.windowID.appBundleID)
+                .frame(width: 28, height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    Text(record.windowID.appName ?? record.windowID.appBundleID)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+
+                    if record.isFullScreenMode {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.indigo)
+                    }
+                }
+
+                if !record.windowID.windowTitle.isEmpty {
+                    Text(record.windowID.windowTitle)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                HStack(spacing: 6) {
+                    if let screenName = record.screenName {
+                        Text(screenName)
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(themeColor.color(seed: 0).opacity(0.1))
+                            .foregroundStyle(themeColor.color(seed: 0))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+
+                    Text("\(record.globalFrame.width.clampedInt) × \(record.globalFrame.height.clampedInt)")
+                        .font(.system(size: 10).monospaced())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected
+                      ? themeColor.color(seed: 0).opacity(0.18)
+                      : (isHovered ? Color.primary.opacity(0.06) : Color.clear))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isSelected ? themeColor.color(seed: 0).opacity(0.4) : Color.clear, lineWidth: 1)
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
     }
 }

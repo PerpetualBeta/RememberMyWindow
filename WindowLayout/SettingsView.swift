@@ -92,8 +92,6 @@ struct SettingsView: View {
     @State private var hasFinderPerm = false
     @State private var showingOnboarding = false
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
-    @State private var soundLibraryPreviewName: String = SystemSound.welcome.rawValue
-    @State private var showingSoundLibrarySubpage = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -212,20 +210,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func categoryDetailView(for category: SettingsCategory) -> some View {
-        if category == .appearance, showingSoundLibrarySubpage {
-            // Third-level: Sound Library subpage (pushes from Appearance)
-            SoundLibrarySubpageView(
-                appLanguage: appLanguage
-            ) {
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                    showingSoundLibrarySubpage = false
-                }
-            }
-            .transition(.asymmetric(
-                insertion: .move(edge: appLanguage == .hebrew ? .leading : .trailing).combined(with: .opacity),
-                removal: .move(edge: appLanguage == .hebrew ? .leading : .trailing).combined(with: .opacity)
-            ))
-        } else if category == .appearance, let channel = selectedNotificationChannel {
+        if category == .appearance, let channel = selectedNotificationChannel {
             // Third-level: Notification channel detail (pushes from Appearance)
             NotificationChannelDetailView(
                 channel: channel,
@@ -246,7 +231,6 @@ struct SettingsView: View {
                 HStack(spacing: 12) {
                     Button {
                         withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                            showingSoundLibrarySubpage = false
                             selectedNotificationChannel = nil
                             selectedCategory = nil
                         }
@@ -484,7 +468,10 @@ struct SettingsView: View {
 
     // MARK: - 2. Restore Settings Content (Full Restore & Single App Restore)
 
+    @ViewBuilder
     private var restoreSettingsContent: some View {
+        let isAutoLayoutActive = manager.store.autoSaveEnabled
+
         VStack(spacing: 18) {
             // Subcategory 1: Full Restore
             SettingsSection(title: "Auto Layout".localized(appLanguage), icon: "clock.arrow.circlepath") {
@@ -495,10 +482,35 @@ struct SettingsView: View {
                         icon: "clock.arrow.circlepath",
                         isOn: Binding(
                             get: { manager.store.autoSaveEnabled },
-                            set: { manager.store.autoSaveEnabled = $0 }
+                            set: { manager.setAutoSaveEnabled($0) }
                         )
                     )
                 }
+            }
+
+            if isAutoLayoutActive {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Auto Layout is on".localized(appLanguage))
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("Some restore settings are unavailable while Auto Layout is active. Switch to Saved Sessions to edit them.".localized(appLanguage))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+                }
+                .accessibilityElement(children: .combine)
             }
 
             SettingsSection(title: "Full Restore".localized(appLanguage), icon: "display.2") {
@@ -532,6 +544,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(isAutoLayoutActive ? 0.45 : 1.0)
 
                     Divider().padding(.horizontal, 12)
 
@@ -597,6 +610,8 @@ struct SettingsView: View {
                         icon: "cursorarrow.click",
                         isOn: $restoreFocusedAppOnLeftClick
                     )
+                    .disabled(isAutoLayoutActive)
+                    .opacity(isAutoLayoutActive ? 0.45 : 1.0)
 
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.turn.down.right")
@@ -610,6 +625,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(isAutoLayoutActive ? 0.45 : 1.0)
                 }
             }
 
@@ -734,6 +750,8 @@ struct SettingsView: View {
                     }
                 }
             }
+            .disabled(isAutoLayoutActive)
+            .opacity(isAutoLayoutActive ? 0.45 : 1.0)
         }
     }
 
@@ -978,63 +996,7 @@ struct SettingsView: View {
                         isOn: $masterSoundEnabled
                     )
 
-                    if masterSoundEnabled {
                         Divider().padding(.horizontal, 12)
-
-                        // ── Sound Library Nav Row ───────────────────────────────
-                        Button {
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                                showingSoundLibrarySubpage = true
-                            }
-                        } label: {
-                            HStack(spacing: 12) {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(Color.purple.opacity(0.18))
-                                    Image(systemName: "music.note.list")
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(Color.purple)
-                                }
-                                .frame(width: 32, height: 32)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Sound Library".localized(appLanguage))
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(.primary)
-                                    Text("Browse and preview available alert tones".localized(appLanguage))
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-
-                                Spacer()
-
-                                // Quick 🎲 Random Sound Button
-                                Button {
-                                    let randomSound = SystemSound.allCases.randomElement() ?? .animeWow
-                                    randomSound.play()
-                                } label: {
-                                    Image(systemName: "dice.fill")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(Color.accentColor)
-                                        .frame(width: 26, height: 26)
-                                        .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-                                }
-                                .buttonStyle(.plain)
-                                .help("Random Sound (🎲)".localized(appLanguage))
-
-                                Image(systemName: appLanguage == .hebrew ? "chevron.left" : "chevron.right")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    Divider().padding(.horizontal, 12)
 
                     // ── Notch Notification Nav Row ──────────────────────────────
                     let notchActiveCount = (manager.store.notchNotifyOnFullRestore ? 1 : 0) +
@@ -2724,66 +2686,6 @@ struct NotificationChannelDetailView: View {
 
             ScrollView {
                 VStack(spacing: 18) {
-                    // Sound Volume Section
-                    SettingsSection(title: "Sound Volume".localized(appLanguage), icon: "speaker.wave.2.fill") {
-                        VStack(spacing: 12) {
-                            HStack(spacing: 12) {
-                                let currentVolume: Double = channel == .notch ? manager.store.notchSoundVolume : manager.store.systemSoundVolume
-                                let speakerIcon: String = currentVolume <= 0.01 ? "speaker.slash.fill" : (currentVolume < 0.35 ? "speaker.wave.1.fill" : (currentVolume < 0.7 ? "speaker.wave.2.fill" : "speaker.wave.3.fill"))
-
-                                Image(systemName: speakerIcon)
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(channel.color)
-                                    .frame(width: 24)
-                                    .animation(.easeInOut(duration: 0.2), value: currentVolume)
-
-                                Slider(
-                                    value: Binding(
-                                        get: { channel == .notch ? manager.store.notchSoundVolume : manager.store.systemSoundVolume },
-                                        set: { newVal in
-                                            if channel == .notch {
-                                                manager.store.notchSoundVolume = newVal
-                                            } else {
-                                                manager.store.systemSoundVolume = newVal
-                                            }
-                                            manager.persist()
-                                        }
-                                    ),
-                                    in: 0.0...1.0
-                                )
-                                .tint(channel.color)
-
-                                Text("\(Int(round(currentVolume * 100)))%")
-                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 44, alignment: .trailing)
-
-                                Button {
-                                    let testSound = channel == .notch ? manager.store.notchSoundNameSingleRestore : manager.store.systemSoundNameSingleRestore
-                                    let vol = Float(currentVolume)
-                                    manager.previewSound(named: testSound, volume: vol)
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "play.fill")
-                                            .font(.system(size: 10))
-                                        Text("Test".localized(appLanguage))
-                                            .font(.system(size: 11, weight: .medium))
-                                    }
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(channel.color.opacity(0.12))
-                                    )
-                                    .foregroundStyle(channel.color)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Preview volume with current sound".localized(appLanguage))
-                            }
-                            .padding(12)
-                        }
-                    }
-
                     // Events Section: distinct interactive cards
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 6) {
@@ -2797,112 +2699,298 @@ struct NotificationChannelDetailView: View {
                         .padding(.horizontal, 4)
 
                         VStack(spacing: 12) {
-                            eventCard(
-                                icon: "display.2",
-                                title: "Full Layout Restore",
-                                subtitle: "When all windows are restored to their saved layout",
-                                eventType: .fullRestore,
-                                isOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchNotifyOnFullRestore : manager.store.systemNotifyOnFullRestore },
-                                    set: { v in channel == .notch ? (manager.store.notchNotifyOnFullRestore = v) : (manager.store.systemNotifyOnFullRestore = v); manager.persist() }
-                                ),
-                                soundIsOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundOnFullRestore : manager.store.systemSoundOnFullRestore },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundOnFullRestore = v) : (manager.store.systemSoundOnFullRestore = v); manager.persist() }
-                                ),
-                                soundName: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundNameFullRestore : manager.store.systemSoundNameFullRestore },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundNameFullRestore = v) : (manager.store.systemSoundNameFullRestore = v); manager.persist() }
+                            if manager.store.autoSaveEnabled {
+                                eventCard(
+                                    icon: "clock.arrow.circlepath",
+                                    title: "Auto Layout Restore",
+                                    subtitle: "When windows are restored from an auto layout snapshot",
+                                    eventType: .fullRestore,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnFullRestore : manager.store.systemNotifyOnFullRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnFullRestore = v) : (manager.store.systemNotifyOnFullRestore = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnFullRestore : manager.store.systemSoundOnFullRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnFullRestore = v) : (manager.store.systemSoundOnFullRestore = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameFullRestore : manager.store.systemSoundNameFullRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameFullRestore = v) : (manager.store.systemSoundNameFullRestore = v); manager.persist() }
+                                    )
                                 )
-                            )
 
-                            eventCard(
-                                icon: "app.badge.checkmark",
-                                title: "Single App Restore",
-                                subtitle: "When a single frontmost app or auto-restore fires",
-                                eventType: .singleRestore,
-                                isOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchNotifyOnSingleRestore : manager.store.systemNotifyOnSingleRestore },
-                                    set: { v in channel == .notch ? (manager.store.notchNotifyOnSingleRestore = v) : (manager.store.systemNotifyOnSingleRestore = v); manager.persist() }
-                                ),
-                                soundIsOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundOnSingleRestore : manager.store.systemSoundOnSingleRestore },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundOnSingleRestore = v) : (manager.store.systemSoundOnSingleRestore = v); manager.persist() }
-                                ),
-                                soundName: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundNameSingleRestore : manager.store.systemSoundNameSingleRestore },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundNameSingleRestore = v) : (manager.store.systemSoundNameSingleRestore = v); manager.persist() }
-                                ),
-                                quietBinding: channel == .notch ? Binding(
-                                    get: { manager.store.quietSingleRestoreWhenInPlace },
-                                    set: { manager.store.quietSingleRestoreWhenInPlace = $0; manager.persist() }
-                                ) : nil
-                            )
-
-                            eventCard(
-                                icon: "externaldrive.connected.to.line.below",
-                                title: "Display Connection & Change",
-                                subtitle: "When monitors connect, disconnect, or reconnect",
-                                eventType: .displayChange,
-                                isOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchNotifyOnDisplayChange : manager.store.systemNotifyOnDisplayChange },
-                                    set: { v in channel == .notch ? (manager.store.notchNotifyOnDisplayChange = v) : (manager.store.systemNotifyOnDisplayChange = v); manager.persist() }
-                                ),
-                                soundIsOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundOnDisplayChange : manager.store.systemSoundOnDisplayChange },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundOnDisplayChange = v) : (manager.store.systemSoundOnDisplayChange = v); manager.persist() }
-                                ),
-                                soundName: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundNameDisplayChange : manager.store.systemSoundNameDisplayChange },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundNameDisplayChange = v) : (manager.store.systemSoundNameDisplayChange = v); manager.persist() }
+                                eventCard(
+                                    icon: "externaldrive.connected.to.line.below",
+                                    title: "Display Connection & Change",
+                                    subtitle: "When monitors connect, disconnect, or reconnect",
+                                    eventType: .displayChange,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnDisplayChange : manager.store.systemNotifyOnDisplayChange },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnDisplayChange = v) : (manager.store.systemNotifyOnDisplayChange = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnDisplayChange : manager.store.systemSoundOnDisplayChange },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnDisplayChange = v) : (manager.store.systemSoundOnDisplayChange = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameDisplayChange : manager.store.systemSoundNameDisplayChange },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameDisplayChange = v) : (manager.store.systemSoundNameDisplayChange = v); manager.persist() }
+                                    )
                                 )
-                            )
 
-                            eventCard(
-                                icon: "camera.viewfinder",
-                                title: "Snapshot & App Update",
-                                subtitle: "When apps or layouts are saved, added, or updated",
-                                eventType: .snapshotUpdate,
-                                isOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchNotifyOnSnapshotUpdate : manager.store.systemNotifyOnSnapshotUpdate },
-                                    set: { v in channel == .notch ? (manager.store.notchNotifyOnSnapshotUpdate = v) : (manager.store.systemNotifyOnSnapshotUpdate = v); manager.persist() }
-                                ),
-                                soundIsOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundOnSnapshotUpdate : manager.store.systemSoundOnSnapshotUpdate },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundOnSnapshotUpdate = v) : (manager.store.systemSoundOnSnapshotUpdate = v); manager.persist() }
-                                ),
-                                soundName: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundNameSnapshotUpdate : manager.store.systemSoundNameSnapshotUpdate },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundNameSnapshotUpdate = v) : (manager.store.systemSoundNameSnapshotUpdate = v); manager.persist() }
+                                eventCard(
+                                    icon: "keyboard.badge.eye",
+                                    title: "Desktop Toggle (⌘D)",
+                                    subtitle: "When all windows are hidden or shown via Cmd+D",
+                                    eventType: .desktopToggle,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnDesktopToggle : manager.store.systemNotifyOnDesktopToggle },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnDesktopToggle = v) : (manager.store.systemNotifyOnDesktopToggle = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnDesktopToggle : manager.store.systemSoundOnDesktopToggle },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnDesktopToggle = v) : (manager.store.systemSoundOnDesktopToggle = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameDesktopToggle : manager.store.systemSoundNameDesktopToggle },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameDesktopToggle = v) : (manager.store.systemSoundNameDesktopToggle = v); manager.persist() }
+                                    )
                                 )
-                            )
+                            } else {
+                                eventCard(
+                                    icon: "display.2",
+                                    title: "Full Layout Restore",
+                                    subtitle: "When all windows are restored to their saved layout",
+                                    eventType: .fullRestore,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnFullRestore : manager.store.systemNotifyOnFullRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnFullRestore = v) : (manager.store.systemNotifyOnFullRestore = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnFullRestore : manager.store.systemSoundOnFullRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnFullRestore = v) : (manager.store.systemSoundOnFullRestore = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameFullRestore : manager.store.systemSoundNameFullRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameFullRestore = v) : (manager.store.systemSoundNameFullRestore = v); manager.persist() }
+                                    )
+                                )
 
-                            eventCard(
-                                icon: "keyboard.badge.eye",
-                                title: "Desktop Toggle (⌘D)",
-                                subtitle: "When all windows are hidden or shown via Cmd+D",
-                                eventType: .desktopToggle,
-                                isOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchNotifyOnDesktopToggle : manager.store.systemNotifyOnDesktopToggle },
-                                    set: { v in channel == .notch ? (manager.store.notchNotifyOnDesktopToggle = v) : (manager.store.systemNotifyOnDesktopToggle = v); manager.persist() }
-                                ),
-                                soundIsOn: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundOnDesktopToggle : manager.store.systemSoundOnDesktopToggle },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundOnDesktopToggle = v) : (manager.store.systemSoundOnDesktopToggle = v); manager.persist() }
-                                ),
-                                soundName: Binding(
-                                    get: { channel == .notch ? manager.store.notchSoundNameDesktopToggle : manager.store.systemSoundNameDesktopToggle },
-                                    set: { v in channel == .notch ? (manager.store.notchSoundNameDesktopToggle = v) : (manager.store.systemSoundNameDesktopToggle = v); manager.persist() }
+                                eventCard(
+                                    icon: "app.badge.checkmark",
+                                    title: "Single App Restore",
+                                    subtitle: "When a single frontmost app or auto-restore fires",
+                                    eventType: .singleRestore,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnSingleRestore : manager.store.systemNotifyOnSingleRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnSingleRestore = v) : (manager.store.systemNotifyOnSingleRestore = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnSingleRestore : manager.store.systemSoundOnSingleRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnSingleRestore = v) : (manager.store.systemSoundOnSingleRestore = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameSingleRestore : manager.store.systemSoundNameSingleRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameSingleRestore = v) : (manager.store.systemSoundNameSingleRestore = v); manager.persist() }
+                                    ),
+                                    quietBinding: channel == .notch ? Binding(
+                                        get: { manager.store.quietSingleRestoreWhenInPlace },
+                                        set: { manager.store.quietSingleRestoreWhenInPlace = $0; manager.persist() }
+                                    ) : nil
                                 )
-                            )
+
+                                eventCard(
+                                    icon: "externaldrive.connected.to.line.below",
+                                    title: "Display Connection & Change",
+                                    subtitle: "When monitors connect, disconnect, or reconnect",
+                                    eventType: .displayChange,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnDisplayChange : manager.store.systemNotifyOnDisplayChange },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnDisplayChange = v) : (manager.store.systemNotifyOnDisplayChange = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnDisplayChange : manager.store.systemSoundOnDisplayChange },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnDisplayChange = v) : (manager.store.systemSoundOnDisplayChange = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameDisplayChange : manager.store.systemSoundNameDisplayChange },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameDisplayChange = v) : (manager.store.systemSoundNameDisplayChange = v); manager.persist() }
+                                    )
+                                )
+
+                                eventCard(
+                                    icon: "camera.viewfinder",
+                                    title: "Snapshot & App Update",
+                                    subtitle: "When apps or layouts are saved, added, or updated",
+                                    eventType: .snapshotUpdate,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnSnapshotUpdate : manager.store.systemNotifyOnSnapshotUpdate },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnSnapshotUpdate = v) : (manager.store.systemNotifyOnSnapshotUpdate = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnSnapshotUpdate : manager.store.systemSoundOnSnapshotUpdate },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnSnapshotUpdate = v) : (manager.store.systemSoundOnSnapshotUpdate = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameSnapshotUpdate : manager.store.systemSoundNameSnapshotUpdate },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameSnapshotUpdate = v) : (manager.store.systemSoundNameSnapshotUpdate = v); manager.persist() }
+                                    )
+                                )
+
+                                eventCard(
+                                    icon: "keyboard.badge.eye",
+                                    title: "Desktop Toggle (⌘D)",
+                                    subtitle: "When all windows are hidden or shown via Cmd+D",
+                                    eventType: .desktopToggle,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnDesktopToggle : manager.store.systemNotifyOnDesktopToggle },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnDesktopToggle = v) : (manager.store.systemNotifyOnDesktopToggle = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnDesktopToggle : manager.store.systemSoundOnDesktopToggle },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnDesktopToggle = v) : (manager.store.systemSoundOnDesktopToggle = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameDesktopToggle : manager.store.systemSoundNameDesktopToggle },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameDesktopToggle = v) : (manager.store.systemSoundNameDesktopToggle = v); manager.persist() }
+                                    )
+                                )
+                            }
                         }
                     }
+
+                    // ── Sound Volume Section (below Events) ──────────────
+                    SettingsSection(title: "Sound Volume".localized(appLanguage), icon: "speaker.wave.2.fill") {
+                        let isAutoVolume: Bool = channel == .notch ? manager.store.notchAutoVolumeBelowSystem : manager.store.systemAutoVolumeBelowSystem
+                        VStack(spacing: 12) {
+                            Toggle(isOn: Binding(
+                                get: { channel == .notch ? manager.store.notchAutoVolumeBelowSystem : manager.store.systemAutoVolumeBelowSystem },
+                                set: { newVal in
+                                    if channel == .notch {
+                                        manager.store.notchAutoVolumeBelowSystem = newVal
+                                    } else {
+                                        manager.store.systemAutoVolumeBelowSystem = newVal
+                                    }
+                                    manager.persist()
+                                }
+                            )) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Auto: 20% below system".localized(appLanguage))
+                                        .font(.system(size: 13, weight: .medium))
+                                    Text("Automatically sets volume to 80% of system level (-20%)".localized(appLanguage))
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .toggleStyle(.switch)
+                            .tint(channel.color)
+
+                            if isAutoVolume {
+                                HStack(spacing: 12) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "speaker.wave.2.fill")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(channel.color)
+                                        Text("Fixed at 80% (-20% from macOS master volume)".localized(appLanguage))
+                                            .font(.system(size: 11.5, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    Button {
+                                        let testSound = channel == .notch ? manager.store.notchSoundNameSingleRestore : manager.store.systemSoundNameSingleRestore
+                                        let vol = channel == .notch ? manager.effectiveNotchSoundVolume : manager.effectiveSystemSoundVolume
+                                        manager.previewSound(named: testSound, volume: vol)
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "play.fill")
+                                                .font(.system(size: 10))
+                                            Text("Test".localized(appLanguage))
+                                                .font(.system(size: 11, weight: .medium))
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(channel.color.opacity(0.12))
+                                        )
+                                        .foregroundStyle(channel.color)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Preview volume with current sound".localized(appLanguage))
+                                }
+                                .padding(.top, 2)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                            } else {
+                                HStack(spacing: 12) {
+                                    let currentVolume: Double = channel == .notch ? manager.store.notchSoundVolume : manager.store.systemSoundVolume
+                                    let speakerIcon: String = currentVolume <= 0.01 ? "speaker.slash.fill" : (currentVolume < 0.35 ? "speaker.wave.1.fill" : (currentVolume < 0.7 ? "speaker.wave.2.fill" : "speaker.wave.3.fill"))
+
+                                    Image(systemName: speakerIcon)
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(channel.color)
+                                        .frame(width: 24)
+                                        .animation(.easeInOut(duration: 0.2), value: currentVolume)
+
+                                    Slider(
+                                        value: Binding(
+                                            get: { channel == .notch ? manager.store.notchSoundVolume : manager.store.systemSoundVolume },
+                                            set: { newVal in
+                                                if channel == .notch {
+                                                    manager.store.notchSoundVolume = newVal
+                                                } else {
+                                                    manager.store.systemSoundVolume = newVal
+                                                }
+                                                manager.persist()
+                                            }
+                                        ),
+                                        in: 0.0...1.0
+                                    )
+                                    .tint(channel.color)
+
+                                    Text("\(Int(round(currentVolume * 100)))%")
+                                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 44, alignment: .trailing)
+
+                                    Button {
+                                        let testSound = channel == .notch ? manager.store.notchSoundNameSingleRestore : manager.store.systemSoundNameSingleRestore
+                                        let vol = Float(currentVolume)
+                                        manager.previewSound(named: testSound, volume: vol)
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "play.fill")
+                                                .font(.system(size: 10))
+                                            Text("Test".localized(appLanguage))
+                                                .font(.system(size: 11, weight: .medium))
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(channel.color.opacity(0.12))
+                                        )
+                                        .foregroundStyle(channel.color)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Preview volume with current sound".localized(appLanguage))
+                                }
+                                .padding(.top, 2)
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                            }
+                        }
+                        .padding(12)
+                        .animation(.easeInOut(duration: 0.25), value: isAutoVolume)
+                    }
+
+                    // ── Inline Sound Library Section (below Volume) ───────
+                    InlineSoundLibraryView(appLanguage: appLanguage)
                 }
                 .padding(20)
             }
         }
     }
-
 
     @ViewBuilder
     private func eventCard(
@@ -3066,7 +3154,7 @@ private struct EventCardView: View {
 
                                 // Quick sound test button right in the row
                                 Button {
-                                    let vol = Float(channel == .notch ? manager.store.notchSoundVolume : manager.store.systemSoundVolume)
+                                    let vol = channel == .notch ? manager.effectiveNotchSoundVolume : manager.effectiveSystemSoundVolume
                                     manager.previewSound(named: soundName, volume: vol)
                                 } label: {
                                     Image(systemName: "play.circle.fill")
@@ -3156,12 +3244,10 @@ private struct EventCardView: View {
     }
 }
 
+// MARK: - Inline Sound Library Section (used inside each channel detail view)
 
-// MARK: - Sound Library Subpage View
-
-struct SoundLibrarySubpageView: View {
+struct InlineSoundLibraryView: View {
     let appLanguage: AppLanguage
-    let onBack: () -> Void
 
     @State private var selectedCategory: SystemSoundCategory? = nil
     @State private var activePlayingSound: String? = nil
@@ -3188,142 +3274,100 @@ struct SoundLibrarySubpageView: View {
 
     private func playRandomSound() {
         let pool = filteredSounds.isEmpty ? SystemSound.allCases : filteredSounds
-        if let random = pool.randomElement() {
-            playSound(random)
-        }
+        if let random = pool.randomElement() { playSound(random) }
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Navigation Bar
-            HStack(spacing: 12) {
-                Button(action: onBack) {
-                    HStack(spacing: 5) {
-                        Image(systemName: appLanguage == .hebrew ? "chevron.right" : "chevron.left")
-                            .font(.system(size: 12, weight: .bold))
-                        Text("Appearance & Notifications".localized(appLanguage))
-                            .font(.system(size: 13, weight: .semibold))
-                    }
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .liquidGlass(cornerRadius: 16, style: .card)
-                }
-                .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 12) {
+            // Section header
+            HStack(spacing: 6) {
+                Image(systemName: "music.note.list")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("Sound Library".localized(appLanguage))
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
 
                 Spacer()
 
-                HStack(spacing: 8) {
-                    Image(systemName: "music.note.list")
-                        .foregroundStyle(Color.purple)
-                        .font(.system(size: 15, weight: .semibold))
-                    Text("Sound Library".localized(appLanguage))
-                        .font(.system(size: 15, weight: .bold))
+                // Shuffle button in header
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { playRandomSound() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "dice.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Random".localized(appLanguage))
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                    .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
+                .help("Play a random sound (🎲)".localized(appLanguage))
+            }
+            .padding(.horizontal, 4)
+
+            // Now-playing equalizer indicator
+            if activePlayingSound != nil {
+                HStack(spacing: 6) {
+                    SoundEqualizerWaveView()
+                    Text("Playing...".localized(appLanguage))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .transition(.scale.combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.2), value: activePlayingSound)
+                .padding(.horizontal, 4)
+            }
+
+            // Category filter pills
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    CategoryPill(
+                        title: "All Sounds".localized(appLanguage) + " (\(SystemSound.allCases.count))",
+                        icon: "sparkles",
+                        isSelected: selectedCategory == nil,
+                        color: .accentColor
+                    ) {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { selectedCategory = nil }
+                    }
+
+                    ForEach(SystemSoundCategory.allCases) { cat in
+                        let count = SystemSound.allCases.filter { $0.category == cat }.count
+                        let (icon, color): (String, Color) = {
+                            switch cat {
+                            case .meme: return ("theatermasks.fill", .orange)
+                            case .melodic: return ("wand.and.stars", .purple)
+                            case .encore: return ("music.quarternote.3", .blue)
+                            case .classic: return ("bell.fill", .green)
+                            }
+                        }()
+                        CategoryPill(
+                            title: "\(cat.rawValue.localized(appLanguage)) (\(count))",
+                            icon: icon,
+                            isSelected: selectedCategory == cat,
+                            color: color
+                        ) {
+                            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { selectedCategory = cat }
+                        }
+                    }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
 
-            Divider()
-
-            ScrollView {
-                VStack(spacing: 14) {
-                    // Header Card with live equalizer and random shuffle
-                    HStack(alignment: .center, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text("Browse and preview available alert tones".localized(appLanguage))
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.primary)
-
-                                if activePlayingSound != nil {
-                                    SoundEqualizerWaveView()
-                                        .transition(.scale.combined(with: .opacity))
-                                }
-                            }
-                            Text("Tap any sound tile to preview audio effects".localized(appLanguage))
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        // Random Shuffle Button
-                        Button {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                                playRandomSound()
-                            }
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "dice.fill")
-                                    .font(.system(size: 12, weight: .semibold))
-                                Text("Random Sound".localized(appLanguage))
-                                    .font(.system(size: 11.5, weight: .medium))
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Play a random sound (🎲)".localized(appLanguage))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
-
-                    // Category Switcher Pills
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            CategoryPill(
-                                title: "All Sounds".localized(appLanguage) + " (\(SystemSound.allCases.count))",
-                                icon: "sparkles",
-                                isSelected: selectedCategory == nil,
-                                color: .accentColor
-                            ) {
-                                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                    selectedCategory = nil
-                                }
-                            }
-
-                            ForEach(SystemSoundCategory.allCases) { cat in
-                                let count = SystemSound.allCases.filter { $0.category == cat }.count
-                                let (icon, color): (String, Color) = {
-                                    switch cat {
-                                    case .meme: return ("theatermasks.fill", .orange)
-                                    case .melodic: return ("wand.and.stars", .purple)
-                                    case .encore: return ("music.quarternote.3", .blue)
-                                    case .classic: return ("bell.fill", .green)
-                                    }
-                                }()
-                                CategoryPill(
-                                    title: "\(cat.rawValue.localized(appLanguage)) (\(count))",
-                                    icon: icon,
-                                    isSelected: selectedCategory == cat,
-                                    color: color
-                                ) {
-                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                        selectedCategory = cat
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Grid of Sound Tiles (3 columns)
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                        ForEach(filteredSounds) { sound in
-                            SoundboardTile(
-                                sound: sound,
-                                isPlaying: activePlayingSound == sound.rawValue,
-                                appLanguage: appLanguage
-                            ) {
-                                playSound(sound)
-                            }
-                        }
+            // Sound tiles grid
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(filteredSounds) { sound in
+                    SoundboardTile(
+                        sound: sound,
+                        isPlaying: activePlayingSound == sound.rawValue,
+                        appLanguage: appLanguage
+                    ) {
+                        playSound(sound)
                     }
                 }
-                .padding(16)
             }
         }
     }
