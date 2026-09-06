@@ -314,15 +314,15 @@ private struct WindowPreviewTileView: View {
     var body: some View {
         let layerOffset = is3D ? (CGFloat(rank) * layerStep) : 0
         let focusLift: CGFloat = isFocused ? 18.0 : 0
-        let totalElevation = layerOffset + focusLift
         
         let x = offsetX + (record.globalFrame.origin.x - boundingBox.origin.x) * scale
         let y = offsetY + (boundingBox.height - (record.globalFrame.origin.y - boundingBox.origin.y + record.globalFrame.height)) * scale
-        let w = record.globalFrame.width * scale
-        let h = record.globalFrame.height * scale
+        let w = max(8, record.globalFrame.width * scale)
+        let h = max(8, record.globalFrame.height * scale)
         
-        let finalX = x + (is3D ? -totalElevation * 0.9 : 0)
-        let finalY = y + (is3D ? -totalElevation * 0.9 : 0)
+        // Base resting position in the 3D stack (stationary during hover)
+        let baseX = x + (is3D ? -layerOffset * 0.9 : 0)
+        let baseY = y + (is3D ? -layerOffset * 0.9 : 0)
         
         let baseTint = (tint == .black || tint == Color.black) ? Color(white: 0.8) : tint
         let winCorner: CGFloat = max(4, 8 * scale)
@@ -341,72 +341,75 @@ private struct WindowPreviewTileView: View {
         }()
         
         return ZStack {
-            // Single Unified Glass Tablet with Thick Solid Dual-Layer Border (NO offset duplicate!)
-            RoundedRectangle(cornerRadius: winCorner, style: .continuous)
-                .fill(baseTint.opacity(fillOpacity))
-                .overlay {
-                    // Outer solid rim (2.2pt)
-                    RoundedRectangle(cornerRadius: winCorner, style: .continuous)
-                        .stroke(
-                            baseTint.opacity(strokeOpacity),
-                            lineWidth: (isSelected || isFocused) ? 2.8 : 2.2
-                        )
-                }
-                .overlay {
-                    // Inner contrast bevel highlight (1.0pt)
-                    RoundedRectangle(cornerRadius: max(2, winCorner - 1.5), style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(isFocused ? 0.65 : 0.25),
-                                    Color.white.opacity(isFocused ? 0.25 : 0.08)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.0
-                        )
-                        .padding(1.5)
-                }
-                .shadow(
-                    color: isSelected ? baseTint.opacity(0.75) : (isFocused ? baseTint.opacity(0.60) : Color.black.opacity(is3D ? (0.20 + Double(rank) * 0.025) : 0.0)),
-                    radius: isSelected ? 14 : (isFocused ? 18 : (is3D ? (5 + CGFloat(rank) * 1.5) : 0)),
-                    x: is3D ? (CGFloat(rank) * 1.4) : 0,
-                    y: is3D ? (CGFloat(rank) * 2.2) : 0
-                )
-            
-            // Special Place Handle: App Icon & Title Pill (Elevated hit priority so hovering over it surfaces this window!)
-            VStack(spacing: 2) {
-                AppIconView(bundleID: record.windowID.appBundleID)
-                    .frame(width: min(w * 0.7, 32), height: min(h * 0.7, 32))
-                    .shadow(color: .black.opacity(0.3), radius: 2)
-                    .opacity(isFocused || isSelected ? 1.0 : (hasHoverFocus ? 0.65 : 0.9))
+            // Visual Tablet (Lifts forward & expands on focus, without displacing hit-test bounds)
+            ZStack {
+                // Single Unified Glass Tablet with Thick Solid Dual-Layer Border (NO offset duplicate!)
+                RoundedRectangle(cornerRadius: winCorner, style: .continuous)
+                    .fill(baseTint.opacity(fillOpacity))
+                    .overlay {
+                        // Outer solid rim (2.2pt)
+                        RoundedRectangle(cornerRadius: winCorner, style: .continuous)
+                            .stroke(
+                                baseTint.opacity(strokeOpacity),
+                                lineWidth: (isSelected || isFocused) ? 2.8 : 2.2
+                            )
+                    }
+                    .overlay {
+                        // Inner contrast bevel highlight (1.0pt)
+                        RoundedRectangle(cornerRadius: max(2, winCorner - 1.5), style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(isFocused ? 0.65 : 0.25),
+                                        Color.white.opacity(isFocused ? 0.25 : 0.08)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.0
+                            )
+                            .padding(1.5)
+                    }
+                    .shadow(
+                        color: isSelected ? baseTint.opacity(0.75) : (isFocused ? baseTint.opacity(0.60) : Color.black.opacity(is3D ? (0.20 + Double(rank) * 0.025) : 0.0)),
+                        radius: isSelected ? 14 : (isFocused ? 18 : (is3D ? (5 + CGFloat(rank) * 1.5) : 0)),
+                        x: is3D ? (CGFloat(rank) * 1.4) : 0,
+                        y: is3D ? (CGFloat(rank) * 2.2) : 0
+                    )
                 
-                if (w > 50 && h > 30) || isFocused || isSelected {
-                    Text(record.windowID.appName?.prefix(14) ?? "")
-                        .font(.system(size: max(8, 10 * scale), weight: (isFocused || isSelected) ? .bold : .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background {
-                            if is3D {
-                                Capsule()
-                                    .fill(Color.black.opacity(isFocused ? 0.75 : 0.28))
+                // Special Place Handle: App Icon & Title Pill
+                VStack(spacing: 2) {
+                    AppIconView(bundleID: record.windowID.appBundleID)
+                        .frame(width: min(w * 0.7, 32), height: min(h * 0.7, 32))
+                        .shadow(color: .black.opacity(0.3), radius: 2)
+                        .opacity(isFocused || isSelected ? 1.0 : (hasHoverFocus ? 0.65 : 0.9))
+                    
+                    if (w > 50 && h > 30) || isFocused || isSelected {
+                        Text(record.windowID.appName?.prefix(14) ?? "")
+                            .font(.system(size: max(8, 10 * scale), weight: (isFocused || isSelected) ? .bold : .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background {
+                                if is3D {
+                                    Capsule()
+                                        .fill(Color.black.opacity(isFocused ? 0.75 : 0.28))
+                                }
                             }
-                        }
-                        .shadow(color: .black.opacity(0.7), radius: 2)
+                            .shadow(color: .black.opacity(0.7), radius: 2)
+                    }
                 }
             }
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                guard is3D else { return }
-                handleHover(hovering)
-            }
-            .zIndex(200) // Elevated hit priority: always catches hover when cursor stops over the icon/title
+            .frame(width: w, height: h)
+            .scaleEffect(isSelected ? 1.06 : (isFocused ? 1.05 : (is3D ? (1.0 + Double(rank) * 0.01) : 1.0)))
+            .offset(
+                x: (is3D && isFocused) ? (-focusLift * 0.9) : 0,
+                y: (is3D && isFocused) ? (-focusLift * 0.9) : 0
+            )
+            .allowsHitTesting(false) // Hit-testing is strictly owned by the stationary base container!
         }
-        .frame(width: max(8, w), height: max(8, h))
-        .scaleEffect(isSelected ? 1.06 : (isFocused ? 1.05 : (is3D ? (1.0 + Double(rank) * 0.01) : 1.0)))
-        .contentShape(Rectangle())
+        .frame(width: w, height: h)
+        .contentShape(Rectangle()) // Strictly anchored to base footprint
         .onHover { hovering in
             guard is3D else { return }
             handleHover(hovering)
@@ -414,7 +417,7 @@ private struct WindowPreviewTileView: View {
         .onTapGesture {
             onSelectRecord?(record.id)
         }
-        .offset(x: finalX, y: finalY)
+        .offset(x: baseX, y: baseY) // Stationary base position! Never shifts on hover!
         .zIndex(Double(rank) + (isFocused ? 100 : 0) + (isSelected ? 50 : 0))
         .animation(.spring(response: 0.42, dampingFraction: 0.75), value: record.globalFrame)
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSelected)
