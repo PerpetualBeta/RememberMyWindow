@@ -463,10 +463,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // No layout was named, so the Auto layout wins when it is switched on.
             WindowManager.shared.restoreNow(automatic: true)
         } else {
-            // Left-click sequence:
-            // 1. Trigger dynamic action state
-            MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
-            
             let restoreOnLeftClick = UserDefaults.standard.object(forKey: "restoreFocusedAppOnLeftClick") as? Bool ?? true
             let frontmostAppID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
             if let appID = frontmostAppID, appID != "com.netanel.remembermywindows" {
@@ -484,6 +480,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 
                 let hasCommandShortcut = snap.commandExcludedBundleIDs.contains(appID)
                 
+                // Signal the action here, not at the top of the branch. Above this
+                // point the click may still resolve to "just open the menu", and the
+                // icon must not announce a restore that is not going to happen.
+                MenuBarIconManager.shared.triggerActionState(minDuration: 0.6)
+
                 if hasCommandShortcut {
                     // When ⌘⇧R is enabled for this app:
                     // Maintain sequential restore to ensure ⌘⇧R lands on the app before menu steals focus.
