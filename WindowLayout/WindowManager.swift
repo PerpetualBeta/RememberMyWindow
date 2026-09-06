@@ -3900,9 +3900,21 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         return mismatches
                     }
 
+                    // A held app is deferred, not wrong. Its windows are parked on
+                    // another Space, so the restore never reached them and they are
+                    // absent from `resolvedTargets`. Verifying them anyway marks the
+                    // app mismatched, and the correction pass below then finds
+                    // nothing to re-apply: the loop runs a full window capture per
+                    // attempt until the deadline, writes nothing, and finishes by
+                    // warning that apps failed which were deliberately deferred.
+                    //
+                    // Bundle-level is the right granularity here. A bundle only
+                    // enters `deferredBundleIDs` when its accessibility window list
+                    // came back empty, so none of its windows were reachable.
                     let verificationRecords = records.filter { record in
                         record.windowID.appBundleID != Bundle.main.bundleIdentifier &&
                         record.windowID.appBundleID != ownProcessName &&
+                        !deferredBundleIDs.contains(record.windowID.appBundleID) &&
                         !record.isNativeFullScreen &&
                         !record.isFullScreenMode &&
                         updatedRunningApps.values.contains(where: {
