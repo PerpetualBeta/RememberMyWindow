@@ -1611,7 +1611,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private func liveLayoutChanged(from previous: [WindowRecord], to current: [WindowRecord]) -> Bool {
         guard previous.count == current.count else { return true }
 
-        let previousByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.windowID, $0) })
+        // `uniqueKeysWithValues` traps and terminates the process on a duplicate
+        // key, and a WindowID is not guaranteed unique: `appWindowIndex` is
+        // counted per PID while the identity is keyed on the bundle ID, so two
+        // processes of one application both emit index 0. An empty window title,
+        // which is what CGWindowList returns without Screen Recording, removes
+        // the only other discriminator. Keeping the first match is arbitrary but
+        // safe: this function only decides whether the desk has changed, and a
+        // wrong answer costs one extra capture rather than the whole app.
+        let previousByID = Dictionary(previous.map { ($0.windowID, $0) },
+                                      uniquingKeysWith: { first, _ in first })
         for record in current {
             guard let old = previousByID[record.windowID],
                   old.screenKey == record.screenKey,
