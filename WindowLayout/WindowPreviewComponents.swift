@@ -152,8 +152,120 @@ struct LayoutPreviewView: View {
     
     @State private var isHovered: Bool = false
     @State private var hoveredRecordID: UUID? = nil
+    @State private var cursorHorizontalPosition: CGFloat = 0.5
     
     var body: some View {
+        if !enable3DHover {
+            classic2DBody
+        } else {
+            interactive3DBody
+        }
+    }
+    
+    // MARK: - Classic 2D Preview (Exact restoration from last week for Saved Sessions & Inspector Mini-Map)
+    
+    private var classic2DBody: some View {
+        GeometryReader { geo in
+            let boundingBox = calculateBoundingBox()
+            let scale = calculateScale(for: geo.size, boundingBox: boundingBox)
+            
+            ZStack {
+                // Screens
+                ForEach(Array(getScreenFrames().enumerated()), id: \.offset) { _, frame in
+                    classicScreenView(frame: frame, boundingBox: boundingBox, scale: scale)
+                }
+                
+                // Windows
+                ForEach(snapshot.records) { record in
+                    classicWindowView(record: record, boundingBox: boundingBox, scale: scale)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(20)
+        .liquidGlass(cornerRadius: 16, style: .card)
+    }
+    
+    private func classicScreenView(frame: CGRect, boundingBox: CGRect, scale: CGFloat) -> some View {
+        let x = (frame.origin.x - boundingBox.origin.x) * scale
+        let y = (boundingBox.height - (frame.origin.y - boundingBox.origin.y + frame.height)) * scale
+        let w = frame.width * scale
+        let h = frame.height * scale
+        
+        let cornerR: CGFloat = 10 * scale
+        
+        return ZStack {
+            // Main Panel
+            RoundedRectangle(cornerRadius: cornerR, style: .continuous)
+                .fill(Color(red: 0.04, green: 0.07, blue: 0.18).opacity(0.85))
+            
+            // Inner glow / bezel detail
+            RoundedRectangle(cornerRadius: cornerR, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.38), Color.white.opacity(0.12), Color.white.opacity(0.22)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.2
+                )
+        }
+        .frame(width: w, height: h)
+        .position(x: x + w/2, y: y + h/2)
+    }
+    
+    private func classicWindowView(record: WindowRecord, boundingBox: CGRect, scale: CGFloat) -> some View {
+        let isSelected = record.id == selectedRecordID
+        let x = (record.globalFrame.origin.x - boundingBox.origin.x) * scale
+        let y = (boundingBox.height - (record.globalFrame.origin.y - boundingBox.origin.y + record.globalFrame.height)) * scale
+        let w = record.globalFrame.width * scale
+        let h = record.globalFrame.height * scale
+        
+        // Match Theme Colors (Use high-contrast slate for Black theme so preview window cards remain visible)
+        let baseTint = (tint == .black || tint == Color.black) ? Color(white: 0.8) : tint
+        let winCorner: CGFloat = max(4, 8 * scale)
+        
+        return ZStack {
+            // Window body with theme-colored glass
+            RoundedRectangle(cornerRadius: winCorner, style: .continuous)
+                .fill(baseTint.opacity(isSelected ? 0.45 : 0.25))
+                .overlay {
+                    // Vibrant theme-colored border
+                    RoundedRectangle(cornerRadius: winCorner, style: .continuous)
+                        .stroke(baseTint.opacity(isSelected ? 1.0 : 0.6), lineWidth: isSelected ? 1.5 : 0.75)
+                }
+                .shadow(color: baseTint.opacity(isSelected ? 0.5 : 0.0), radius: 8, x: 0, y: 0)
+            
+            // App Icon
+            AppIconView(bundleID: record.windowID.appBundleID)
+                .frame(width: min(w * 0.7, 32), height: min(h * 0.7, 32))
+                .shadow(color: .black.opacity(0.2), radius: 2)
+            
+            // Optional label if window is large enough
+            if w > 60 && h > 40 {
+                VStack {
+                    Spacer()
+                    Text(record.windowID.appName?.prefix(12) ?? "")
+                        .font(.system(size: 10 * scale, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.bottom, 4)
+                        .shadow(color: .black.opacity(0.5), radius: 2)
+                }
+            }
+        }
+        .frame(width: max(8, w), height: max(8, h))
+        .position(x: x + w/2, y: y + h/2)
+        .scaleEffect(isSelected ? 1.05 : 1.0)
+        .onTapGesture {
+            onSelectRecord?(record.id)
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: record.globalFrame)
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSelected)
+    }
+    
+    // MARK: - Interactive 3D Preview (For Auto Layout Mode)
+    
+    private var interactive3DBody: some View {
         GeometryReader { geo in
             let boundingBox = calculateBoundingBox()
             let scale = calculateScale(for: geo.size, boundingBox: boundingBox)
@@ -165,18 +277,29 @@ struct LayoutPreviewView: View {
             let centerOffsetY = max(0, (geo.size.height - layoutH) / 2)
             
             let totalRecords = max(1, snapshot.records.count)
-            let layerStep: CGFloat = totalRecords > 6 ? max(14, 110.0 / CGFloat(totalRecords)) : 20.0
-            let maxExplosion = CGFloat(max(0, totalRecords - 1)) * layerStep * 0.9
+            // Layer step expands from 14pt (at x=0) to 88pt (at x=1), resting at ~51pt (at x=0.5)
+            let dynamicLayerStep: CGFloat = {
+                let base = 14.0 + cursorHorizontalPosition * 74.0
+                if totalRecords > 6 {
+                    let scaled = (base * 6.0) / CGFloat(totalRecords)
+                    let minAtPosition = 12.0 + cursorHorizontalPosition * 36.0 // 12pt at left, 48pt at right
+                    return max(minAtPosition, scaled)
+                }
+                return base
+            }()
+            let maxExplosion = CGFloat(max(0, totalRecords - 1)) * dynamicLayerStep * 0.9
+            // Horizontal cursor position (0 = left, 0.5 = center, 1 = right) sweeps side tilt from -15° to -45°
+            let dynamicYaw = is3D ? (-15.0 - Double(cursorHorizontalPosition) * 30.0) : 0
+            // Auto-fill card space: expands from 0.98 at left up to 1.28x at max right to compensate for -45° yaw foreshortening
+            let dynamicScale = is3D ? (0.98 + Double(cursorHorizontalPosition) * 0.30) : 1.0
             
             ZStack(alignment: .topLeading) {
-                // Screens
-                // Keyed by position, not by origin.x: two displays stacked
-                // vertically share an x, and ForEach silently drops the duplicate.
+                // Screens (Fixed on 3D plane, side-tilts with canvas)
                 ForEach(Array(getScreenFrames().enumerated()), id: \.offset) { _, frame in
                     screenView(frame: frame, boundingBox: boundingBox, scale: scale, offsetX: centerOffsetX, offsetY: centerOffsetY)
                 }
                 
-                // Windows (Single Unified Glass Tablets with Thick Solid Dual-Layer Borders)
+                // Windows (Single Unified Glass Tablets with dynamic forward layer spacing)
                 ForEach(snapshot.records) { record in
                     WindowPreviewTileView(
                         record: record,
@@ -185,7 +308,7 @@ struct LayoutPreviewView: View {
                         hoveredRecordID: $hoveredRecordID,
                         tint: tint,
                         is3D: is3D,
-                        layerStep: layerStep,
+                        layerStep: dynamicLayerStep,
                         scale: scale,
                         boundingBox: boundingBox,
                         offsetX: centerOffsetX,
@@ -196,26 +319,32 @@ struct LayoutPreviewView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .rotation3DEffect(
-                .degrees(is3D ? 13 : 0),
+                .degrees(is3D ? 14 : 0),
                 axis: (x: 1, y: 0, z: 0),
                 perspective: 0.55
             )
             .rotation3DEffect(
-                .degrees(is3D ? -17 : 0),
+                .degrees(dynamicYaw),
                 axis: (x: 0, y: 1, z: 0),
                 perspective: 0.55
             )
-            .scaleEffect(is3D ? 0.96 : 1.0)
-            .offset(x: is3D ? (maxExplosion * 0.35) : 0, y: is3D ? (maxExplosion * 0.35) : 0)
+            .scaleEffect(dynamicScale)
+            .offset(x: is3D ? (maxExplosion * 0.30) : 0, y: is3D ? (maxExplosion * 0.05) : 0)
+            .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.84), value: cursorHorizontalPosition)
         }
-        .padding(20)
+        .padding(16)
         .liquidGlass(cornerRadius: 16, style: .card)
+        .overlay {
+            PreviewCursorTracker { position in
+                cursorHorizontalPosition = position
+            }
+        }
         .onHover { hovering in
-            guard enable3DHover else { return }
             withAnimation(.spring(response: 0.45, dampingFraction: 0.72)) {
                 isHovered = hovering
                 if !hovering {
                     hoveredRecordID = nil
+                    cursorHorizontalPosition = 0.5
                 }
             }
         }
@@ -277,6 +406,67 @@ struct LayoutPreviewView: View {
     }
 }
 
+// MARK: - Preview Cursor Tracking
+
+/// A transparent AppKit tracking surface gives SwiftUI the cursor position
+/// inside a view. It deliberately passes clicks through to the window tiles.
+private struct PreviewCursorTracker: NSViewRepresentable {
+    var onMove: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> PreviewCursorTrackingNSView {
+        PreviewCursorTrackingNSView(onMove: onMove)
+    }
+
+    func updateNSView(_ nsView: PreviewCursorTrackingNSView, context: Context) {
+        nsView.onMove = onMove
+    }
+}
+
+private final class PreviewCursorTrackingNSView: NSView {
+    var onMove: (CGFloat) -> Void
+    private var trackingAreaReference: NSTrackingArea?
+    private var lastReportedX: CGFloat = 0.5
+
+    init(onMove: @escaping (CGFloat) -> Void) {
+        self.onMove = onMove
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func updateTrackingAreas() {
+        if let trackingAreaReference {
+            removeTrackingArea(trackingAreaReference)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        trackingAreaReference = trackingArea
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) { report(event) }
+    override func mouseMoved(with event: NSEvent) { report(event) }
+
+    private func report(_ event: NSEvent) {
+        guard bounds.width > 0 else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let raw = min(1, max(0, point.x / bounds.width))
+        // Dead-band threshold: filter out micro hand tremors (0.015)
+        if abs(raw - lastReportedX) >= 0.015 {
+            lastReportedX = raw
+            onMove(raw)
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 // MARK: - Individual Window 3D Tablet View (Native Precision Dwell & Thick Solid Border)
 
 private struct WindowPreviewTileView: View {
@@ -322,7 +512,7 @@ private struct WindowPreviewTileView: View {
         
         // Base resting position in the 3D stack (stationary during hover)
         let baseX = x + (is3D ? -layerOffset * 0.9 : 0)
-        let baseY = y + (is3D ? -layerOffset * 0.9 : 0)
+        let baseY = y + (is3D ? -layerOffset * 0.12 : 0)
         
         let baseTint = (tint == .black || tint == Color.black) ? Color(white: 0.8) : tint
         let winCorner: CGFloat = max(4, 8 * scale)
@@ -378,22 +568,30 @@ private struct WindowPreviewTileView: View {
                     )
                 
                 // Special Place Handle: App Icon & Title Pill
-                VStack(spacing: 2) {
+                let iconSize: CGFloat = {
+                    if is3D {
+                        let maxTarget: CGFloat = isFocused ? 54.0 : 48.0
+                        return min(max(w * 0.75, 28), maxTarget)
+                    }
+                    return min(w * 0.7, 32)
+                }()
+                
+                VStack(spacing: 3) {
                     AppIconView(bundleID: record.windowID.appBundleID)
-                        .frame(width: min(w * 0.7, 32), height: min(h * 0.7, 32))
-                        .shadow(color: .black.opacity(0.3), radius: 2)
-                        .opacity(isFocused || isSelected ? 1.0 : (hasHoverFocus ? 0.65 : 0.9))
+                        .frame(width: iconSize, height: iconSize)
+                        .shadow(color: .black.opacity(0.35), radius: 3)
+                        .opacity(isFocused || isSelected ? 1.0 : (hasHoverFocus ? 0.75 : 0.95))
                     
-                    if (w > 50 && h > 30) || isFocused || isSelected {
+                    if (w > 44 && h > 26) || isFocused || isSelected {
                         Text(record.windowID.appName?.prefix(14) ?? "")
-                            .font(.system(size: max(8, 10 * scale), weight: (isFocused || isSelected) ? .bold : .semibold, design: .rounded))
+                            .font(.system(size: is3D ? max(9, 11 * scale) : max(8, 10 * scale), weight: (isFocused || isSelected) ? .bold : .semibold, design: .rounded))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2.5)
                             .background {
                                 if is3D {
                                     Capsule()
-                                        .fill(Color.black.opacity(isFocused ? 0.75 : 0.28))
+                                        .fill(Color.black.opacity(isFocused ? 0.80 : 0.40))
                                 }
                             }
                             .shadow(color: .black.opacity(0.7), radius: 2)
@@ -404,7 +602,7 @@ private struct WindowPreviewTileView: View {
             .scaleEffect(isSelected ? 1.06 : (isFocused ? 1.05 : (is3D ? (1.0 + Double(rank) * 0.01) : 1.0)))
             .offset(
                 x: (is3D && isFocused) ? (-focusLift * 0.9) : 0,
-                y: (is3D && isFocused) ? (-focusLift * 0.9) : 0
+                y: (is3D && isFocused) ? (-focusLift * 0.15) : 0
             )
             .allowsHitTesting(false) // Hit-testing is strictly owned by the stationary base container!
         }
@@ -423,6 +621,7 @@ private struct WindowPreviewTileView: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSelected)
         .animation(.spring(response: 0.45, dampingFraction: 0.72), value: is3D)
         .animation(.spring(response: 0.28, dampingFraction: 0.72), value: isFocused)
+        .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.84), value: layerStep)
     }
     
     private func handleHover(_ hovering: Bool) {
@@ -947,5 +1146,3 @@ struct AutoSavePreviewCardView: View {
         }
     }
 }
-
-

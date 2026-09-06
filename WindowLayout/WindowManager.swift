@@ -276,12 +276,29 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// Saved Sessions always opens on the live layout so the center pane never
     /// starts without a meaningful selection.
     func setAutoSaveEnabled(_ enabled: Bool) {
+        guard store.autoSaveEnabled != enabled else { return }
+
         store.autoSaveEnabled = enabled
         selectedSnapshotKey = enabled ? nil : Self.liveKey
         selectedAutoSaveEntryID = nil
         selectedRecordID = nil
         selectedAppBundleID = nil
         persist()
+
+        // Fn and Caps Lock are restore shortcuts for saved sessions. Auto Layout
+        // owns automatic placement, so never leave the global event tap active
+        // while that mode is selected. setup() has the same guard as a backstop
+        // for settings changes and delayed permission retries.
+        if enabled {
+            QuickKeyRestoreManager.shared.teardown()
+        } else if store.quickKeyRestoreEnabled {
+            QuickKeyRestoreManager.shared.setup()
+        }
+
+        // A mode change starts a new context for the activity panel. Clear both
+        // the previous history and any setup/teardown entry created above so
+        // auto-layout captures and session restores do not mix together.
+        clearEvents()
     }
 
     func startTracking() {
@@ -3080,7 +3097,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
             scheduleAXEventFlush(delay: 0)
             DesktopToggleManager.shared.start()
-            if store.quickKeyRestoreEnabled {
+            if store.quickKeyRestoreEnabled && !store.autoSaveEnabled {
                 QuickKeyRestoreManager.shared.setup()
             }
         } else {

@@ -67,14 +67,17 @@ final class QuickKeyRestoreManager {
     // MARK: Install / Remove
 
     func setup() {
-        guard WindowManager.shared.store.quickKeyRestoreEnabled else { return }
+        guard WindowManager.shared.store.quickKeyRestoreEnabled,
+              !WindowManager.shared.store.autoSaveEnabled else { return }
         guard eventTap == nil else { return }
 
         guard AXIsProcessTrusted() else {
             retryTimer?.invalidate()
             retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
                 Task { @MainActor in
-                    if WindowManager.shared.store.quickKeyRestoreEnabled && self?.eventTap == nil {
+                    if WindowManager.shared.store.quickKeyRestoreEnabled,
+                       !WindowManager.shared.store.autoSaveEnabled,
+                       self?.eventTap == nil {
                         self?.setup()
                     }
                 }
@@ -117,7 +120,9 @@ final class QuickKeyRestoreManager {
             retryTimer?.invalidate()
             retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
                 Task { @MainActor in
-                    if WindowManager.shared.store.quickKeyRestoreEnabled && self?.eventTap == nil {
+                    if WindowManager.shared.store.quickKeyRestoreEnabled,
+                       !WindowManager.shared.store.autoSaveEnabled,
+                       self?.eventTap == nil {
                         self?.setup()
                     }
                 }
@@ -148,7 +153,8 @@ final class QuickKeyRestoreManager {
     // MARK: Event Handling
 
     private func handleFlagsChanged(flags: CGEventFlags, keycode: Int64) {
-        guard WindowManager.shared.store.quickKeyRestoreEnabled else { return }
+        guard WindowManager.shared.store.quickKeyRestoreEnabled,
+              !WindowManager.shared.store.autoSaveEnabled else { return }
 
         let trigger = WindowManager.shared.store.quickKeyTrigger
 
@@ -232,7 +238,8 @@ final class QuickKeyRestoreManager {
 
     private func fireRestore(triggerSubtitle: String? = nil) {
         guard !WindowManager.shared.isScreenLocked else { return }
-        guard WindowManager.shared.store.quickKeyRestoreEnabled else { return }
+        guard WindowManager.shared.store.quickKeyRestoreEnabled,
+              !WindowManager.shared.store.autoSaveEnabled else { return }
 
         let mode = WindowManager.shared.store.quickKeyRestoreMode
         WindowManager.shared.log("🚀 Quick Key Restore fired! Mode: \(mode.rawValue)", level: LogLevel.necessary, type: EventType.restore)
@@ -337,8 +344,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = DesktopToggleManager.shared
         WindowManager.shared.startTracking()
 
-        // Start Quick Key restore tap if enabled
-        if WindowManager.shared.store.quickKeyRestoreEnabled {
+        // Start Quick Key restore tap if enabled and compatible with the active mode.
+        if WindowManager.shared.store.quickKeyRestoreEnabled,
+           !WindowManager.shared.store.autoSaveEnabled {
             QuickKeyRestoreManager.shared.setup()
         }
 
@@ -355,7 +363,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Delivered on .main by the queue: argument above, so this body runs
             // on the main thread already.
             MainActor.assumeIsolated {
-                if WindowManager.shared.store.quickKeyRestoreEnabled {
+                if WindowManager.shared.store.quickKeyRestoreEnabled,
+                   !WindowManager.shared.store.autoSaveEnabled {
                     QuickKeyRestoreManager.shared.setup()
                 } else {
                     QuickKeyRestoreManager.shared.teardown()

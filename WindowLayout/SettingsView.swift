@@ -468,7 +468,10 @@ struct SettingsView: View {
 
     // MARK: - 2. Restore Settings Content (Full Restore & Single App Restore)
 
+    @ViewBuilder
     private var restoreSettingsContent: some View {
+        let isAutoLayoutActive = manager.store.autoSaveEnabled
+
         VStack(spacing: 18) {
             // Subcategory 1: Full Restore
             SettingsSection(title: "Auto Layout".localized(appLanguage), icon: "clock.arrow.circlepath") {
@@ -483,6 +486,31 @@ struct SettingsView: View {
                         )
                     )
                 }
+            }
+
+            if isAutoLayoutActive {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Auto Layout is on".localized(appLanguage))
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("Some restore settings are unavailable while Auto Layout is active. Switch to Saved Sessions to edit them.".localized(appLanguage))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+                }
+                .accessibilityElement(children: .combine)
             }
 
             SettingsSection(title: "Full Restore".localized(appLanguage), icon: "display.2") {
@@ -516,6 +544,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(isAutoLayoutActive ? 0.45 : 1.0)
 
                     Divider().padding(.horizontal, 12)
 
@@ -581,6 +610,8 @@ struct SettingsView: View {
                         icon: "cursorarrow.click",
                         isOn: $restoreFocusedAppOnLeftClick
                     )
+                    .disabled(isAutoLayoutActive)
+                    .opacity(isAutoLayoutActive ? 0.45 : 1.0)
 
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.turn.down.right")
@@ -594,6 +625,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(isAutoLayoutActive ? 0.45 : 1.0)
                 }
             }
 
@@ -718,6 +750,8 @@ struct SettingsView: View {
                     }
                 }
             }
+            .disabled(isAutoLayoutActive)
+            .opacity(isAutoLayoutActive ? 0.45 : 1.0)
         }
     }
 
