@@ -27,7 +27,8 @@ struct AutoSaveEntry: Codable, Identifiable {
 }
 
 struct AutoSaveFile: Codable {
-    /// Newest first. This is the recent-capture history.
+    /// Newest first. This is the recent-capture history, up to
+    /// `AutoSaveStore.ringCapacity` captures per screen configuration.
     var entries: [AutoSaveEntry] = []
     /// One latest capture per screen fingerprint. Unlike `entries`, this does
     /// not roll away just because another display configuration was used more
@@ -63,9 +64,32 @@ final class AutoSaveStore: ObservableObject {
 
     // MARK: - Policy
 
-    /// Enough history to step back past a bad capture, few enough that the file
-    /// stays small and the UI can show them all without a scroller.
+    /// Captures kept **per screen configuration**, not in total.
+    ///
+    /// Enough history to step back past a bad capture. Per configuration
+    /// because a global ring loses the setup you are not currently using, and
+    /// that is exactly when history matters. Measured 2026-09-07: a morning of
+    /// work on one monitor pair filled all five slots with that pair, so
+    /// switching back to laptop-plus-LG found nothing recent for it and
+    /// restored the only capture left — 21 hours old, 14 windows, onto a desk
+    /// that now had 30.
+    ///
+    /// `displayEntries` is what stopped that being nothing at all, and it is
+    /// still the durable per-configuration index. But it holds one capture per
+    /// configuration, so there was no recent alternative to step back to. This
+    /// gives every configuration its own history rather than making them
+    /// compete for the same five slots.
     static let ringCapacity = 5
+
+    /// A backstop on the file size, not a policy.
+    ///
+    /// Five per configuration is the rule. This only stops an unusual number of
+    /// remembered setups growing the file without limit. Eight configurations is
+    /// already generous — laptop alone, laptop with each monitor, each pair,
+    /// docked, clamshell — and at roughly 15 KB a capture it bounds the file
+    /// near 600 KB.
+    static let ringConfigurationAllowance = 8
+    static let ringTotalCapacity = ringCapacity * ringConfigurationAllowance
 
     /// The live tracker settles in seconds because the UI follows it. Durability
     /// does not need that: nothing reads this file until the next launch, so the
@@ -88,7 +112,8 @@ final class AutoSaveStore: ObservableObject {
 
     // MARK: - State
 
-    /// The recent capture history, newest first.
+    /// The recent capture history, newest first, holding up to
+    /// `ringCapacity` captures for each screen configuration.
     @Published private(set) var entries: [AutoSaveEntry] = []
 
     /// The newest capture for each display configuration, newest first.
@@ -144,6 +169,19 @@ final class AutoSaveStore: ObservableObject {
     /// The latest remembered capture for one display configuration.
     func entry(forScreenKey screenKey: String) -> AutoSaveEntry? {
         visibleDisplayEntries.first { $0.screenKey == screenKey }
+    }
+
+    /// The captures that could actually be restored onto a given screen
+    /// configuration, newest first.
+    ///
+    /// `WindowManager.snapshot(from:)` refuses any entry whose `screenKey` is
+    /// not the live one, so a capture from another configuration is not a
+    /// choice the user has — it is a row that does nothing when clicked. The
+    /// UI used to show them all and mark them instead, which was tolerable
+    /// while the ring held five captures in total and is not now that it holds
+    /// five per configuration.
+    func entries(forScreenKey screenKey: String) -> [AutoSaveEntry] {
+        visibleEntries.filter { $0.screenKey == screenKey }
     }
 
     private let fileURL: URL
@@ -280,8 +318,18 @@ final class AutoSaveStore: ObservableObject {
         if let entry = pending {
             pending = nil
             entries.insert(entry, at: 0)
-            if entries.count > Self.ringCapacity {
-                entries.removeSubrange(Self.ringCapacity...)
+            // Trim per configuration. `entries` is newest-first, so counting
+            // forward per `screenKey` and dropping a configuration's sixth and
+            // later captures keeps the five newest of each, and leaves every
+            // other configuration's history alone.
+            var keptPerConfiguration: [String: Int] = [:]
+            entries = entries.filter { candidate in
+                let kept = (keptPerConfiguration[candidate.screenKey] ?? 0) + 1
+                keptPerConfiguration[candidate.screenKey] = kept
+                return kept <= Self.ringCapacity
+            }
+            if entries.count > Self.ringTotalCapacity {
+                entries.removeSubrange(Self.ringTotalCapacity...)
             }
             displayEntries.removeAll { $0.screenKey == entry.screenKey }
             displayEntries.insert(entry, at: 0)

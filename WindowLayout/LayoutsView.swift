@@ -240,10 +240,18 @@ struct SnapshotListView: View {
         // arrangement the Restore button would apply. `pending` is not published,
         // so the label can be up to one tick behind; the tick below is what moves
         // it, and the age it shows is approximate anyway.
-        let entries = manager.autoSaveStore?.visibleEntries ?? []
-        let entry = manager.autoSaveStore?.entry(forScreenKey: manager.currentFingerprint.key)
-            ?? entries.first
         let currentKey = manager.currentFingerprint.key
+        // Only the captures that could be restored onto the screens in front of
+        // the user. An entry for another configuration is refused by
+        // `snapshot(from:)`, so listing it offers a choice that does nothing.
+        //
+        // This also fixes a duplicate the unfiltered list could produce: the
+        // hero is the current configuration's newest capture, while
+        // `dropFirst()` below drops the newest of ALL configurations, so
+        // whenever those differed the hero appeared again in the earlier list.
+        let entries = manager.autoSaveStore?.entries(forScreenKey: currentKey) ?? []
+        let entry = manager.autoSaveStore?.entry(forScreenKey: currentKey)
+            ?? entries.first
         // Ticked once a minute. `now` was injectable so both states could be
         // rendered, but nothing drove it: a card built once kept the `Date()`
         // it was constructed with, so "3 minutes ago" froze and the stale
@@ -832,7 +840,9 @@ struct AutoLayoutCenterView: View {
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
 
     private var entries: [AutoSaveEntry] {
-        manager.autoSaveStore?.visibleEntries ?? []
+        // Restorable here, not merely recorded somewhere. See
+        // `AutoSaveStore.entries(forScreenKey:)`.
+        manager.autoSaveStore?.entries(forScreenKey: manager.currentFingerprint.key) ?? []
     }
 
     private var rememberedEntries: [AutoSaveEntry] {
@@ -1014,7 +1024,9 @@ struct AutoLayoutSidebarWindowListView: View {
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
 
     private var entries: [AutoSaveEntry] {
-        manager.autoSaveStore?.visibleEntries ?? []
+        // Restorable here, not merely recorded somewhere. See
+        // `AutoSaveStore.entries(forScreenKey:)`.
+        manager.autoSaveStore?.entries(forScreenKey: manager.currentFingerprint.key) ?? []
     }
 
     private var rememberedEntries: [AutoSaveEntry] {
