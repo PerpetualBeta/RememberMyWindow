@@ -777,7 +777,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         headerItem.isEnabled = false
         menu.addItem(headerItem)
 
-        let matchingEntries = (WindowManager.shared.autoSaveStore?.visibleDisplayEntries ?? []).compactMap { entry -> (AutoSaveEntry, LayoutSnapshot)? in
+        let matchingEntries = (WindowManager.shared.autoSaveStore?.visibleEntries ?? []).compactMap { entry -> (AutoSaveEntry, LayoutSnapshot)? in
             guard let snap = WindowManager.shared.snapshot(from: entry) else { return nil }
             return (entry, snap)
         }

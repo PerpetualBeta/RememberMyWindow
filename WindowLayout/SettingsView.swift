@@ -322,6 +322,10 @@ struct SettingsView: View {
 
                 Divider().padding(.horizontal, 12)
 
+                if manager.store.autoSaveEnabled {
+                    autoLayoutDisabledNotice
+                }
+
                 SettingsToggle(
                     title: "Save location with layouts",
                     subtitle: "Tags saved layout sessions with your current GPS coordinates to easily identify locations",
@@ -343,6 +347,7 @@ struct SettingsView: View {
                     ),
                     isLoading: isTogglingLocation
                 )
+                .autoLayoutDisabled(manager.store.autoSaveEnabled)
 
                 Divider().padding(.horizontal, 12)
 
@@ -358,6 +363,10 @@ struct SettingsView: View {
 
                 Divider().padding(.horizontal, 12)
 
+                if manager.store.autoSaveEnabled {
+                    autoLayoutDisabledNotice
+                }
+
                 SettingsToggle(
                     title: "Group other apps in submenu",
                     subtitle: "Keep the menu bar dropdown compact by placing background apps in a submenu",
@@ -370,6 +379,7 @@ struct SettingsView: View {
                         }
                     )
                 )
+                .autoLayoutDisabled(manager.store.autoSaveEnabled)
 
                 Divider().padding(.horizontal, 12)
 
@@ -523,8 +533,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(isAutoLayoutActive ? 0.32 : 1.0)
-                    .grayscale(isAutoLayoutActive ? 0.9 : 0.0)
+                    .autoLayoutDisabled(isAutoLayoutActive)
 
                     Divider().padding(.horizontal, 12)
 
@@ -594,9 +603,7 @@ struct SettingsView: View {
                         icon: "cursorarrow.click",
                         isOn: $restoreFocusedAppOnLeftClick
                     )
-                    .disabled(isAutoLayoutActive)
-                    .opacity(isAutoLayoutActive ? 0.32 : 1.0)
-                    .grayscale(isAutoLayoutActive ? 0.9 : 0.0)
+                    .autoLayoutDisabled(isAutoLayoutActive)
 
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.turn.down.right")
@@ -610,8 +617,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(isAutoLayoutActive ? 0.32 : 1.0)
-                    .grayscale(isAutoLayoutActive ? 0.9 : 0.0)
+                    .autoLayoutDisabled(isAutoLayoutActive)
                 }
             }
 
@@ -740,9 +746,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .disabled(isAutoLayoutActive)
-            .opacity(isAutoLayoutActive ? 0.32 : 1.0)
-            .grayscale(isAutoLayoutActive ? 0.9 : 0.0)
+            .autoLayoutDisabled(isAutoLayoutActive)
         }
     }
 
@@ -802,6 +806,10 @@ struct SettingsView: View {
             }
 
             // Section 2: Active App Command Trigger (⌘⇧R)
+            if manager.store.autoSaveEnabled {
+                autoLayoutDisabledNotice
+            }
+
             SettingsSection(title: "Active App Command Trigger (⌘⇧R)".localized(appLanguage), icon: "command") {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
@@ -971,6 +979,7 @@ struct SettingsView: View {
                     .padding(.vertical, 10)
                 }
             }
+            .autoLayoutDisabled(manager.store.autoSaveEnabled)
         }
     }
 
@@ -1351,6 +1360,24 @@ struct SettingsView: View {
         }
     }
 
+}
+
+
+private struct AutoLayoutDisabledModifier: ViewModifier {
+    let isDisabled: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .disabled(isDisabled)
+            .opacity(isDisabled ? 0.32 : 1.0)
+            .grayscale(isDisabled ? 0.9 : 0.0)
+    }
+}
+
+private extension View {
+    func autoLayoutDisabled(_ isDisabled: Bool) -> some View {
+        modifier(AutoLayoutDisabledModifier(isDisabled: isDisabled))
+    }
 }
 
 
@@ -2726,6 +2753,30 @@ struct NotificationChannelDetailView: View {
                                 )
 
                                 eventCard(
+                                    icon: "app.badge.checkmark",
+                                    title: "Single App Restore",
+                                    subtitle: "When a single frontmost app or auto-restore fires",
+                                    eventType: .singleRestore,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnSingleRestore : manager.store.systemNotifyOnSingleRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnSingleRestore = v) : (manager.store.systemNotifyOnSingleRestore = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnSingleRestore : manager.store.systemSoundOnSingleRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnSingleRestore = v) : (manager.store.systemSoundOnSingleRestore = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameSingleRestore : manager.store.systemSoundNameSingleRestore },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameSingleRestore = v) : (manager.store.systemSoundNameSingleRestore = v); manager.persist() }
+                                    ),
+                                    quietBinding: channel == .notch ? Binding(
+                                        get: { manager.store.quietSingleRestoreWhenInPlace },
+                                        set: { manager.store.quietSingleRestoreWhenInPlace = $0; manager.persist() }
+                                    ) : nil,
+                                    isDisabled: true
+                                )
+
+                                eventCard(
                                     icon: "externaldrive.connected.to.line.below",
                                     title: "Display Connection & Change",
                                     subtitle: "When monitors connect, disconnect, or reconnect",
@@ -2742,6 +2793,26 @@ struct NotificationChannelDetailView: View {
                                         get: { channel == .notch ? manager.store.notchSoundNameDisplayChange : manager.store.systemSoundNameDisplayChange },
                                         set: { v in channel == .notch ? (manager.store.notchSoundNameDisplayChange = v) : (manager.store.systemSoundNameDisplayChange = v); manager.persist() }
                                     )
+                                )
+
+                                eventCard(
+                                    icon: "camera.viewfinder",
+                                    title: "Snapshot & App Update",
+                                    subtitle: "When apps or layouts are saved, added, or updated",
+                                    eventType: .snapshotUpdate,
+                                    isOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchNotifyOnSnapshotUpdate : manager.store.systemNotifyOnSnapshotUpdate },
+                                        set: { v in channel == .notch ? (manager.store.notchNotifyOnSnapshotUpdate = v) : (manager.store.systemNotifyOnSnapshotUpdate = v); manager.persist() }
+                                    ),
+                                    soundIsOn: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundOnSnapshotUpdate : manager.store.systemSoundOnSnapshotUpdate },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundOnSnapshotUpdate = v) : (manager.store.systemSoundOnSnapshotUpdate = v); manager.persist() }
+                                    ),
+                                    soundName: Binding(
+                                        get: { channel == .notch ? manager.store.notchSoundNameSnapshotUpdate : manager.store.systemSoundNameSnapshotUpdate },
+                                        set: { v in channel == .notch ? (manager.store.notchSoundNameSnapshotUpdate = v) : (manager.store.systemSoundNameSnapshotUpdate = v); manager.persist() }
+                                    ),
+                                    isDisabled: true
                                 )
 
                                 eventCard(
@@ -3007,7 +3078,8 @@ struct NotificationChannelDetailView: View {
         isOn: Binding<Bool>,
         soundIsOn: Binding<Bool>,
         soundName: Binding<String>,
-        quietBinding: Binding<Bool>? = nil
+        quietBinding: Binding<Bool>? = nil,
+        isDisabled: Bool = false
     ) -> some View {
         EventCardView(
             icon: icon,
@@ -3020,7 +3092,8 @@ struct NotificationChannelDetailView: View {
             isOn: isOn,
             soundIsOn: soundIsOn,
             soundName: soundName,
-            quietBinding: quietBinding
+            quietBinding: quietBinding,
+            isDisabled: isDisabled
         )
     }
 }
@@ -3039,6 +3112,7 @@ private struct EventCardView: View {
     @Binding var soundIsOn: Bool
     @Binding var soundName: String
     var quietBinding: Binding<Bool>?
+    let isDisabled: Bool
 
     @State private var isHovered = false
     @State private var hoverWorkItem: DispatchWorkItem?
@@ -3236,7 +3310,14 @@ private struct EventCardView: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isHovered)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isOn)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: soundIsOn)
+        .autoLayoutDisabled(isDisabled)
         .onHover { hovering in
+            guard !isDisabled else {
+                isHovered = false
+                hoverWorkItem?.cancel()
+                return
+            }
+
             isHovered = hovering
             hoverWorkItem?.cancel()
             guard hovering && isOn else { return }
