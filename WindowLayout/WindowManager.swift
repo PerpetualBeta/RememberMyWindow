@@ -3950,6 +3950,41 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                             return availableRecords.remove(at: indexMatch)
                         }
 
+                        // `appWindowIndex` is a position, not an identity, and a
+                        // record that outlived a sibling window carries an index no
+                        // live window answers to. Measured: after a restore skipped
+                        // a record for a window that had closed, the surviving
+                        // record was idx1 while the single live window enumerated as
+                        // idx0. The branch above returned nil, the record was called
+                        // a mismatch although accessibility had just reported it
+                        // `already in place`, and the app was flagged and put through
+                        // a four-second correction loop that re-applied the frame it
+                        // already had.
+                        //
+                        // So fall back to the closest window by size, scored the way
+                        // the restore's own size-and-aspect pass scores candidates,
+                        // rather than declaring a mismatch because two counters
+                        // disagree. Last resort by design: whenever a title or an
+                        // index does identify a window, that still wins.
+                        //
+                        // This can only reduce false mismatches. A record paired
+                        // this way still has its frame checked, so a window that is
+                        // genuinely in the wrong place is still reported.
+                        func sizeScore(_ a: CGSize, _ b: CGSize) -> CGFloat {
+                            let aAspect = a.width / max(a.height, 1)
+                            let bAspect = b.width / max(b.height, 1)
+                            let areaA = a.width * a.height
+                            let areaB = b.width * b.height
+                            return abs(aAspect - bAspect) * 2.0
+                                + abs(areaA - areaB) / max(areaB, 1)
+                        }
+                        if let closest = availableRecords.indices.min(by: {
+                            sizeScore(availableRecords[$0].globalFrame.size, record.globalFrame.size)
+                                < sizeScore(availableRecords[$1].globalFrame.size, record.globalFrame.size)
+                        }) {
+                            return availableRecords.remove(at: closest)
+                        }
+
                         return nil
                     }
 
