@@ -1,5 +1,6 @@
 // this file used for window preview icon plus full screen preview
 import SwiftUI
+import AppKit
 
 // MARK: - Window Preview Icon (for list rows)
 
@@ -113,23 +114,196 @@ struct FullScreenPreviewIcon: View {
     }
 }
 
+// MARK: - App Icon Color Cache & Extraction
+
+struct IconTintInfo {
+    let color: Color
+    let isDark: Bool
+}
+
+final class AppIconColorCache {
+    static let shared = AppIconColorCache()
+    private var cache = [String: IconTintInfo]()
+    private let lock = NSLock()
+    
+    private init() {}
+    
+    static func appIcon(for bundleID: String) -> NSImage? {
+        // 1. Standard NSWorkspace lookup — works for .app bundles in /Applications
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return NSWorkspace.shared.icon(forFile: url.path)
+        }
+        // 2. Running-app icon — works for Chrome PWAs, Electron apps, anything currently running
+        if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }),
+           let icon = runningApp.icon {
+            return icon
+        }
+        return nil
+    }
+    
+    func tintInfo(for bundleID: String) -> IconTintInfo? {
+        lock.lock()
+        if let cached = cache[bundleID] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+        
+        guard let image = Self.appIcon(for: bundleID) else {
+            return nil
+        }
+        
+        let info = extractTintInfo(from: image)
+        lock.lock()
+        cache[bundleID] = info
+        lock.unlock()
+        return info
+    }
+    
+    func dominantColor(for bundleID: String) -> Color? {
+        return tintInfo(for: bundleID)?.color
+    }
+    
+    private func extractTintInfo(from image: NSImage) -> IconTintInfo {
+        let size = CGSize(width: 24, height: 24)
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(size.width),
+            pixelsHigh: Int(size.height),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: Int(size.width) * 4,
+            bitsPerPixel: 32
+        ) else {
+            return IconTintInfo(color: Color(white: 0.8), isDark: false)
+        }
+        
+        NSGraphicsContext.saveGraphicsState()
+        guard let context = NSGraphicsContext(bitmapImageRep: rep) else {
+            NSGraphicsContext.restoreGraphicsState()
+            return IconTintInfo(color: Color(white: 0.8), isDark: false)
+        }
+        NSGraphicsContext.current = context
+        image.draw(
+            in: CGRect(origin: .zero, size: size),
+            from: .zero,
+            operation: .copy,
+            fraction: 1.0
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        
+        guard let data = rep.bitmapData else {
+            return IconTintInfo(color: Color(white: 0.8), isDark: false)
+        }
+        
+        var bestVibrantColor: Color? = nil
+        var highestVibrantScore: CGFloat = 0
+        var vibrantPixelCount = 0
+        
+        var totalWeightedR: CGFloat = 0
+        var totalWeightedG: CGFloat = 0
+        var totalWeightedB: CGFloat = 0
+        var totalWeight: CGFloat = 0
+        
+        var darkPixelCount = 0
+        var lightPixelCount = 0
+        
+        let totalPixels = Int(size.width) * Int(size.height)
+        
+        for i in 0..<totalPixels {
+            let offset = i * 4
+            let r = CGFloat(data[offset]) / 255.0
+            let g = CGFloat(data[offset + 1]) / 255.0
+            let b = CGFloat(data[offset + 2]) / 255.0
+            let a = CGFloat(data[offset + 3]) / 255.0
+            
+            // Ignore mostly transparent / edge pixels
+            guard a > 0.35 else { continue }
+            
+            let nsColor = NSColor(deviceRed: r, green: g, blue: b, alpha: a)
+            var hue: CGFloat = 0
+            var sat: CGFloat = 0
+            var bri: CGFloat = 0
+            var alp: CGFloat = 0
+            nsColor.getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alp)
+            
+            // Accumulate weighted tone
+            totalWeightedR += r * a
+            totalWeightedG += g * a
+            totalWeightedB += b * a
+            totalWeight += a
+            
+            if bri < 0.30 {
+                darkPixelCount += 1
+            } else if bri > 0.70 {
+                lightPixelCount += 1
+            }
+            
+            // Check for vibrant accent (Spotify green, Safari blue, Slack colors, etc.)
+            if sat > 0.16 && bri > 0.12 && bri < 0.98 {
+                vibrantPixelCount += 1
+                let score = sat * 1.8 + (1.0 - abs(bri - 0.55))
+                if score > highestVibrantScore {
+                    highestVibrantScore = score
+                    bestVibrantColor = Color(nsColor: nsColor)
+                }
+            }
+        }
+        
+        // Tier 1: Vibrant Accent found with high confidence
+        if let vibrant = bestVibrantColor, highestVibrantScore > 0.35, vibrantPixelCount >= 4 {
+            return IconTintInfo(color: vibrant, isDark: false)
+        }
+        
+        // Tier 2: Abnormal / Neutral tones (Monochrome, Dark, Black, Silver, White)
+        guard totalWeight > 0 else {
+            return IconTintInfo(color: Color(white: 0.8), isDark: false)
+        }
+        
+        let avgR = totalWeightedR / totalWeight
+        let avgG = totalWeightedG / totalWeight
+        let avgB = totalWeightedB / totalWeight
+        let avgBri = (avgR * 0.299 + avgG * 0.587 + avgB * 0.114)
+        
+        // Dark / Charcoal / Smoked (Terminal, Cursor, GitHub, Obsidian)
+        if avgBri < 0.35 || (darkPixelCount > (lightPixelCount * 2) && darkPixelCount > 30) {
+            let darkR = min(0.18, max(0.06, avgR))
+            let darkG = min(0.18, max(0.06, avgG))
+            let darkB = min(0.20, max(0.07, avgB))
+            return IconTintInfo(
+                color: Color(red: darkR, green: darkG, blue: darkB),
+                isDark: true
+            )
+        }
+        
+        // Light / Silver / White (System Settings, Calculator)
+        if avgBri >= 0.65 {
+            let lightR = max(0.82, min(0.95, avgR))
+            let lightG = max(0.82, min(0.95, avgG))
+            let lightB = max(0.84, min(0.96, avgB))
+            return IconTintInfo(
+                color: Color(red: lightR, green: lightG, blue: lightB),
+                isDark: false
+            )
+        }
+        
+        // Mid-tone slate / graphite
+        return IconTintInfo(
+            color: Color(red: avgR, green: avgG, blue: avgB),
+            isDark: false
+        )
+    }
+}
+
 // MARK: - Layout Preview View (for detail view)
 
 struct AppIconView: View {
     let bundleID: String
     var body: some View {
-        let image: NSImage? = {
-            // 1. Standard NSWorkspace lookup — works for .app bundles in /Applications
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-                return NSWorkspace.shared.icon(forFile: url.path)
-            }
-            // 2. Running-app icon — works for Chrome PWAs, Electron apps, anything currently running
-            if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }),
-               let icon = runningApp.icon {
-                return icon
-            }
-            return nil
-        }()
+        let image: NSImage? = AppIconColorCache.appIcon(for: bundleID)
         
         if let image = image {
             Image(nsImage: image)
@@ -153,6 +327,8 @@ struct LayoutPreviewView: View {
     @State private var isHovered: Bool = false
     @State private var hoveredRecordID: UUID? = nil
     @State private var cursorHorizontalPosition: CGFloat = 0.5
+    @State private var isPlayingIntro: Bool = false
+    @State private var introTask: Task<Void, Never>? = nil
     
     var body: some View {
         if !enable3DHover {
@@ -277,21 +453,25 @@ struct LayoutPreviewView: View {
             let centerOffsetY = max(0, (geo.size.height - layoutH) / 2)
             
             let totalRecords = max(1, snapshot.records.count)
-            // Layer step expands from 14pt (at x=0) to 88pt (at x=1), resting at ~51pt (at x=0.5)
+            // Distance from center: 0.0 at x=0.5, 1.0 at either extreme (far left or far right)
+            let cursorDistance = abs(Double(cursorHorizontalPosition) - 0.5) * 2.0
+            // Layer step expands from 14pt at center to 88pt at either extreme (symmetric)
             let dynamicLayerStep: CGFloat = {
-                let base = 14.0 + cursorHorizontalPosition * 74.0
+                let base = 14.0 + CGFloat(cursorDistance) * 74.0
                 if totalRecords > 6 {
                     let scaled = (base * 6.0) / CGFloat(totalRecords)
-                    let minAtPosition = 12.0 + cursorHorizontalPosition * 36.0 // 12pt at left, 48pt at right
+                    let minAtPosition = 12.0 + CGFloat(cursorDistance) * 36.0
                     return max(minAtPosition, scaled)
                 }
                 return base
             }()
             let maxExplosion = CGFloat(max(0, totalRecords - 1)) * dynamicLayerStep * 0.9
-            // Horizontal cursor position (0 = left, 0.5 = center, 1 = right) sweeps side tilt from -15° to -45°
-            let dynamicYaw = is3D ? (-15.0 - Double(cursorHorizontalPosition) * 30.0) : 0
-            // Auto-fill card space: expands from 0.98 at left up to 1.28x at max right to compensate for -45° yaw foreshortening
-            let dynamicScale = is3D ? (0.98 + Double(cursorHorizontalPosition) * 0.30) : 1.0
+            // Bidirectional yaw: +45° at far left, 0° straight-on at center, -45° at far right
+            let dynamicYaw = is3D ? (-(Double(cursorHorizontalPosition) - 0.5) * 90.0) : 0
+            // Subtle auto-fill scale: symmetric expansion from 0.98 at center to 1.10 at either extreme
+            let dynamicScale = is3D ? (0.98 + cursorDistance * 0.12) : 1.0
+            // Signed offset: positive at right, negative at left, 0 at center
+            let signedOffset = (Double(cursorHorizontalPosition) - 0.5) * 2.0
             
             ZStack(alignment: .topLeading) {
                 // Screens (Fixed on 3D plane, side-tilts with canvas)
@@ -309,6 +489,7 @@ struct LayoutPreviewView: View {
                         tint: tint,
                         is3D: is3D,
                         layerStep: dynamicLayerStep,
+                        layerDirectionX: signedOffset >= 0 ? -1.0 : 1.0,  // Fan right when tilted left, left when tilted right
                         scale: scale,
                         boundingBox: boundingBox,
                         offsetX: centerOffsetX,
@@ -329,13 +510,15 @@ struct LayoutPreviewView: View {
                 perspective: 0.55
             )
             .scaleEffect(dynamicScale)
-            .offset(x: is3D ? (maxExplosion * 0.30) : 0, y: is3D ? (maxExplosion * 0.05) : 0)
+            .offset(x: is3D ? (maxExplosion * 0.30 * signedOffset) : 0, y: is3D ? (maxExplosion * 0.05) : 0)
             .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.84), value: cursorHorizontalPosition)
         }
         .padding(16)
         .liquidGlass(cornerRadius: 16, style: .card)
         .overlay {
             PreviewCursorTracker { position in
+                // Hand off to cursor only after intro animation completes
+                guard !isPlayingIntro else { return }
                 cursorHorizontalPosition = position
             }
         }
@@ -344,9 +527,68 @@ struct LayoutPreviewView: View {
                 isHovered = hovering
                 if !hovering {
                     hoveredRecordID = nil
-                    cursorHorizontalPosition = 0.5
+                    // Only reset position if not mid-animation
+                    if !isPlayingIntro {
+                        cursorHorizontalPosition = 0.5
+                    }
                 }
             }
+        }
+        .onAppear {
+            if enable3DHover {
+                playIntroAnimation()
+            }
+        }
+        .onChange(of: enable3DHover) { _, newValue in
+            if newValue {
+                playIntroAnimation()
+            }
+        }
+    }
+    
+    // MARK: - Intro Teaser Animation
+    
+    /// Full arc teaser: center → right → left → center → flat (~2.0s cinematic sweep).
+    private func playIntroAnimation() {
+        introTask?.cancel()
+        introTask = Task { @MainActor in
+            // 1. Settle delay: let the panel fully slide in before animating
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+
+            isPlayingIntro = true
+            // Activate 3D mode for the teaser
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.72)) {
+                isHovered = true
+            }
+
+            // 2. Sweep to max right (0.5s)
+            withAnimation(.easeInOut(duration: 0.5)) {
+                cursorHorizontalPosition = 1.0
+            }
+            try? await Task.sleep(nanoseconds: 510_000_000)
+            guard !Task.isCancelled else { isPlayingIntro = false; return }
+
+            // 3. Sweep through center all the way to far left (1.0s — crosses center naturally)
+            withAnimation(.easeInOut(duration: 1.0)) {
+                cursorHorizontalPosition = 0.0
+            }
+            try? await Task.sleep(nanoseconds: 1_020_000_000)
+            guard !Task.isCancelled else { isPlayingIntro = false; return }
+
+            // 4. Return back to center (0.5s)
+            withAnimation(.easeInOut(duration: 0.5)) {
+                cursorHorizontalPosition = 0.5
+            }
+            try? await Task.sleep(nanoseconds: 520_000_000)
+            guard !Task.isCancelled else { isPlayingIntro = false; return }
+
+            // 5. Collapse back to flat 2D
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.72)) {
+                isHovered = false
+                hoveredRecordID = nil
+            }
+            isPlayingIntro = false
         }
     }
     
@@ -477,6 +719,8 @@ private struct WindowPreviewTileView: View {
     let tint: Color
     let is3D: Bool
     let layerStep: CGFloat
+    /// +1.0 = layers fan toward right (left-side view), -1.0 = layers fan toward left (right-side view, default)
+    let layerDirectionX: CGFloat
     let scale: CGFloat
     let boundingBox: CGRect
     let offsetX: CGFloat
@@ -510,18 +754,26 @@ private struct WindowPreviewTileView: View {
         let w = max(8, record.globalFrame.width * scale)
         let h = max(8, record.globalFrame.height * scale)
         
-        // Base resting position in the 3D stack (stationary during hover)
-        let baseX = x + (is3D ? -layerOffset * 0.9 : 0)
+        // Base resting position in the 3D stack — fan direction flips based on which side we're viewing from
+        let baseX = x + (is3D ? layerDirectionX * layerOffset * 0.9 : 0)
         let baseY = y + (is3D ? -layerOffset * 0.12 : 0)
         
         let baseTint = (tint == .black || tint == Color.black) ? Color(white: 0.8) : tint
+        let tintInfo = AppIconColorCache.shared.tintInfo(for: record.windowID.appBundleID)
+        let cardFillColor = tintInfo?.color ?? baseTint
+        let isDarkCard = tintInfo?.isDark ?? false
         let winCorner: CGFloat = max(4, 8 * scale)
         
         let fillOpacity: Double = {
-            if isSelected { return 0.48 }
-            if isFocused { return 0.42 }
-            if is3D { return hasHoverFocus ? 0.05 : 0.08 }
-            return 0.25
+            if isSelected { return 0.50 }
+            if isFocused { return 0.45 }
+            if isDarkCard {
+                // Rich smoked glass: ~35-42% opacity for dark/black apps
+                if is3D { return hasHoverFocus ? 0.28 : 0.38 }
+                return 0.42
+            }
+            if is3D { return hasHoverFocus ? 0.08 : 0.14 }
+            return 0.22
         }()
         
         let strokeOpacity: Double = {
@@ -535,7 +787,7 @@ private struct WindowPreviewTileView: View {
             ZStack {
                 // Single Unified Glass Tablet with Thick Solid Dual-Layer Border (NO offset duplicate!)
                 RoundedRectangle(cornerRadius: winCorner, style: .continuous)
-                    .fill(baseTint.opacity(fillOpacity))
+                    .fill(cardFillColor.opacity(fillOpacity))
                     .overlay {
                         // Outer solid rim (2.2pt)
                         RoundedRectangle(cornerRadius: winCorner, style: .continuous)
@@ -550,8 +802,8 @@ private struct WindowPreviewTileView: View {
                             .stroke(
                                 LinearGradient(
                                     colors: [
-                                        Color.white.opacity(isFocused ? 0.65 : 0.25),
-                                        Color.white.opacity(isFocused ? 0.25 : 0.08)
+                                        Color.white.opacity(isFocused ? 0.65 : (isDarkCard ? 0.38 : 0.25)),
+                                        Color.white.opacity(isFocused ? 0.25 : (isDarkCard ? 0.14 : 0.08))
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing

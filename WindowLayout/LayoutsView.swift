@@ -881,8 +881,8 @@ struct AutoLayoutCenterView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+        GeometryReader { outerGeo in
+            VStack(alignment: .leading, spacing: 12) {
                 // Return to latest banner if an earlier capture is selected
                 if let selectedID = manager.selectedAutoSaveEntryID,
                    selectedID != currentEntry?.id,
@@ -918,58 +918,7 @@ struct AutoLayoutCenterView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
 
-                // 1. Visual Preview at the top
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("VISUAL PREVIEW".localized(appLanguage))
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if let count = activeEntry?.windowCount ?? activeSnapshot?.records.count {
-                            Text(count == 1 ? "1 window".localized(appLanguage) : "\(count) \("windows".localized(appLanguage))")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-
-                    if let snap = activeSnapshot {
-                        LayoutPreviewView(
-                            snapshot: snap,
-                            selectedRecordID: manager.selectedRecordID,
-                            tint: themeColor.color(seed: 0),
-                            enable3DHover: true,
-                            onSelectRecord: { recID in
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                    manager.selectedRecordID = (manager.selectedRecordID == recID ? nil : recID)
-                                }
-                            }
-                        )
-                        .frame(minHeight: 420, idealHeight: 460, maxHeight: 520)
-                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snap.records.count)
-                    } else {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.primary.opacity(0.04))
-                            .frame(height: 420)
-                            .overlay {
-                                Text("No layout captured yet".localized(appLanguage))
-                                    .font(.subheadline)
-                                    .foregroundStyle(.tertiary)
-                            }
-                    }
-                }
-                // Slides in from the right (+x -> 0, moving leftward) when Auto Layout is activated,
-                // matching the inspector card that slides out leftward towards this pane.
-                // Slides back out to the right (0 -> +x, moving rightward) when returning to Saved Sessions.
-                .transition(.asymmetric(
-                    insertion: .offset(x: 260).combined(with: .opacity),
-                    removal:   .offset(x: 260).combined(with: .opacity)
-                ))
-                .animation(.spring(response: 0.42, dampingFraction: 0.82), value: manager.store.autoSaveEnabled)
-                .clipped()
-
-                Divider()
-
-                // 2. Auto Layout Card directly below it
+                // 1. Auto Layout Card on top (takes natural height)
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     let currentKey = manager.currentFingerprint.key
                     let entry = activeEntry
@@ -1010,10 +959,54 @@ struct AutoLayoutCenterView: View {
                     )
                     .liquidGlass(cornerRadius: 16, style: .card)
                 }
+                .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                // 2. Visual Preview at the bottom (strictly fills remaining viewport height)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("VISUAL PREVIEW".localized(appLanguage))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if let count = activeEntry?.windowCount ?? activeSnapshot?.records.count {
+                            Text(count == 1 ? "1 window".localized(appLanguage) : "\(count) \("windows".localized(appLanguage))")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    if let snap = activeSnapshot {
+                        LayoutPreviewView(
+                            snapshot: snap,
+                            selectedRecordID: manager.selectedRecordID,
+                            tint: themeColor.color(seed: 0),
+                            enable3DHover: true,
+                            onSelectRecord: { recID in
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    manager.selectedRecordID = (manager.selectedRecordID == recID ? nil : recID)
+                                }
+                            }
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snap.records.count)
+                    } else {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay {
+                                Text("No layout captured yet".localized(appLanguage))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.tertiary)
+                            }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(20)
+            .frame(width: outerGeo.size.width, height: outerGeo.size.height, alignment: .topLeading)
         }
-        .scrollContentBackground(.hidden)
+        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

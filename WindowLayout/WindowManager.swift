@@ -1029,6 +1029,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             var record = WindowRecord(
                 id: UUID(),
                 windowID: wid,
+                cgWindowID: win.windowNumber != Int.max ? CGWindowID(win.windowNumber) : nil,
                 globalFrame: win.appKitFrame,
                 screenKey: fp.key,
                 screenFrame: screen?.frame,
@@ -1653,18 +1654,25 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private func liveLayoutChanged(from previous: [WindowRecord], to current: [WindowRecord]) -> Bool {
         guard previous.count == current.count else { return true }
 
-        // `uniqueKeysWithValues` traps and terminates the process on a duplicate
-        // key, and a WindowID is not guaranteed unique: `appWindowIndex` is
-        // counted per PID while the identity is keyed on the bundle ID, so two
-        // processes of one application both emit index 0. An empty window title,
-        // which is what CGWindowList returns without Screen Recording, removes
-        // the only other discriminator. Keeping the first match is arbitrary but
-        // safe: this function only decides whether the desk has changed, and a
-        // wrong answer costs one extra capture rather than the whole app.
+        // Two-tier comparison:
+        // Tier 1: Look up by unique system-level CGWindowID (exact for live windows).
+        // Tier 2: Fall back to WindowID (bundle + title + index) for legacy or relaunch records.
+        var previousByCGID: [CGWindowID: WindowRecord] = [:]
+        for r in previous {
+            if let cgid = r.cgWindowID {
+                previousByCGID[cgid] = r
+            }
+        }
         let previousByID = Dictionary(previous.map { ($0.windowID, $0) },
                                       uniquingKeysWith: { first, _ in first })
         for record in current {
-            guard let old = previousByID[record.windowID],
+            let old: WindowRecord? = {
+                if let cgid = record.cgWindowID, let match = previousByCGID[cgid] {
+                    return match
+                }
+                return previousByID[record.windowID]
+            }()
+            guard let old = old,
                   old.screenKey == record.screenKey,
                   old.screenName == record.screenName,
                   old.zIndex == record.zIndex,
@@ -2797,7 +2805,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         selectedEntries.sort { $0.zOrder < $1.zOrder }
 
         // ── Convert raw entries → WindowRecords ────────────────────────────────
-        var appWindowCounts: [Int32: Int] = [:]
+        // Key window index counter by bundleID rather than raw.pid so multiple
+        // processes of the same application (helpers, relaunch transients) do
+        // not both emit appWindowIndex: 0.
+        var appWindowCounts: [String: Int] = [:]
         var currentZIndex = 0
 
         for raw in selectedEntries {
@@ -2822,8 +2833,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 return area1 < area2
             })
 
-            let index = appWindowCounts[raw.pid, default: 0]
-            appWindowCounts[raw.pid] = index + 1
+            let index = appWindowCounts[bundleID, default: 0]
+            appWindowCounts[bundleID] = index + 1
+
+            let rawCGID = (raw.entry[kCGWindowNumber as String] as? CGWindowID)
+                ?? (raw.entry[kCGWindowNumber as String] as? Int).map { CGWindowID($0) }
 
             let wid = WindowID(appBundleID: bundleID, appName: appName, windowTitle: title, appWindowIndex: index)
             let recordID = self.lastKnownWindows[wid]?.id ?? UUID()
@@ -2831,6 +2845,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             var record = WindowRecord(
                 id: recordID,
                 windowID: wid,
+                cgWindowID: rawCGID,
                 globalFrame: appKitFrame,
                 screenKey: fp.key,
                 screenFrame: screen?.frame,
@@ -3459,7 +3474,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 let isAlreadyFullScreenOnTargetScreen = appRecords.allSatisfy { record in
                     guard record.isNativeFullScreen || record.isFullScreenMode else { return false }
                     guard let lr = liveRecords.first(where: {
-                        $0.windowID.appBundleID == record.windowID.appBundleID &&
+                        if let targetCGID = record.cgWindowID, let liveCGID = $0.cgWindowID, targetCGID == liveCGID {
+                            return true
+                        }
+                        return $0.windowID.appBundleID == record.windowID.appBundleID &&
                         (record.windowID.windowTitle.isEmpty ? $0.windowID.appWindowIndex == record.windowID.appWindowIndex : $0.windowID.windowTitle == record.windowID.windowTitle)
                     }) else { return false }
                     guard lr.isNativeFullScreen || lr.isFullScreenMode else { return false }
@@ -3695,7 +3713,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     guard !appLive.isEmpty else { return false }
                     
                     let matchingLR: WindowRecord?
-                    if !record.windowID.windowTitle.isEmpty,
+                    if let targetCGID = record.cgWindowID, let match = appLive.first(where: { $0.cgWindowID == targetCGID }) {
+                        matchingLR = match
+                    } else if !record.windowID.windowTitle.isEmpty,
                        let match = appLive.first(where: { $0.windowID.windowTitle == record.windowID.windowTitle }) {
                         matchingLR = match
                     } else if let match = appLive.first(where: { $0.windowID.appWindowIndex == record.windowID.appWindowIndex }) {
@@ -3780,7 +3800,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // Skip if app is already full-screen on the correct screen in the live layout
                 if (record.isNativeFullScreen || record.isFullScreenMode) {
                     let liveRecord = liveRecords.first { lr in
-                        lr.windowID.appBundleID == record.windowID.appBundleID &&
+                        if let targetCGID = record.cgWindowID, let liveCGID = lr.cgWindowID, targetCGID == liveCGID {
+                            return true
+                        }
+                        return lr.windowID.appBundleID == record.windowID.appBundleID &&
                         (record.windowID.windowTitle.isEmpty ? lr.windowID.appWindowIndex == record.windowID.appWindowIndex : lr.windowID.windowTitle == record.windowID.windowTitle)
                     }
                     if let liveRecord = liveRecord, liveRecord.isNativeFullScreen || liveRecord.isFullScreenMode {
@@ -3801,7 +3824,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 var windowModified = false
                 
                 let liveRecord = liveRecords.first { lr in
-                    lr.windowID.appBundleID == record.windowID.appBundleID &&
+                    if let targetCGID = record.cgWindowID, let liveCGID = lr.cgWindowID, targetCGID == liveCGID {
+                        return true
+                    }
+                    return lr.windowID.appBundleID == record.windowID.appBundleID &&
                     (record.windowID.windowTitle.isEmpty ? lr.windowID.appWindowIndex == record.windowID.appWindowIndex : lr.windowID.windowTitle == record.windowID.windowTitle)
                 }
                 let res = await self.restoreViaAX(
@@ -3980,6 +4006,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         for record: WindowRecord,
                         from availableRecords: inout [WindowRecord]
                     ) -> WindowRecord? {
+                        // Tier 1: Exact CGWindowID match
+                        if let targetCGID = record.cgWindowID,
+                           let cgidMatch = availableRecords.firstIndex(where: { $0.cgWindowID == targetCGID }) {
+                            return availableRecords.remove(at: cgidMatch)
+                        }
+
                         if !record.windowID.windowTitle.isEmpty,
                            let titleAndIndex = availableRecords.firstIndex(where: {
                                $0.windowID.windowTitle == record.windowID.windowTitle &&
@@ -4373,7 +4405,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     for targetItem in mismatchedTargets {
                         let targetFrame = targetItem.targetFrame
                         let liveRecord = liveRecords.first {
-                            $0.windowID.appBundleID == targetItem.record.windowID.appBundleID &&
+                            if let targetCGID = targetItem.record.cgWindowID, let liveCGID = $0.cgWindowID, targetCGID == liveCGID {
+                                return true
+                            }
+                            return $0.windowID.appBundleID == targetItem.record.windowID.appBundleID &&
                             $0.windowID.appWindowIndex == targetItem.record.windowID.appWindowIndex
                         }
                         _ = await self.restoreViaAX(
