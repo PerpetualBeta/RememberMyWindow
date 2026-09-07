@@ -3372,6 +3372,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
             var resolvedTargets: [ResolvedTarget] = []
             var deferredBundleIDs: Set<String> = []
+            /// Records describing windows that no longer exist, so nothing was
+            /// written for them. Verification and the summary both work from
+            /// `records` rather than `resolvedTargets`, so without this they
+            /// check a window that was deliberately never touched, mark the app
+            /// mismatched, find nothing to re-apply, and warn that a restore
+            /// failed which in fact declined to run. Exactly the failure the
+            /// `deferredBundleIDs` filter below already prevents, except that
+            /// one is per-bundle and this has to be per-record: the application
+            /// does have reachable windows, and those were restored correctly.
+            var recordsWithoutAWindow: Set<UUID> = []
 
             let externalRecords = records.filter { $0.windowID.appBundleID != Bundle.main.bundleIdentifier && $0.windowID.appBundleID != ownProcessName }
             let groupedRecords = Dictionary(grouping: externalRecords, by: { $0.windowID.appBundleID })
@@ -3649,6 +3659,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     // is worse than moving none.
                     guard !unclaimed.isEmpty else {
                         recordsWithNoWindow += 1
+                        recordsWithoutAWindow.insert(rec.id)
                         continue
                     }
                     let element = unclaimed.removeFirst()
@@ -3823,8 +3834,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
             }
 
-            // Build status-aware detail lines: ✓ = app was running, ✗ = app was not running (skipped)
+            // Build status-aware detail lines: ✓ = restored, ✗ = app was not
+            // running, ↩︎ = the window this record describes no longer exists, so
+            // nothing was written. That third case used to print as ✓, which
+            // claimed a window had been restored when the restore had correctly
+            // declined to touch anything.
             let details: [String] = records.map { record in
+                if recordsWithoutAWindow.contains(record.id) {
+                    return "↩︎ " + self.formatWindowDetail(record: record)
+                }
                 let isRunning = updatedRunningApps.values.contains(where: {
                     $0.bundleIdentifier == record.windowID.appBundleID ||
                     $0.localizedName == record.windowID.appBundleID
@@ -4033,6 +4051,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         record.windowID.appBundleID != Bundle.main.bundleIdentifier &&
                         record.windowID.appBundleID != ownProcessName &&
                         !deferredBundleIDs.contains(record.windowID.appBundleID) &&
+                        !recordsWithoutAWindow.contains(record.id) &&
                         !record.isNativeFullScreen &&
                         !record.isFullScreenMode &&
                         updatedRunningApps.values.contains(where: {
