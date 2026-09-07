@@ -3575,60 +3575,93 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     }
                 }
                 
-                // Pass 3: Match remaining windows using size and aspect ratio similarity (extremely robust for apps like VLC with multi-window layouts)
+                // Pass 3: Match remaining windows using size and aspect ratio similarity
+                // (extremely robust for apps like VLC with multi-window layouts).
+                //
+                // Scored across every (record, window) pair and assigned best-first, rather
+                // than walking the records in order and giving each one the pick of what is
+                // left. The two agree whenever there are at least as many windows as records.
+                // They disagree when windows are scarce, and then the in-order version hands
+                // the last window to whichever record it reaches first however badly that
+                // record fits. Measured on a real desk: three saved Sequel Ace records
+                // (735x428, 2460x1381, 1928x944) against one reachable 2460x1381 window,
+                // scoring 9.927, 0.000 and 1.389. In order, the 735x428 record takes it and
+                // squashes a full-height window to a third of its width. Best-first gives it
+                // to the record that describes it, which accessibility then reports as
+                // already in place.
                 let unmatchedRecords = appRecords.filter { rec in
                     !matchedTargetsForApp.contains(where: { $0.record.id == rec.id })
                 }
-                
-                for rec in unmatchedRecords {
+
+                func matchScore(_ rec: WindowRecord, _ el: AXUIElement) -> CGFloat? {
+                    guard let frame = self.getCurrentFrame(of: el) else { return nil }
                     let targetSize = rec.globalFrame.size
                     let targetAspect = targetSize.width / max(targetSize.height, 1)
-                    
-                    var bestIdx = -1
-                    var bestDiff = CGFloat.infinity
-                    
-                    for (idx, el) in unclaimed.enumerated() {
-                        guard let frame = self.getCurrentFrame(of: el) else { continue }
-                        let elAspect = frame.width / max(frame.height, 1)
-                        
-                        let aspectDiff = abs(elAspect - targetAspect)
-                        
-                        let targetArea = targetSize.width * targetSize.height
-                        let elArea = frame.width * frame.height
-                        let areaDiff = abs(elArea - targetArea) / max(targetArea, 1)
-                        
-                        let score = aspectDiff * 2.0 + areaDiff
-                        if score < bestDiff {
-                            bestDiff = score
-                            bestIdx = idx
+                    let elAspect = frame.width / max(frame.height, 1)
+                    let aspectDiff = abs(elAspect - targetAspect)
+                    let targetArea = targetSize.width * targetSize.height
+                    let elArea = frame.width * frame.height
+                    let areaDiff = abs(elArea - targetArea) / max(targetArea, 1)
+                    return aspectDiff * 2.0 + areaDiff
+                }
+
+                var scoredPairs: [(recordIndex: Int, element: AXUIElement, score: CGFloat)] = []
+                for (recordIndex, rec) in unmatchedRecords.enumerated() {
+                    for el in unclaimed {
+                        if let score = matchScore(rec, el) {
+                            scoredPairs.append((recordIndex, el, score))
                         }
                     }
-                    
-                    if bestIdx != -1 {
-                        let element = unclaimed.remove(at: bestIdx)
-                        let target = self.calculateTargetFrame(for: rec)
-                        matchedTargetsForApp.append(ResolvedTarget(record: rec, element: element, targetFrame: target))
-                    }
                 }
-                
+                scoredPairs.sort { $0.score < $1.score }
+
+                var claimedRecordIndices = Set<Int>()
+                for pair in scoredPairs {
+                    guard !claimedRecordIndices.contains(pair.recordIndex) else { continue }
+                    guard let idx = unclaimed.firstIndex(where: { CFEqual($0, pair.element) }) else { continue }
+                    let element = unclaimed.remove(at: idx)
+                    let rec = unmatchedRecords[pair.recordIndex]
+                    claimedRecordIndices.insert(pair.recordIndex)
+                    let target = self.calculateTargetFrame(for: rec)
+                    matchedTargetsForApp.append(ResolvedTarget(record: rec, element: element, targetFrame: target))
+                }
+
                 // Pass 4: Fallback index match for any remaining unmatched records
                 let remainingRecords = appRecords.filter { rec in
                     !matchedTargetsForApp.contains(where: { $0.record.id == rec.id })
                 }
                 let sortedRemaining = remainingRecords.sorted(by: { $0.windowID.appWindowIndex < $1.windowID.appWindowIndex })
+                var recordsWithNoWindow = 0
                 for rec in sortedRemaining {
-                    let element: AXUIElement
-                    if !unclaimed.isEmpty {
-                        element = unclaimed.removeFirst()
-                    } else if let first = wins.first {
-                        element = first
-                    } else {
+                    // An UNCLAIMED window only. Passes 1 to 3 hand out windows by removing
+                    // them from `unclaimed`; this pass used to fall back to `wins.first`
+                    // once that ran dry, which is a window one of those passes has already
+                    // taken. Two records then carried the same AX element into
+                    // `resolvedTargets`, and the verify-and-retry loop wrote both of their
+                    // frames to that one window, alternating until it gave up. Measured on
+                    // a two-record, one-window application: 17 writes over 3.5s, the window
+                    // visibly flickering, and the pass reporting `Restored 2 window(s)`.
+                    //
+                    // An empty `unclaimed` means every live window already has an owner, so
+                    // this record describes a window that has closed. `appWindowIndex` is a
+                    // position rather than an identity, so such a record outlives the window
+                    // it named. There is no right window to move, and moving the wrong one
+                    // is worse than moving none.
+                    guard !unclaimed.isEmpty else {
+                        recordsWithNoWindow += 1
                         continue
                     }
+                    let element = unclaimed.removeFirst()
                     let target = self.calculateTargetFrame(for: rec)
                     matchedTargetsForApp.append(ResolvedTarget(record: rec, element: element, targetFrame: target))
                 }
-                
+                if recordsWithNoWindow > 0 {
+                    // Said out loud rather than dropped silently: this is the state that
+                    // used to produce the flicker, and nothing else in the log names it.
+                    self.log("↩️ '\(bundleID)': skipped \(recordsWithNoWindow) saved window(s) that no longer exist — \(wins.count) live window(s) for \(appRecords.count) record(s)",
+                             level: .moderate, type: .restore)
+                }
+
                 // Broadcast mode: if there are extra open AX windows that weren't claimed by saved records,
                 // apply the template target frame (e.g. from appRecords.first) to every extra window.
                 // This stacks all open windows at the saved position so the user can drag them apart.
