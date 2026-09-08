@@ -29,9 +29,10 @@ Every time you plug in a monitor, disconnect from a dock, wake from sleep, or re
 
 It continuously tracks window arrangements in the background. The moment it recognises your display setup, it restores every window across every application to its exact saved size and position.
 
- 
 
-https://github.com/user-attachments/assets/0fa12f6d-68b4-49e9-af56-ec893cfa7477
+ 
+
+https://github.com/user-attachments/assets/aa0306cd-c31f-494d-be85-f0d1af41a94d
 
 
 
