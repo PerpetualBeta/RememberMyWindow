@@ -29,13 +29,13 @@ Every time you plug in a monitor, disconnect from a dock, wake from sleep, or re
 
 It continuously tracks window arrangements in the background. The moment it recognises your display setup, it restores every window across every application to its exact saved size and position.
 
-<div align="center">
-  <img width="1419" height="893" alt="Screenshot of RememberMyWindows" src="https://github.com/user-attachments/assets/4fcaa48b-c658-46eb-afff-776e05e02ebd" />
-</div>
+ 
 
-<div align="center">
-  <img width="1200" alt="Switching between Saved Sessions and Auto Layout" src="README-assets/auto-layout-transition.gif" />
-</div>
+https://github.com/user-attachments/assets/0fa12f6d-68b4-49e9-af56-ec893cfa7477
+
+
+
+
 
 ---
 
