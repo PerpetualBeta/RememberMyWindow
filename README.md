@@ -33,6 +33,10 @@ It continuously tracks window arrangements in the background. The moment it reco
   <img width="1419" height="893" alt="Screenshot of RememberMyWindows" src="https://github.com/user-attachments/assets/4fcaa48b-c658-46eb-afff-776e05e02ebd" />
 </div>
 
+<div align="center">
+  <img width="1200" alt="Switching between Saved Sessions and Auto Layout" src="README-assets/auto-layout-transition.gif" />
+</div>
+
 ---
 
 ## 🚀 Features
