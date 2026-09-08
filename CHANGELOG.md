@@ -2,6 +2,34 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v14.5] — 2026-09-08
+
+### 🔮 "No Pane, All Gain: Polish Pass Deluxe"
+
+#### 🎛️ 3D Preview Overhaul
+- **Wider Center Zone**: Expanded the center interaction zone from [0.30, 0.70] to [0.25, 0.75] for more generous cursor tracking.
+- **Dynamic Pitch Flattening**: 3D preview pitch now smoothly flattens to 0° when the cursor enters the center zone, making the layout lie flush against the board.
+- **Center-Zone Layer Collapse**: Window layer spacing collapses to zero in the center zone so peeled cards sit flat, then fans back out in the outer zones.
+- **Single-Screen Zoom-Out**: Layouts on a single display now get extra breathing room with an automatic scale reduction so peeled windows don't clip.
+- **Clip Shape Fix**: Added `clipShape(RoundedRectangle)` before and after the liquid glass modifier to prevent content from bleeding past card corners.
+
+#### 🧩 Smarter Session & Context Awareness
+- **Menu → Window Intelligence**: Opening the main window from the menu bar now preserves the correct saved session and highlights the app that was frontmost before the menu took focus.
+- **Scroll-to-App Fix**: Added `onChange(of: selectedSnapshotKey)` so the detail view reliably scrolls to the current app card even when the session changes.
+- **Auto Layout Context**: When Auto Layout is active, opening the main window clears the saved-session context cleanly instead of showing a stale session.
+
+#### ⚠️ Display Warnings Refactor
+- **Unified Warning Card**: Extracted a new `SavedSessionDisplayWarnings` view that combines physical display mismatch and missing screens into a single compact, divider-separated card.
+
+#### 🎨 Settings & UI Polish
+- **Inline Disabled State**: Replaced the custom `.autoLayoutDisabled()` modifier with standard `.disabled()`, `.opacity()`, and `.grayscale()` for clearer, more composable toggle-card behavior.
+- **Hebrew Localization**: Added translations for "Auto Layout Mode", its description tooltip, and "Enable Desktop Toggle first".
+
+#### 🧹 Housekeeping
+- **Removed `auto-layout-transition.gif`**: Cleaned up an unused GIF asset from README-assets.
+
+---
+
 ## [v14.0] — 2026-09-05
 
 ### 💾 "Always In Place: Auto-Save Meets Multi-Space"

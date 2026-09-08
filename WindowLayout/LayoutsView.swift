@@ -377,56 +377,13 @@ struct SnapshotDetailView: View {
                 }
                 
 
-
-                if isPhysicalMismatch || !manager.canRestore(snapshot: snapshot) {
-                    HStack(alignment: .top, spacing: 10) {
-                        if isPhysicalMismatch {
-                            HStack(spacing: 10) {
-                                Image(systemName: "display.and.arrow.down")
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundStyle(.blue)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text("New monitor detected with the same name".localized(appLanguage))
-                                        .font(.system(size: 12, weight: .bold))
-                                    Text("This is a different physical unit than the one in this session.".localized(appLanguage))
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.blue.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color.blue.opacity(0.15), lineWidth: 1)
-                            }
-                        }
-
-                        if !manager.canRestore(snapshot: snapshot) {
-                            HStack(spacing: 10) {
-                                Image(systemName: "display.trianglebadge.exclamationmark")
-                                    .font(.title3)
-                                    .foregroundStyle(.orange)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("External Screens Missing".localized(appLanguage))
-                                        .font(.subheadline.weight(.semibold))
-                                    Text("Connect the required displays to enable restoration of this session.".localized(appLanguage))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.orange.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.orange.opacity(0.2), lineWidth: 1)
-                            }
-                        }
-                    }
+                let hasMissingScreens = !manager.canRestore(snapshot: snapshot)
+                if isPhysicalMismatch || hasMissingScreens {
+                    SavedSessionDisplayWarnings(
+                        hasPhysicalMismatch: isPhysicalMismatch,
+                        hasMissingScreens: hasMissingScreens,
+                        appLanguage: appLanguage
+                    )
                 }
             }
             .padding(24)
@@ -451,6 +408,12 @@ struct SnapshotDetailView: View {
                     scrollToCurrentApp(using: proxy)
                 }
                 .onChange(of: manager.selectedAppBundleID) { _, _ in
+                    scrollToCurrentApp(using: proxy)
+                }
+                .onChange(of: manager.selectedSnapshotKey) { _, _ in
+                    // Opening the app from the menu changes the session and
+                    // the selected app together. Re-run after the session
+                    // changes so the target card exists before scrolling.
                     scrollToCurrentApp(using: proxy)
                 }
             }
@@ -501,6 +464,92 @@ struct SnapshotDetailView: View {
             Text(value)
                 .font(.caption.weight(.medium))
         }
+    }
+}
+
+/// Compact display warnings for a saved session. When both conditions apply,
+/// they share one card and are separated into readable rows.
+private struct SavedSessionDisplayWarnings: View {
+    let hasPhysicalMismatch: Bool
+    let hasMissingScreens: Bool
+    let appLanguage: AppLanguage
+
+    private struct Warning: Identifiable {
+        let id: String
+        let title: String
+        let message: String
+        let systemImage: String
+    }
+
+    private var warnings: [Warning] {
+        var result: [Warning] = []
+
+        if hasPhysicalMismatch {
+            result.append(Warning(
+                id: "physicalMismatch",
+                title: "New monitor detected with the same name".localized(appLanguage),
+                message: "This is a different physical unit than the one in this session.".localized(appLanguage),
+                systemImage: "display.and.arrow.down"
+            ))
+        }
+
+        if hasMissingScreens {
+            result.append(Warning(
+                id: "missingScreens",
+                title: "External Screens Missing".localized(appLanguage),
+                message: "Connect the required displays to enable restoration of this session.".localized(appLanguage),
+                systemImage: "display.trianglebadge.exclamationmark"
+            ))
+        }
+
+        return result
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(warnings.enumerated()), id: \.element.id) { index, warning in
+                if index > 0 {
+                    Divider()
+                        .padding(.leading, 42)
+                }
+
+                HStack(spacing: 10) {
+                    Image(systemName: warning.systemImage)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.primary.opacity(0.72))
+                        .frame(width: 22)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(warning.title)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+
+                        Text(warning.message)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(0.07))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+                }
+        }
+        .padding(.horizontal, 2)
     }
 }
 

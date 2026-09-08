@@ -483,52 +483,71 @@ struct LayoutPreviewView: View {
             let centerOffsetY = max(0, (geo.size.height - layoutH) / 2)
             
             let totalRecords = max(1, snapshot.records.count)
+            let isSingleScreen = getScreenFrames().count == 1
             let cursorX = Double(cursorHorizontalPosition)
 
-            // Outer zone progressive activation (< 0.30 or > 0.70)
-            let leftOuter = max(0.0, (0.30 - cursorX) / 0.30)
-            let rightOuter = max(0.0, (cursorX - 0.70) / 0.30)
+            // Outer zone progressive activation (< 0.25 or > 0.75)
+            let leftOuter = max(0.0, (0.25 - cursorX) / 0.25)
+            let rightOuter = max(0.0, (cursorX - 0.75) / 0.25)
             let signedOuterOffset = rightOuter - leftOuter
             let outerDistance = max(leftOuter, rightOuter)
 
-            // In center zone [0.30, 0.70], canvas stays straight-on with resting layer spacing
-            let dynamicYaw = is3D ? (-signedOuterOffset * 45.0) : 0
-            let dynamicLayerStep: CGFloat = {
-                let base = 14.0 + CGFloat(outerDistance) * 74.0
-                if totalRecords > 6 {
-                    let scaled = (base * 6.0) / CGFloat(totalRecords)
-                    let minAtPosition = 12.0 + CGFloat(outerDistance) * 36.0
-                    return max(minAtPosition, scaled)
-                }
-                return base
-            }()
-            let maxExplosion = CGFloat(max(0, totalRecords - 1)) * dynamicLayerStep * 0.9
-            let dynamicScale = is3D ? (0.98 + outerDistance * 0.12) : 1.0
-
-            // Center zone peel-off weight: 1.0 inside [0.30, 0.70], smoothly ramps to 0.0 outside boundaries
+            // Center zone peel-off weight: 1.0 inside [0.25, 0.75], smoothly ramps to 0.0 outside boundaries
             let centerZoneWeight: CGFloat = {
                 guard is3D else { return 0.0 }
-                if cursorX < 0.30 {
-                    return max(0.0, min(1.0, CGFloat((cursorX - 0.27) / 0.03)))
-                } else if cursorX > 0.70 {
-                    return max(0.0, min(1.0, CGFloat((0.73 - cursorX) / 0.03)))
+                if cursorX < 0.25 {
+                    return max(0.0, min(1.0, CGFloat((cursorX - 0.22) / 0.03)))
+                } else if cursorX > 0.75 {
+                    return max(0.0, min(1.0, CGFloat((0.78 - cursorX) / 0.03)))
                 } else {
                     return 1.0
                 }
             }()
 
-            // Map cursor horizontal drift within center zone [0.30, 0.70] to scrub progress [0.0, 1.0].
+            // In center zone [0.25, 0.75], canvas stays straight-on with resting layer spacing
+            let dynamicYaw = is3D ? (-signedOuterOffset * 45.0) : 0
+
+            // In center zone [0.25, 0.75], pitch flattens to 0° flush with the screen board
+            let dynamicPitch: Double = is3D ? (Double(1.0 - centerZoneWeight) * 14.0) : 0.0
+
+            // Dynamic Layer Step: in outer zones, windows fan in 3D; in center gap, layer spacing flattens to 0 flush on the board
+            let dynamicLayerStep: CGFloat = {
+                guard is3D else { return 0.0 }
+                let base = 14.0 + CGFloat(outerDistance) * 74.0
+                let outerStep: CGFloat = {
+                    if totalRecords > 6 {
+                        let scaled = (base * 6.0) / CGFloat(totalRecords)
+                        let minAtPosition = 12.0 + CGFloat(outerDistance) * 36.0
+                        return max(minAtPosition, scaled)
+                    }
+                    return base
+                }()
+                return (1.0 - centerZoneWeight) * outerStep
+            }()
+            let maxExplosion = CGFloat(max(0, totalRecords - 1)) * dynamicLayerStep * 0.9
+
+            // Smooth animated zoom-out: one-screen layouts need extra breathing room
+            // for the peeled windows, including the outer hover positions.
+            let dynamicScale: CGFloat = {
+                guard is3D else { return 1.0 }
+                let singleScreenReduction: CGFloat = isSingleScreen ? 0.12 : 0.0
+                let outerBaseScale = 0.98 + CGFloat(outerDistance) * 0.12 - singleScreenReduction
+                let centerZoomOutScale: CGFloat = 0.82 - singleScreenReduction
+                return (1.0 - centerZoneWeight) * outerBaseScale + centerZoneWeight * centerZoomOutScale
+            }()
+
+            // Map cursor horizontal drift within center zone [0.25, 0.75] to scrub progress [0.0, 1.0].
             // Direction-aware: progress always goes 0→1 front-to-back regardless of which side was entered.
             let scrubProgress: CGFloat = {
-                let inCenter = cursorX >= 0.30 && cursorX <= 0.70
+                let inCenter = cursorX >= 0.25 && cursorX <= 0.75
                 guard inCenter else {
                     // Outside center zone: clamp to 0 or 1 based on which side
-                    return cursorX < 0.30 ? 0.0 : 1.0
+                    return cursorX < 0.25 ? 0.0 : 1.0
                 }
                 if centerEnteredFromLeft {
-                    return min(1.0, max(0.0, CGFloat((cursorX - 0.30) / 0.40)))
+                    return min(1.0, max(0.0, CGFloat((cursorX - 0.25) / 0.50)))
                 } else {
-                    return min(1.0, max(0.0, CGFloat((0.70 - cursorX) / 0.40)))
+                    return min(1.0, max(0.0, CGFloat((0.75 - cursorX) / 0.50)))
                 }
             }()
 
@@ -662,7 +681,7 @@ struct LayoutPreviewView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .rotation3DEffect(
-                .degrees(is3D ? 14 : 0),
+                .degrees(dynamicPitch),
                 axis: (x: 1, y: 0, z: 0),
                 perspective: 0.55
             )
@@ -676,14 +695,16 @@ struct LayoutPreviewView: View {
             .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.84), value: cursorHorizontalPosition)
         }
         .padding(16)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .liquidGlass(cornerRadius: 16, style: .card)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             PreviewCursorTracker { position in
                 // Hand off to cursor only after intro animation completes
                 guard !isPlayingIntro else { return }
                 let prev = Double(cursorHorizontalPosition)
-                let inCenter = position >= 0.30 && position <= 0.70
-                let wasInCenter = prev >= 0.30 && prev <= 0.70
+                let inCenter = position >= 0.25 && position <= 0.75
+                let wasInCenter = prev >= 0.25 && prev <= 0.75
                 // Capture entry direction the moment the cursor crosses into the center zone
                 if inCenter && !wasInCenter {
                     centerEnteredFromLeft = position < prev ? false : true

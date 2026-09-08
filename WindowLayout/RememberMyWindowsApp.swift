@@ -885,9 +885,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openMainWindow() {
         let manager = WindowManager.shared
-        manager.selectedAppBundleID = nil
-        if !manager.store.autoSaveEnabled {
+        if manager.store.autoSaveEnabled {
+            // Auto Layout has no named saved session to select. Clear the
+            // saved-session context so the Auto Layout screen starts cleanly.
+            manager.selectedSnapshotKey = nil
+            manager.selectedAppBundleID = nil
+        } else if let snapshot = manager.currentApplicableSnapshot,
+                  let key = manager.store.snapshots.first(where: { $0.value.id == snapshot.id })?.key {
+            // The menu was built from this current session. Keep that same
+            // session selected when opening the main window, then pass along
+            // the app that was frontmost before the menu took focus. The
+            // detail view uses this ID to center the matching saved card.
+            manager.selectedSnapshotKey = key
+            let currentAppID = lastFrontmostAppID
+            manager.selectedAppBundleID = currentAppID.flatMap { appID in
+                snapshot.records.contains { $0.windowID.appBundleID == appID } ? appID : nil
+            }
+        } else {
+            // No saved session matches the current displays; fall back to the
+            // live layout rather than leaving the detail pane without content.
             manager.selectedSnapshotKey = WindowManager.liveKey
+            manager.selectedAppBundleID = nil
         }
         showMainWindow()
     }

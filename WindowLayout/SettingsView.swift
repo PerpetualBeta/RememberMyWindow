@@ -322,10 +322,6 @@ struct SettingsView: View {
 
                 Divider().padding(.horizontal, 12)
 
-                if manager.store.autoSaveEnabled {
-                    autoLayoutDisabledNotice
-                }
-
                 SettingsToggle(
                     title: "Save location with layouts",
                     subtitle: "Tags saved layout sessions with your current GPS coordinates to easily identify locations",
@@ -347,7 +343,7 @@ struct SettingsView: View {
                     ),
                     isLoading: isTogglingLocation
                 )
-                .autoLayoutDisabled(manager.store.autoSaveEnabled)
+                .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                 Divider().padding(.horizontal, 12)
 
@@ -363,10 +359,6 @@ struct SettingsView: View {
 
                 Divider().padding(.horizontal, 12)
 
-                if manager.store.autoSaveEnabled {
-                    autoLayoutDisabledNotice
-                }
-
                 SettingsToggle(
                     title: "Group other apps in submenu",
                     subtitle: "Keep the menu bar dropdown compact by placing background apps in a submenu",
@@ -379,7 +371,7 @@ struct SettingsView: View {
                         }
                     )
                 )
-                .autoLayoutDisabled(manager.store.autoSaveEnabled)
+                .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                 Divider().padding(.horizontal, 12)
 
@@ -487,7 +479,7 @@ struct SettingsView: View {
             SettingsSection(title: "Auto Layout".localized(appLanguage), icon: "clock.arrow.circlepath") {
                 VStack(spacing: 0) {
                     SettingsToggle(
-                        title: "Persist live layout across restarts",
+                        title: "Auto Layout Mode",
                         subtitle: "Records your arrangement to its own file as you work, so it survives a quit, a sleep or a reboot. Your saved sessions are never written to, but while this is on, automatic restores prefer the newer Auto layout over them. Switching it off stops the recording and leaves the file in place.",
                         icon: "clock.arrow.circlepath",
                         isOn: Binding(
@@ -510,10 +502,6 @@ struct SettingsView: View {
                         )
                     )
 
-                    if isAutoLayoutActive {
-                        autoLayoutDisabledNotice
-                    }
-
                     HStack(spacing: 10) {
                         Image(systemName: "square.3.layers.3d.top.filled")
                             .font(.system(size: 11, weight: .medium))
@@ -533,7 +521,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .autoLayoutDisabled(isAutoLayoutActive)
+                    .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
 
                     Divider().padding(.horizontal, 12)
 
@@ -593,17 +581,13 @@ struct SettingsView: View {
 
                     Divider().padding(.horizontal, 12)
 
-                    if isAutoLayoutActive {
-                        autoLayoutDisabledNotice
-                    }
-
                     SettingsToggle(
                         title: "Restore focused app on left click",
                         subtitle: "Left-clicking the menu bar icon restores the window position of the frontmost app",
                         icon: "cursorarrow.click",
                         isOn: $restoreFocusedAppOnLeftClick
                     )
-                    .autoLayoutDisabled(isAutoLayoutActive)
+                    .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
 
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.turn.down.right")
@@ -617,15 +601,11 @@ struct SettingsView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .autoLayoutDisabled(isAutoLayoutActive)
+                    .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
                 }
             }
 
             // Subcategory 3: Quick Key Restore (Fn Long-Press / Double-Tap Caps Lock)
-            if isAutoLayoutActive {
-                autoLayoutDisabledNotice
-            }
-
             SettingsSection(title: "Quick Key Restore".localized(appLanguage), icon: "keyboard.fill") {
                 VStack(spacing: 0) {
                     SettingsToggle(
@@ -641,6 +621,7 @@ struct SettingsView: View {
                             }
                         )
                     )
+                    .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
 
                     if manager.store.quickKeyRestoreEnabled {
                         Divider().padding(.horizontal, 12)
@@ -677,6 +658,7 @@ struct SettingsView: View {
                             .frame(width: 175)
                         }
                         .padding(12)
+                        .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
 
                         if manager.store.quickKeyTrigger == .fnLongPress || manager.store.quickKeyTrigger == .both {
                             Divider().padding(.horizontal, 12)
@@ -694,6 +676,7 @@ struct SettingsView: View {
                                 step: 0.1,
                                 unit: "s"
                             )
+                            .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
                         }
 
                         Divider().padding(.horizontal, 12)
@@ -726,6 +709,7 @@ struct SettingsView: View {
                             .frame(width: 140)
                         }
                         .padding(12)
+                        .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
 
                         HStack(spacing: 8) {
                             Image(systemName: "info.circle")
@@ -743,26 +727,11 @@ struct SettingsView: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
                     }
                 }
             }
-            .autoLayoutDisabled(isAutoLayoutActive)
         }
-    }
-
-    private var autoLayoutDisabledNotice: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "info.circle.fill")
-                .font(.system(size: 11, weight: .semibold))
-            Text("Auto Layout is on".localized(appLanguage))
-                .font(.system(size: 10.5, weight: .semibold))
-        }
-        .foregroundStyle(Color.accentColor)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .accessibilityElement(children: .combine)
     }
 
     // MARK: - 3. Experimental Content (Desktop Toggle & Active App Command Trigger)
@@ -789,8 +758,12 @@ struct SettingsView: View {
                         onBeginRecording: { desktopToggleManager.suspendForRecording() },
                         onEndRecording: { desktopToggleManager.resumeAfterRecording() }
                     )
-                    .disabled(!desktopToggleManager.isEnabled)
-                    .opacity(desktopToggleManager.isEnabled ? 1.0 : 0.45)
+                    .settingsDisabled(
+                        !desktopToggleManager.isEnabled,
+                        reason: "Enable Desktop Toggle first",
+                        appLanguage: appLanguage,
+                        showsReason: true
+                    )
 
                     Divider().padding(.horizontal, 12)
 
@@ -800,16 +773,16 @@ struct SettingsView: View {
                         icon: "arrow.uturn.backward",
                         isOn: $desktopToggleManager.restoreOnUnhide
                     )
-                    .disabled(!desktopToggleManager.isEnabled)
-                    .opacity(desktopToggleManager.isEnabled ? 1.0 : 0.45)
+                    .settingsDisabled(
+                        !desktopToggleManager.isEnabled,
+                        reason: "Enable Desktop Toggle first",
+                        appLanguage: appLanguage,
+                        showsReason: true
+                    )
                 }
             }
 
             // Section 2: Active App Command Trigger (⌘⇧R)
-            if manager.store.autoSaveEnabled {
-                autoLayoutDisabledNotice
-            }
-
             SettingsSection(title: "Active App Command Trigger (⌘⇧R)".localized(appLanguage), icon: "command") {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
@@ -865,6 +838,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 12)
                     .padding(.bottom, 6)
+                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage, showsReason: false)
 
                     Divider().padding(.horizontal, 12)
 
@@ -877,6 +851,7 @@ struct SettingsView: View {
                             set: { manager.store.refreshFrontmostOnFullRestore = $0; manager.persist() }
                         )
                     )
+                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                     Divider().padding(.horizontal, 12)
 
@@ -889,6 +864,7 @@ struct SettingsView: View {
                             set: { manager.store.refreshFrontmostOnSingleRestore = $0; manager.persist() }
                         )
                     )
+                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                     if manager.store.refreshFrontmostOnSingleRestore {
                         Divider().padding(.horizontal, 12)
@@ -905,6 +881,7 @@ struct SettingsView: View {
                             step: 0.5,
                             unit: "s"
                         )
+                        .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                         if manager.store.singleAppCommandDelay < 4.3 {
                             HStack(spacing: 8) {
@@ -919,6 +896,7 @@ struct SettingsView: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage, showsReason: false)
                         }
 
                         Divider().padding(.horizontal, 12)
@@ -935,8 +913,10 @@ struct SettingsView: View {
                             step: 0.5,
                             unit: "s"
                         )
+                        .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                         CustomWebAppsManagementView(manager: manager, appLanguage: appLanguage)
+                            .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
                     }
 
                     Divider().padding(.horizontal, 12)
@@ -950,6 +930,7 @@ struct SettingsView: View {
                             set: { manager.store.refreshFrontmostOnlyOnExternalDisplay = $0; manager.persist() }
                         )
                     )
+                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                     Divider().padding(.horizontal, 12)
 
@@ -962,6 +943,7 @@ struct SettingsView: View {
                             set: { manager.store.showCommandOverlayAnimation = $0; manager.persist() }
                         )
                     )
+                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Label("How it works".localized(appLanguage), systemImage: "info.circle")
@@ -977,9 +959,9 @@ struct SettingsView: View {
                     .background(Color.blue.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
+                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage, showsReason: false)
                 }
             }
-            .autoLayoutDisabled(manager.store.autoSaveEnabled)
         }
     }
 
@@ -1056,7 +1038,6 @@ struct SettingsView: View {
         SettingsSection(title: "Appearance".localized(appLanguage), icon: "paintpalette.fill") {
             VStack(spacing: 0) {
 
-                // Placeholder to keep theme/LiquidGlass/menubar settings
                 // ── Theme Color ─────────────────────────────────────────────────
                 VStack(alignment: .leading, spacing: 10) {
                     Label {
@@ -1163,12 +1144,11 @@ struct SettingsView: View {
                 }
                 .padding(12)
 
-                Divider().padding(.horizontal, 12)
-
-                // ── Menu Bar Icon Style ─────────────────────────────────────────
-                MenuBarIconSettingsSection(appLanguage: appLanguage, themeColor: themeColor)
             }
         }
+
+        // ── Menu Bar Icon Style ────────────────────────────────────────────────
+        MenuBarIconSettingsSection(appLanguage: appLanguage, themeColor: themeColor)
 
         } // end VStack
     }
@@ -1363,20 +1343,64 @@ struct SettingsView: View {
 }
 
 
-private struct AutoLayoutDisabledModifier: ViewModifier {
+private struct DisabledSettingModifier: ViewModifier {
     let isDisabled: Bool
+    let reason: String
+    let appLanguage: AppLanguage
+    let showsReason: Bool
 
     func body(content: Content) -> some View {
-        content
-            .disabled(isDisabled)
-            .opacity(isDisabled ? 0.32 : 1.0)
-            .grayscale(isDisabled ? 0.9 : 0.0)
+        VStack(alignment: .leading, spacing: 0) {
+            content
+                .disabled(isDisabled)
+                .opacity(isDisabled ? 0.24 : 1.0)
+                .grayscale(isDisabled ? 1.0 : 0.0)
+
+            if isDisabled && showsReason {
+                Label(reason.localized(appLanguage), systemImage: "info.circle")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+            }
+        }
+        .background {
+            if isDisabled {
+                Color.black.opacity(0.42)
+            }
+        }
     }
 }
 
 private extension View {
-    func autoLayoutDisabled(_ isDisabled: Bool) -> some View {
-        modifier(AutoLayoutDisabledModifier(isDisabled: isDisabled))
+    func settingsDisabled(
+        _ isDisabled: Bool,
+        reason: String,
+        appLanguage: AppLanguage,
+        showsReason: Bool = true
+    ) -> some View {
+        modifier(DisabledSettingModifier(
+            isDisabled: isDisabled,
+            reason: reason,
+            appLanguage: appLanguage,
+            showsReason: showsReason
+        ))
+    }
+
+    func autoLayoutDisabled(
+        _ isDisabled: Bool,
+        appLanguage: AppLanguage,
+        showsReason: Bool = true
+    ) -> some View {
+        settingsDisabled(
+            isDisabled,
+            reason: "Unavailable while Auto Layout is on",
+            appLanguage: appLanguage,
+            showsReason: showsReason
+        )
     }
 }
 
@@ -2151,45 +2175,37 @@ struct MenuBarIconSettingsSection: View {
     @ObservedObject private var iconManager = MenuBarIconManager.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // Header
-            HStack(alignment: .top) {
-                Label {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Menu Bar Icon Style".localized(appLanguage))
-                            .font(.system(size: 13, weight: .medium))
-                        Text("Choose the resting and active icons shown in the macOS status bar".localized(appLanguage))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+        SettingsSection(title: "Menu Bar Icon Style".localized(appLanguage), icon: "menubar.rectangle") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 12) {
+                    Text("Choose the resting and active icons shown in the macOS status bar".localized(appLanguage))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 8)
+
+                    // Test dynamic animation button
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            iconManager.triggerActionState(minDuration: 1.0)
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: iconManager.isActionActive ? "sparkles" : "play.fill")
+                                .font(.system(size: 10))
+                            Text("Test Dynamic Action".localized(appLanguage))
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                        .foregroundStyle(Color.accentColor)
                     }
-                } icon: {
-                    Image(systemName: "menubar.rectangle")
-                        .foregroundStyle(themeColor.color(seed: 0))
-                        .font(.system(size: 14))
-                        .frame(width: 24)
+                    .buttonStyle(.plain)
                 }
 
-                Spacer()
-
-                // Test dynamic animation button
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        iconManager.triggerActionState(minDuration: 1.0)
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: iconManager.isActionActive ? "sparkles" : "play.fill")
-                            .font(.system(size: 10))
-                        Text("Test Dynamic Action".localized(appLanguage))
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-                    .foregroundStyle(Color.accentColor)
-                }
-                .buttonStyle(.plain)
-            }
+                Divider()
 
             // Presets Grid
             let columns = [
@@ -2288,7 +2304,7 @@ struct MenuBarIconSettingsSection: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.leading, 28)
+            .padding(.horizontal, 2)
 
             // Custom Symbol Configuration (when customSymbol is selected)
             if iconManager.selectedPreset == .customSymbol {
@@ -2337,7 +2353,6 @@ struct MenuBarIconSettingsSection: View {
                 }
                 .padding(10)
                 .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
-                .padding(.leading, 28)
             }
 
             // Custom Image Configuration (when customImage is selected)
@@ -2374,8 +2389,9 @@ struct MenuBarIconSettingsSection: View {
                 }
                 .padding(10)
                 .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8))
-                .padding(.leading, 28)
             }
+
+            Divider()
 
             // Match Accent Theme Color Toggle
             SettingsToggle(
@@ -2384,9 +2400,9 @@ struct MenuBarIconSettingsSection: View {
                 icon: "paintpalette",
                 isOn: $iconManager.matchThemeColor
             )
-            .padding(.leading, 28)
         }
-        .padding(12)
+        .padding(14)
+        }
     }
 }
 
@@ -3154,6 +3170,8 @@ private struct EventCardView: View {
                 .scaleEffect(isHovered && isOn ? 1.05 : 1.0)
                 .animation(.spring(response: 0.25), value: isHovered)
                 .animation(.spring(response: 0.25), value: isOn)
+                .opacity(isDisabled ? 0.24 : 1.0)
+                .grayscale(isDisabled ? 1.0 : 0.0)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -3179,16 +3197,20 @@ private struct EventCardView: View {
                         }
                     }
                     .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
+                    .opacity(isDisabled ? 0.24 : 1.0)
+                    .grayscale(isDisabled ? 1.0 : 0.0)
 
                     Text(subtitle.localized(appLanguage))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .opacity(isDisabled ? 0.24 : 1.0)
+                        .grayscale(isDisabled ? 1.0 : 0.0)
 
                     if isDisabled, let disabledReason {
                         Label(disabledReason.localized(appLanguage), systemImage: "info.circle")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.primary)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityLabel(Text(disabledReason.localized(appLanguage)))
                     }
@@ -3201,6 +3223,9 @@ private struct EventCardView: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .labelsHidden()
+                    .disabled(isDisabled)
+                    .opacity(isDisabled ? 0.24 : 1.0)
+                    .grayscale(isDisabled ? 1.0 : 0.0)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -3298,11 +3323,14 @@ private struct EventCardView: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
                 .transition(.opacity.combined(with: .move(edge: .top)))
+                .disabled(isDisabled)
+                .opacity(isDisabled ? 0.24 : 1.0)
+                .grayscale(isDisabled ? 1.0 : 0.0)
             }
         }
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor).opacity(isHovered ? 0.85 : 0.65))
+                .fill(Color(NSColor.controlBackgroundColor).opacity(isDisabled ? 0.35 : (isHovered ? 0.85 : 0.65)))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -3323,7 +3351,6 @@ private struct EventCardView: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isHovered)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isOn)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: soundIsOn)
-        .autoLayoutDisabled(isDisabled)
         .onHover { hovering in
             guard !isDisabled else {
                 isHovered = false

@@ -34,7 +34,8 @@ export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR"
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
-echo "  - Compiling Swift files... (this may take a few seconds)"
+echo "  - Preparing Swift sources..."
+echo "  - Compiling Swift files… this may take a few seconds"
 swiftc -parse-as-library \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -target "arm64-apple-macosx14.0" \
@@ -62,6 +63,7 @@ swiftc -parse-as-library \
     WindowLayout/WebAppDetector.swift \
     WindowLayout/MenuBarIconManager.swift \
     -o "${MACOS_DIR}/${APP_NAME}"
+echo "  - Swift compilation finished."
 
 APP_VERSION=$(grep -E '^## \[[vV]?[0-9]+(\.[0-9]+)*\]' CHANGELOG.md | head -n 1 | sed -E 's/.*\[[vV]?([^]]+)\].*/\1/' || echo "13.1")
 
