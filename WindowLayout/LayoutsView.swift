@@ -836,8 +836,10 @@ struct BringToFrontButton: View {
 
 struct AutoLayoutCenterView: View {
     @EnvironmentObject var manager: WindowManager
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @State private var isEarlierExpanded: Bool = true
 
     private var entries: [AutoSaveEntry] {
         // Restorable here, not merely recorded somewhere. See
@@ -882,40 +884,12 @@ struct AutoLayoutCenterView: View {
 
     var body: some View {
         GeometryReader { outerGeo in
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 16) {
                 // Return to latest banner if an earlier capture is selected
                 if let selectedID = manager.selectedAutoSaveEntryID,
                    selectedID != currentEntry?.id,
                    let entry = activeEntry {
-                    HStack(spacing: 8) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(themeColor.color(seed: 0))
-                        Text("Viewing Earlier Capture".localized(appLanguage))
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("(\(entry.capturedAt.formatted(.relative(presentation: .named))))")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                manager.selectedAutoSaveEntryID = nil
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.forward.circle")
-                                Text("Return to Latest".localized(appLanguage))
-                            }
-                            .font(.system(size: 12, weight: .semibold))
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(themeColor.color(seed: 0))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(themeColor.color(seed: 0).opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    earlierCaptureBanner(entry: entry)
                 }
 
                 // 1. Auto Layout Card on top (takes natural height)
@@ -955,25 +929,32 @@ struct AutoLayoutCenterView: View {
                                 }
                             }
                         },
+                        isExpanded: $isEarlierExpanded,
                         now: context.date
                     )
-                    .liquidGlass(cornerRadius: 16, style: .card)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.10), lineWidth: 1)
+                    }
                 }
                 .fixedSize(horizontal: false, vertical: true)
 
                 Divider()
 
                 // 2. Visual Preview at the bottom (strictly fills remaining viewport height)
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Text("VISUAL PREVIEW".localized(appLanguage))
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                        Label("Window Arrangement".localized(appLanguage), systemImage: "rectangle.3.group")
+                            .font(.system(.headline, design: .rounded))
                         Spacer()
                         if let count = activeEntry?.windowCount ?? activeSnapshot?.records.count {
                             Text(count == 1 ? "1 window".localized(appLanguage) : "\(count) \("windows".localized(appLanguage))")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.tertiary)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 4)
+                                .background(Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.08), in: Capsule())
                         }
                     }
 
@@ -989,12 +970,12 @@ struct AutoLayoutCenterView: View {
                                 }
                             }
                         )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
                         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snap.records.count)
                     } else {
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .fill(Color.primary.opacity(0.04))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .frame(maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
                             .overlay {
                                 Text("No layout captured yet".localized(appLanguage))
                                     .font(.subheadline)
@@ -1008,6 +989,52 @@ struct AutoLayoutCenterView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            isEarlierExpanded = true
+        }
+    }
+
+    private func earlierCaptureBanner(entry: AutoSaveEntry) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(themeColor.color(seed: 0))
+                .frame(width: 22, height: 22)
+                .background(themeColor.color(seed: 0).opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Viewing Earlier Capture".localized(appLanguage))
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                Text(entry.capturedAt.formatted(.relative(presentation: .named)))
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 10)
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    manager.selectedAutoSaveEntryID = nil
+                    isEarlierExpanded = false
+                }
+            } label: {
+                Label("Return to Latest".localized(appLanguage), systemImage: "arrow.uturn.backward")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .tint(themeColor.color(seed: 0))
+            .keyboardShortcut(.escape, modifiers: [])
+            .accessibilityHint(Text("Show the newest automatic capture".localized(appLanguage)))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(themeColor.color(seed: 0).opacity(colorScheme == .dark ? 0.13 : 0.08), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(themeColor.color(seed: 0).opacity(colorScheme == .dark ? 0.28 : 0.18), lineWidth: 1)
+        }
     }
 }
 

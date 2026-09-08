@@ -327,6 +327,8 @@ struct LayoutPreviewView: View {
     @State private var isHovered: Bool = false
     @State private var hoveredRecordID: UUID? = nil
     @State private var cursorHorizontalPosition: CGFloat = 0.5
+    /// Tracks which edge the cursor entered the center zone from: true = entered from left, false = entered from right
+    @State private var centerEnteredFromLeft: Bool = true
     @State private var isPlayingIntro: Bool = false
     @State private var introTask: Task<Void, Never>? = nil
     
@@ -344,16 +346,32 @@ struct LayoutPreviewView: View {
         GeometryReader { geo in
             let boundingBox = calculateBoundingBox()
             let scale = calculateScale(for: geo.size, boundingBox: boundingBox)
+            let layoutWidth = boundingBox.width * scale
+            let layoutHeight = boundingBox.height * scale
+            let offsetX = max(0, (geo.size.width - layoutWidth) / 2)
+            let offsetY = max(0, (geo.size.height - layoutHeight) / 2)
             
             ZStack {
                 // Screens
                 ForEach(Array(getScreenFrames().enumerated()), id: \.offset) { _, frame in
-                    classicScreenView(frame: frame, boundingBox: boundingBox, scale: scale)
+                    classicScreenView(
+                        frame: frame,
+                        boundingBox: boundingBox,
+                        scale: scale,
+                        offsetX: offsetX,
+                        offsetY: offsetY
+                    )
                 }
                 
                 // Windows
                 ForEach(snapshot.records) { record in
-                    classicWindowView(record: record, boundingBox: boundingBox, scale: scale)
+                    classicWindowView(
+                        record: record,
+                        boundingBox: boundingBox,
+                        scale: scale,
+                        offsetX: offsetX,
+                        offsetY: offsetY
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -362,9 +380,15 @@ struct LayoutPreviewView: View {
         .liquidGlass(cornerRadius: 16, style: .card)
     }
     
-    private func classicScreenView(frame: CGRect, boundingBox: CGRect, scale: CGFloat) -> some View {
-        let x = (frame.origin.x - boundingBox.origin.x) * scale
-        let y = (boundingBox.height - (frame.origin.y - boundingBox.origin.y + frame.height)) * scale
+    private func classicScreenView(
+        frame: CGRect,
+        boundingBox: CGRect,
+        scale: CGFloat,
+        offsetX: CGFloat,
+        offsetY: CGFloat
+    ) -> some View {
+        let x = offsetX + (frame.origin.x - boundingBox.origin.x) * scale
+        let y = offsetY + (boundingBox.height - (frame.origin.y - boundingBox.origin.y + frame.height)) * scale
         let w = frame.width * scale
         let h = frame.height * scale
         
@@ -390,10 +414,16 @@ struct LayoutPreviewView: View {
         .position(x: x + w/2, y: y + h/2)
     }
     
-    private func classicWindowView(record: WindowRecord, boundingBox: CGRect, scale: CGFloat) -> some View {
+    private func classicWindowView(
+        record: WindowRecord,
+        boundingBox: CGRect,
+        scale: CGFloat,
+        offsetX: CGFloat,
+        offsetY: CGFloat
+    ) -> some View {
         let isSelected = record.id == selectedRecordID
-        let x = (record.globalFrame.origin.x - boundingBox.origin.x) * scale
-        let y = (boundingBox.height - (record.globalFrame.origin.y - boundingBox.origin.y + record.globalFrame.height)) * scale
+        let x = offsetX + (record.globalFrame.origin.x - boundingBox.origin.x) * scale
+        let y = offsetY + (boundingBox.height - (record.globalFrame.origin.y - boundingBox.origin.y + record.globalFrame.height)) * scale
         let w = record.globalFrame.width * scale
         let h = record.globalFrame.height * scale
         
@@ -453,26 +483,157 @@ struct LayoutPreviewView: View {
             let centerOffsetY = max(0, (geo.size.height - layoutH) / 2)
             
             let totalRecords = max(1, snapshot.records.count)
-            // Distance from center: 0.0 at x=0.5, 1.0 at either extreme (far left or far right)
-            let cursorDistance = abs(Double(cursorHorizontalPosition) - 0.5) * 2.0
-            // Layer step expands from 14pt at center to 88pt at either extreme (symmetric)
+            let cursorX = Double(cursorHorizontalPosition)
+
+            // Outer zone progressive activation (< 0.30 or > 0.70)
+            let leftOuter = max(0.0, (0.30 - cursorX) / 0.30)
+            let rightOuter = max(0.0, (cursorX - 0.70) / 0.30)
+            let signedOuterOffset = rightOuter - leftOuter
+            let outerDistance = max(leftOuter, rightOuter)
+
+            // In center zone [0.30, 0.70], canvas stays straight-on with resting layer spacing
+            let dynamicYaw = is3D ? (-signedOuterOffset * 45.0) : 0
             let dynamicLayerStep: CGFloat = {
-                let base = 14.0 + CGFloat(cursorDistance) * 74.0
+                let base = 14.0 + CGFloat(outerDistance) * 74.0
                 if totalRecords > 6 {
                     let scaled = (base * 6.0) / CGFloat(totalRecords)
-                    let minAtPosition = 12.0 + CGFloat(cursorDistance) * 36.0
+                    let minAtPosition = 12.0 + CGFloat(outerDistance) * 36.0
                     return max(minAtPosition, scaled)
                 }
                 return base
             }()
             let maxExplosion = CGFloat(max(0, totalRecords - 1)) * dynamicLayerStep * 0.9
-            // Bidirectional yaw: +45° at far left, 0° straight-on at center, -45° at far right
-            let dynamicYaw = is3D ? (-(Double(cursorHorizontalPosition) - 0.5) * 90.0) : 0
-            // Subtle auto-fill scale: symmetric expansion from 0.98 at center to 1.10 at either extreme
-            let dynamicScale = is3D ? (0.98 + cursorDistance * 0.12) : 1.0
-            // Signed offset: positive at right, negative at left, 0 at center
-            let signedOffset = (Double(cursorHorizontalPosition) - 0.5) * 2.0
-            
+            let dynamicScale = is3D ? (0.98 + outerDistance * 0.12) : 1.0
+
+            // Center zone peel-off weight: 1.0 inside [0.30, 0.70], smoothly ramps to 0.0 outside boundaries
+            let centerZoneWeight: CGFloat = {
+                guard is3D else { return 0.0 }
+                if cursorX < 0.30 {
+                    return max(0.0, min(1.0, CGFloat((cursorX - 0.27) / 0.03)))
+                } else if cursorX > 0.70 {
+                    return max(0.0, min(1.0, CGFloat((0.73 - cursorX) / 0.03)))
+                } else {
+                    return 1.0
+                }
+            }()
+
+            // Map cursor horizontal drift within center zone [0.30, 0.70] to scrub progress [0.0, 1.0].
+            // Direction-aware: progress always goes 0→1 front-to-back regardless of which side was entered.
+            let scrubProgress: CGFloat = {
+                let inCenter = cursorX >= 0.30 && cursorX <= 0.70
+                guard inCenter else {
+                    // Outside center zone: clamp to 0 or 1 based on which side
+                    return cursorX < 0.30 ? 0.0 : 1.0
+                }
+                if centerEnteredFromLeft {
+                    return min(1.0, max(0.0, CGFloat((cursorX - 0.30) / 0.40)))
+                } else {
+                    return min(1.0, max(0.0, CGFloat((0.70 - cursorX) / 0.40)))
+                }
+            }()
+
+            // Sort records strictly by z-order rank: index 0 is front-most, last is background
+            let frontToBackRecords = snapshot.records.sorted { a, b in
+                let za = a.zIndex ?? 0
+                let zb = b.zIndex ?? 0
+                if za != zb { return za > zb }
+                let idxA = snapshot.records.firstIndex(where: { $0.id == a.id }) ?? 0
+                let idxB = snapshot.records.firstIndex(where: { $0.id == b.id }) ?? 0
+                return idxA > idxB
+            }
+
+            // Compute front-to-back peel data for each window
+            let peelDataMap: [UUID: WindowPeelData] = {
+                guard centerZoneWeight > 0.001, totalRecords > 0 else { return [:] }
+                var map: [UUID: WindowPeelData] = [:]
+                
+                if totalRecords == 1 {
+                    let rec = frontToBackRecords[0]
+                    let scale = 1.0 + CGFloat(scrubProgress) * 0.80 * centerZoneWeight
+                    let lift = scrubProgress * 22.0 * centerZoneWeight
+                    map[rec.id] = WindowPeelData(
+                        scale: scale,
+                        liftY: lift,
+                        opacity: 1.0,
+                        zIndexBoost: 100.0,
+                        isPeeling: scrubProgress > 0.05
+                    )
+                    return map
+                }
+                
+                let stepInterval = 1.0 / CGFloat(totalRecords - 1)
+                let flightDuration = stepInterval * 1.35  // 35% overlap for continuous liquid peeling
+                
+                for (idx, record) in frontToBackRecords.enumerated() {
+                    let isLast = (idx == totalRecords - 1)
+                    var targetScale: CGFloat = 1.0
+                    var targetLiftY: CGFloat = 0.0
+                    var targetOpacity: Double = 1.0
+                    var targetZBoost: Double = 0.0
+                    var targetIsPeeling: Bool = false
+                    
+                    if !isLast {
+                        let startProgress = CGFloat(idx) * stepInterval
+                        let localProgress = (scrubProgress - startProgress) / flightDuration
+                        
+                        if localProgress <= 0.0 {
+                            // At rest in stack
+                            targetScale = 1.0
+                            targetLiftY = 0.0
+                            targetOpacity = 1.0
+                            targetZBoost = 0.0
+                            targetIsPeeling = false
+                        } else if localProgress <= 1.0 {
+                            // Popping forward and flying past camera
+                            let t = localProgress
+                            let easeT = t * t * (3.0 - 2.0 * t)
+                            targetScale = 1.0 + easeT * 1.6  // Expands up to 2.6x
+                            targetLiftY = easeT * 48.0
+                            if t <= 0.65 {
+                                targetOpacity = 1.0
+                            } else {
+                                targetOpacity = max(0.0, Double(1.0 - (t - 0.65) / 0.35))
+                            }
+                            targetZBoost = Double(1.0 - easeT * 0.4) * 500.0
+                            targetIsPeeling = true
+                        } else {
+                            // Completely flown past camera
+                            targetScale = 2.6
+                            targetLiftY = 48.0
+                            targetOpacity = 0.0
+                            targetZBoost = -200.0
+                            targetIsPeeling = false
+                        }
+                    } else {
+                        // Last background window: revealed and zooms heroic forward
+                        let lastStart = CGFloat(totalRecords - 2) * stepInterval
+                        let lastT = max(0.0, min(1.0, (scrubProgress - lastStart) / stepInterval))
+                        let easeLast = lastT * lastT * (3.0 - 2.0 * lastT)
+                        targetScale = 1.0 + easeLast * 0.85
+                        targetLiftY = easeLast * 22.0
+                        targetOpacity = 1.0
+                        targetZBoost = Double(easeLast) * 250.0
+                        targetIsPeeling = lastT > 0.05
+                    }
+                    
+                    // Smooth blend with centerZoneWeight for seamless snapback on exit
+                    let blendedScale = (1.0 - centerZoneWeight) * 1.0 + centerZoneWeight * targetScale
+                    let blendedLiftY = centerZoneWeight * targetLiftY
+                    let blendedOpacity = (1.0 - Double(centerZoneWeight)) * 1.0 + Double(centerZoneWeight) * targetOpacity
+                    let blendedZBoost = Double(centerZoneWeight) * targetZBoost
+                    
+                    map[record.id] = WindowPeelData(
+                        scale: blendedScale,
+                        liftY: blendedLiftY,
+                        opacity: blendedOpacity,
+                        zIndexBoost: blendedZBoost,
+                        isPeeling: targetIsPeeling && centerZoneWeight > 0.5
+                    )
+                }
+                
+                return map
+            }()
+
             ZStack(alignment: .topLeading) {
                 // Screens (Fixed on 3D plane, side-tilts with canvas)
                 ForEach(Array(getScreenFrames().enumerated()), id: \.offset) { _, frame in
@@ -489,11 +650,12 @@ struct LayoutPreviewView: View {
                         tint: tint,
                         is3D: is3D,
                         layerStep: dynamicLayerStep,
-                        layerDirectionX: signedOffset >= 0 ? -1.0 : 1.0,  // Fan right when tilted left, left when tilted right
+                        layerDirectionX: signedOuterOffset >= 0 ? -1.0 : 1.0,  // Fan right when tilted left, left when tilted right
                         scale: scale,
                         boundingBox: boundingBox,
                         offsetX: centerOffsetX,
                         offsetY: centerOffsetY,
+                        peelData: peelDataMap[record.id] ?? WindowPeelData(),
                         onSelectRecord: onSelectRecord
                     )
                 }
@@ -510,7 +672,7 @@ struct LayoutPreviewView: View {
                 perspective: 0.55
             )
             .scaleEffect(dynamicScale)
-            .offset(x: is3D ? (maxExplosion * 0.30 * signedOffset) : 0, y: is3D ? (maxExplosion * 0.05) : 0)
+            .offset(x: is3D ? (maxExplosion * 0.30 * signedOuterOffset) : 0, y: is3D ? (maxExplosion * 0.05 * outerDistance) : 0)
             .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.84), value: cursorHorizontalPosition)
         }
         .padding(16)
@@ -519,6 +681,13 @@ struct LayoutPreviewView: View {
             PreviewCursorTracker { position in
                 // Hand off to cursor only after intro animation completes
                 guard !isPlayingIntro else { return }
+                let prev = Double(cursorHorizontalPosition)
+                let inCenter = position >= 0.30 && position <= 0.70
+                let wasInCenter = prev >= 0.30 && prev <= 0.70
+                // Capture entry direction the moment the cursor crosses into the center zone
+                if inCenter && !wasInCenter {
+                    centerEnteredFromLeft = position < prev ? false : true
+                }
                 cursorHorizontalPosition = position
             }
         }
@@ -711,6 +880,14 @@ private final class PreviewCursorTrackingNSView: NSView {
 
 // MARK: - Individual Window 3D Tablet View (Native Precision Dwell & Thick Solid Border)
 
+private struct WindowPeelData: Equatable {
+    var scale: CGFloat = 1.0
+    var liftY: CGFloat = 0.0
+    var opacity: Double = 1.0
+    var zIndexBoost: Double = 0.0
+    var isPeeling: Bool = false
+}
+
 private struct WindowPreviewTileView: View {
     let record: WindowRecord
     let snapshot: LayoutSnapshot
@@ -725,6 +902,7 @@ private struct WindowPreviewTileView: View {
     let boundingBox: CGRect
     let offsetX: CGFloat
     let offsetY: CGFloat
+    let peelData: WindowPeelData
     let onSelectRecord: ((UUID) -> Void)?
     
     @State private var dwellTask: Task<Void, Never>? = nil
@@ -732,6 +910,7 @@ private struct WindowPreviewTileView: View {
     private var isSelected: Bool { record.id == selectedRecordID }
     private var isFocused: Bool { is3D && hoveredRecordID == record.id }
     private var hasHoverFocus: Bool { is3D && hoveredRecordID != nil }
+    private var isPeeling: Bool { is3D && peelData.isPeeling }
     
     private var rank: Int {
         let sorted = snapshot.records.sorted { a, b in
@@ -748,6 +927,7 @@ private struct WindowPreviewTileView: View {
     var body: some View {
         let layerOffset = is3D ? (CGFloat(rank) * layerStep) : 0
         let focusLift: CGFloat = isFocused ? 18.0 : 0
+        let peelLift: CGFloat = is3D ? peelData.liftY : 0.0
         
         let x = offsetX + (record.globalFrame.origin.x - boundingBox.origin.x) * scale
         let y = offsetY + (boundingBox.height - (record.globalFrame.origin.y - boundingBox.origin.y + record.globalFrame.height)) * scale
@@ -767,6 +947,7 @@ private struct WindowPreviewTileView: View {
         let fillOpacity: Double = {
             if isSelected { return 0.50 }
             if isFocused { return 0.45 }
+            if isPeeling { return min(0.60, 0.26 + Double(peelData.scale - 1.0) * 0.18) }
             if isDarkCard {
                 // Rich smoked glass: ~35-42% opacity for dark/black apps
                 if is3D { return hasHoverFocus ? 0.28 : 0.38 }
@@ -777,23 +958,29 @@ private struct WindowPreviewTileView: View {
         }()
         
         let strokeOpacity: Double = {
-            if isSelected || isFocused { return 1.0 }
+            if isSelected || isFocused || isPeeling { return 1.0 }
             if is3D { return hasHoverFocus ? 0.35 : 0.50 }
             return 0.60
         }()
         
+        let activeScale: CGFloat = {
+            let base: CGFloat = is3D ? (1.0 + Double(rank) * 0.01) : 1.0
+            let focusFactor: CGFloat = isSelected ? 1.06 : (isFocused ? 1.05 : 1.0)
+            return base * (is3D ? peelData.scale : 1.0) * focusFactor
+        }()
+        
         return ZStack {
-            // Visual Tablet (Lifts forward & expands on focus, without displacing hit-test bounds)
+            // Visual Tablet (Lifts forward & expands on focus/peel, without displacing hit-test bounds)
             ZStack {
                 // Single Unified Glass Tablet with Thick Solid Dual-Layer Border (NO offset duplicate!)
                 RoundedRectangle(cornerRadius: winCorner, style: .continuous)
                     .fill(cardFillColor.opacity(fillOpacity))
                     .overlay {
-                        // Outer solid rim (2.2pt)
+                        // Outer solid rim (2.2pt, expands on peel/focus)
                         RoundedRectangle(cornerRadius: winCorner, style: .continuous)
                             .stroke(
                                 baseTint.opacity(strokeOpacity),
-                                lineWidth: (isSelected || isFocused) ? 2.8 : 2.2
+                                lineWidth: (isSelected || isFocused) ? 2.8 : (isPeeling ? 3.0 : 2.2)
                             )
                     }
                     .overlay {
@@ -802,8 +989,8 @@ private struct WindowPreviewTileView: View {
                             .stroke(
                                 LinearGradient(
                                     colors: [
-                                        Color.white.opacity(isFocused ? 0.65 : (isDarkCard ? 0.38 : 0.25)),
-                                        Color.white.opacity(isFocused ? 0.25 : (isDarkCard ? 0.14 : 0.08))
+                                        Color.white.opacity(isFocused ? 0.65 : (isDarkCard ? 0.38 : (isPeeling ? 0.50 : 0.25))),
+                                        Color.white.opacity(isFocused ? 0.25 : (isDarkCard ? 0.14 : (isPeeling ? 0.20 : 0.08)))
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
@@ -813,16 +1000,28 @@ private struct WindowPreviewTileView: View {
                             .padding(1.5)
                     }
                     .shadow(
-                        color: isSelected ? baseTint.opacity(0.75) : (isFocused ? baseTint.opacity(0.60) : Color.black.opacity(is3D ? (0.20 + Double(rank) * 0.025) : 0.0)),
-                        radius: isSelected ? 14 : (isFocused ? 18 : (is3D ? (5 + CGFloat(rank) * 1.5) : 0)),
+                        color: isSelected ? baseTint.opacity(0.75) : (
+                            isFocused ? baseTint.opacity(0.60) : (
+                                isPeeling
+                                    ? baseTint.opacity(0.60 * peelData.opacity)
+                                    : Color.black.opacity(is3D ? (0.20 + Double(rank) * 0.025) : 0.0)
+                            )
+                        ),
+                        radius: isSelected ? 14 : (
+                            isFocused ? 18 : (
+                                isPeeling
+                                    ? (8.0 + (peelData.scale - 1.0) * 14.0)
+                                    : (is3D ? (5 + CGFloat(rank) * 1.5) : 0)
+                            )
+                        ),
                         x: is3D ? (CGFloat(rank) * 1.4) : 0,
-                        y: is3D ? (CGFloat(rank) * 2.2) : 0
+                        y: is3D ? (CGFloat(rank) * 2.2 - peelLift * 0.25) : 0
                     )
                 
                 // Special Place Handle: App Icon & Title Pill
                 let iconSize: CGFloat = {
                     if is3D {
-                        let maxTarget: CGFloat = isFocused ? 54.0 : 48.0
+                        let maxTarget: CGFloat = (isFocused || isPeeling) ? 54.0 : 48.0
                         return min(max(w * 0.75, 28), maxTarget)
                     }
                     return min(w * 0.7, 32)
@@ -832,18 +1031,18 @@ private struct WindowPreviewTileView: View {
                     AppIconView(bundleID: record.windowID.appBundleID)
                         .frame(width: iconSize, height: iconSize)
                         .shadow(color: .black.opacity(0.35), radius: 3)
-                        .opacity(isFocused || isSelected ? 1.0 : (hasHoverFocus ? 0.75 : 0.95))
+                        .opacity(isFocused || isSelected || isPeeling ? 1.0 : (hasHoverFocus ? 0.75 : 0.95))
                     
-                    if (w > 44 && h > 26) || isFocused || isSelected {
+                    if (w > 44 && h > 26) || isFocused || isSelected || isPeeling {
                         Text(record.windowID.appName?.prefix(14) ?? "")
-                            .font(.system(size: is3D ? max(9, 11 * scale) : max(8, 10 * scale), weight: (isFocused || isSelected) ? .bold : .semibold, design: .rounded))
+                            .font(.system(size: is3D ? max(9, 11 * scale) : max(8, 10 * scale), weight: (isFocused || isSelected || isPeeling) ? .bold : .semibold, design: .rounded))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2.5)
                             .background {
                                 if is3D {
                                     Capsule()
-                                        .fill(Color.black.opacity(isFocused ? 0.80 : 0.40))
+                                        .fill(Color.black.opacity((isFocused || isPeeling) ? 0.80 : 0.40))
                                 }
                             }
                             .shadow(color: .black.opacity(0.7), radius: 2)
@@ -851,15 +1050,17 @@ private struct WindowPreviewTileView: View {
                 }
             }
             .frame(width: w, height: h)
-            .scaleEffect(isSelected ? 1.06 : (isFocused ? 1.05 : (is3D ? (1.0 + Double(rank) * 0.01) : 1.0)))
+            .scaleEffect(activeScale)
             .offset(
                 x: (is3D && isFocused) ? (-focusLift * 0.9) : 0,
-                y: (is3D && isFocused) ? (-focusLift * 0.15) : 0
+                y: ((is3D && isFocused) ? (-focusLift * 0.15) : 0) - peelLift
             )
+            .opacity(is3D ? peelData.opacity : 1.0)
             .allowsHitTesting(false) // Hit-testing is strictly owned by the stationary base container!
         }
         .frame(width: w, height: h)
         .contentShape(Rectangle()) // Strictly anchored to base footprint
+        .allowsHitTesting(!is3D || peelData.opacity > 0.3)
         .onHover { hovering in
             guard is3D else { return }
             handleHover(hovering)
@@ -868,11 +1069,13 @@ private struct WindowPreviewTileView: View {
             onSelectRecord?(record.id)
         }
         .offset(x: baseX, y: baseY) // Stationary base position! Never shifts on hover!
-        .zIndex(Double(rank) + (isFocused ? 100 : 0) + (isSelected ? 50 : 0))
+        .zIndex(Double(rank) + (isFocused ? 100 : 0) + (isSelected ? 50 : 0) + peelData.zIndexBoost)
         .animation(.spring(response: 0.42, dampingFraction: 0.75), value: record.globalFrame)
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSelected)
         .animation(.spring(response: 0.45, dampingFraction: 0.72), value: is3D)
         .animation(.spring(response: 0.28, dampingFraction: 0.72), value: isFocused)
+        .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.82), value: peelData.scale)
+        .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.82), value: peelData.opacity)
         .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.84), value: layerStep)
     }
     
@@ -1318,83 +1521,42 @@ struct MenuWindowListView: View {
     }
 }
 
-// MARK: - Auto Save Hover Preview Card
+// MARK: - Auto Save Hover Preview
 
 struct AutoSavePreviewCardView: View {
     let snapshot: LayoutSnapshot
-    let capturedAt: Date
     let tint: Color
     let language: AppLanguage
     let onRestore: () -> Void
 
-    @State private var isButtonHovered: Bool = false
-
-    private var relativeAge: String {
-        let seconds = Date().timeIntervalSince(capturedAt)
-        if seconds < 60 { return "just now".localized(language) }
-        let f = DateComponentsFormatter()
-        f.unitsStyle = .full
-        f.maximumUnitCount = 1
-        f.allowedUnits = seconds < 3600 ? [.minute] : (seconds < 86_400 ? [.hour] : [.day])
-        let spelled = f.string(from: seconds) ?? ""
-        guard !spelled.isEmpty else { return "just now".localized(language) }
-        return String(format: "%@ ago".localized(language), spelled)
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Header
-            HStack(spacing: 6) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(tint)
-                Text(relativeAge)
-                    .font(.system(size: 12, weight: .bold))
-                Spacer()
-                Text(snapshot.records.count == 1 ? "1 window".localized(language) : "\(snapshot.records.count) \("windows".localized(language))")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+            // The restore action belongs in the title row so the preview has no
+            // second button competing with the thumbnail.
+            Button(action: onRestore) {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Restore this layout".localized(language))
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer(minLength: 8)
+                    Text(snapshot.records.count == 1 ? "1 window".localized(language) : "\(snapshot.records.count) \("windows".localized(language))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 4)
+            .buttonStyle(.plain)
+            .foregroundStyle(tint)
+            .accessibilityLabel(Text("Restore this layout".localized(language)))
 
             // Visual monitor & window layout
             LayoutPreviewView(snapshot: snapshot, selectedRecordID: nil, tint: tint)
-                .frame(width: 260, height: 155)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
-
-            // Restore action button / hint with subtle hover highlight
-            Button(action: onRestore) {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.counterclockwise")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("Restore this layout".localized(language))
-                        .font(.system(size: 11, weight: .medium))
-                    Spacer()
-                }
-                .padding(.vertical, 5)
-                .padding(.horizontal, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(tint.opacity(isButtonHovered ? 0.28 : 0.14))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(tint.opacity(isButtonHovered ? 0.45 : 0.0), lineWidth: 1)
-                )
-                .foregroundStyle(tint)
-            }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isButtonHovered = hovering
-                }
-            }
         }
         .padding(10)
-        .frame(width: 280, height: 230)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onRestore()
-        }
+        .frame(width: 280, height: 195)
     }
 }

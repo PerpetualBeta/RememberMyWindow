@@ -34,7 +34,7 @@ export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR"
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
-echo "  - Compiling Swift files..."
+echo "  - Compiling Swift files... (this may take a few seconds)"
 swiftc -parse-as-library \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -target "arm64-apple-macosx14.0" \

@@ -2773,7 +2773,8 @@ struct NotificationChannelDetailView: View {
                                         get: { manager.store.quietSingleRestoreWhenInPlace },
                                         set: { manager.store.quietSingleRestoreWhenInPlace = $0; manager.persist() }
                                     ) : nil,
-                                    isDisabled: true
+                                    isDisabled: true,
+                                    disabledReason: "Unavailable while Auto Layout is on"
                                 )
 
                                 eventCard(
@@ -2812,7 +2813,8 @@ struct NotificationChannelDetailView: View {
                                         get: { channel == .notch ? manager.store.notchSoundNameSnapshotUpdate : manager.store.systemSoundNameSnapshotUpdate },
                                         set: { v in channel == .notch ? (manager.store.notchSoundNameSnapshotUpdate = v) : (manager.store.systemSoundNameSnapshotUpdate = v); manager.persist() }
                                     ),
-                                    isDisabled: true
+                                    isDisabled: true,
+                                    disabledReason: "Unavailable while Auto Layout is on"
                                 )
 
                                 eventCard(
@@ -3079,7 +3081,8 @@ struct NotificationChannelDetailView: View {
         soundIsOn: Binding<Bool>,
         soundName: Binding<String>,
         quietBinding: Binding<Bool>? = nil,
-        isDisabled: Bool = false
+        isDisabled: Bool = false,
+        disabledReason: String? = nil
     ) -> some View {
         EventCardView(
             icon: icon,
@@ -3093,7 +3096,8 @@ struct NotificationChannelDetailView: View {
             soundIsOn: soundIsOn,
             soundName: soundName,
             quietBinding: quietBinding,
-            isDisabled: isDisabled
+            isDisabled: isDisabled,
+            disabledReason: disabledReason
         )
     }
 }
@@ -3113,6 +3117,7 @@ private struct EventCardView: View {
     @Binding var soundName: String
     var quietBinding: Binding<Bool>?
     let isDisabled: Bool
+    let disabledReason: String?
 
     @State private var isHovered = false
     @State private var hoverWorkItem: DispatchWorkItem?
@@ -3179,6 +3184,14 @@ private struct EventCardView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    if isDisabled, let disabledReason {
+                        Label(disabledReason.localized(appLanguage), systemImage: "info.circle")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel(Text(disabledReason.localized(appLanguage)))
+                    }
                 }
                 .animation(.easeInOut(duration: 0.2), value: isOn)
 

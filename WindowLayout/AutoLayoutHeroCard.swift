@@ -31,6 +31,14 @@ struct AutoLayoutHeroCard: View {
     var onRestoreEarlier: (UUID) -> Void = { _ in }
     var selectedCaptureID: UUID? = nil
     var onSelectEarlier: ((UUID) -> Void)? = nil
+    var isExpanded: Binding<Bool>? = nil
+    @State private var internalExpanded: Bool = true
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var expandedBinding: Binding<Bool> {
+        isExpanded ?? $internalExpanded
+    }
 
     /// How old a capture may be before the card stops looking confident.
     /// Restoring a days-old layout is worse than not restoring, so past this
@@ -45,70 +53,104 @@ struct AutoLayoutHeroCard: View {
     private var hasCapture: Bool { capturedAt != nil }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             header
+                .padding(.bottom, 10)
+
             if let capturedAt {
                 Text(relativeAge)
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
                     .foregroundStyle(isStale ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     .accessibilityLabel(Text(String(format: "Captured %@".localized(language),
                                                     age(of: capturedAt))))
+                    .padding(.bottom, 10)
 
                 HStack(spacing: 6) {
                     Image(systemName: "macwindow")
                     Text(windowCount == 1 ? "1 window".localized(language) : "\(windowCount) \("windows".localized(language))")
                     if let screenName {
                         Text("·").foregroundStyle(.tertiary)
-                        Text(screenName).lineLimit(1).truncationMode(.middle)
+                        Text(screenName)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
 
                 // A stale card mutes its heading and its age, so the button
                 // must come down with them. Leaving the loudest element at full
                 // strength undoes the point of muting the rest.
                 restoreButton
+                    .padding(.top, 10)
 
                 // Only the display mismatch gets a line, because that is a
                 // fact the card cannot show any other way. Age is carried by
                 // the muting alone: a stale card is meant to look stale, not to
                 // argue with the user about it.
                 if !matchesCurrentScreens {
-                    footnote("Captured on a different display setup.")
+                    footnote("Captured on a different display setup.", systemImage: "display.trianglebadge.exclamationmark")
+                        .padding(.top, 8)
                 }
 
                 if !earlier.isEmpty {
                     earlierCaptures
+                        .padding(.top, 10)
                 }
             } else {
-                footnote("Nothing captured yet. Move a window and it will appear here.")
+                footnote("Nothing captured yet. Move a window and it will appear here.", systemImage: "macwindow.badge.plus")
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var restoreButton: some View {
-        // Spelled "Restore" because the card it sits in is headed AUTO LAYOUT,
+        // Spelled "Restore" because the card it sits in is headed AUTO LAYOUT TIMELINE,
         // which is the only thing that separates it from the toolbar's Restore.
         // That reads correctly on screen and not at all through accessibility,
         // where both are a button described as "Restore", so the distinction
         // has to be stated there explicitly.
-        let label = Text("Restore".localized(language)).frame(maxWidth: .infinity)
-        if isStale {
-            Button(action: onRestore) { label }
-                .controlSize(.large).buttonStyle(.bordered)
-                .tint(tint).disabled(!matchesCurrentScreens)
-                .accessibilityLabel(Text("Restore the auto layout".localized(language)))
+        if #available(macOS 26.0, *) {
+            restoreButtonContent
+                .glassEffect(
+                    .regular.tint(tint.opacity(isStale ? 0.26 : 0.42)).interactive(),
+                    in: .rect(cornerRadius: 18)
+                )
         } else {
-            Button(action: onRestore) { label }
-                .controlSize(.large).buttonStyle(.borderedProminent)
-                .tint(tint).disabled(!matchesCurrentScreens)
-                .accessibilityLabel(Text("Restore the auto layout".localized(language)))
+            restoreButtonContent
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(tint.opacity(isStale ? 0.24 : 0.35), lineWidth: 1)
+                }
         }
+    }
+
+    private var restoreButtonContent: some View {
+        Button(action: onRestore) {
+            HStack(spacing: 7) {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text("Restore".localized(language))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.black)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!matchesCurrentScreens)
+        .opacity(matchesCurrentScreens ? 1 : 0.42)
+        .accessibilityLabel(Text("Restore the auto layout".localized(language)))
     }
 
     /// The rest of the ring.
@@ -118,7 +160,7 @@ struct AutoLayoutHeroCard: View {
     /// usually recorded it into the newest slot already. Keeping four more on
     /// disk with no way to reach them is not a safeguard.
     private var earlierCaptures: some View {
-        DisclosureGroup {
+        DisclosureGroup(isExpanded: expandedBinding) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(earlier) { capture in
                     EarlierRow(
@@ -140,9 +182,21 @@ struct AutoLayoutHeroCard: View {
             }
             .padding(.top, 3)
         } label: {
-            Text(earlier.count == 1 ? "1 earlier capture".localized(language) : "\(earlier.count) \("earlier captures".localized(language))")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text(earlier.count == 1 ? "1 earlier capture".localized(language) : "\(earlier.count) \("earlier captures".localized(language))")
+                    .font(.system(size: 12, weight: .semibold))
+
+                Spacer(minLength: 8)
+
+                Text("\(earlier.count)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.08), in: Capsule())
+            }
+            .foregroundStyle(.primary)
+            .contentShape(Rectangle())
         }
     }
 
@@ -160,27 +214,37 @@ struct AutoLayoutHeroCard: View {
 
         var body: some View {
             Button(action: action) {
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
                     Image(systemName: isApplicable
                           ? (isSelected ? "checkmark.circle.fill" : "arrow.uturn.backward")
                           : "display.trianglebadge.exclamationmark")
-                        .font(.system(size: 8, weight: .semibold))
-                        .frame(width: 10)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isApplicable ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary))
+                        .frame(width: 16)
+
                     Text(age)
+                        .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(isApplicable ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                     Spacer(minLength: 8)
+
                     Text(windowCount == 1 ? "1 window".localized(language) : "\(windowCount) \("windows".localized(language))")
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                .font(.system(size: 11))
-                .foregroundStyle(isApplicable ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary))
                 .padding(.horizontal, 6)
-                .padding(.vertical, 4)
+                .padding(.vertical, 3)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(isSelected ? tint.opacity(0.18) : (tint.opacity(isHovering && isApplicable ? 0.08 : 0)))
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isSelected ? tint.opacity(0.16) : (tint.opacity(isHovering && isApplicable ? 0.08 : 0)))
                 )
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(tint.opacity(0.30), lineWidth: 1)
+                    }
+                }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -191,31 +255,33 @@ struct AutoLayoutHeroCard: View {
                   : Text("Captured on a different display setup.".localized(language)))
             .accessibilityLabel(Text(String(format: "Capture from %@, %d windows".localized(language),
                                             age, windowCount)))
+            .accessibilityValue(Text(isSelected ? "Selected".localized(language) : ""))
         }
     }
 
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 12, weight: .semibold))
-            Text("AUTO LAYOUT".localized(language))
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 14, weight: .semibold))
+            Text("AUTO LAYOUT TIMELINE".localized(language))
+                .font(.system(size: 13, weight: .bold))
             Spacer()
             if hasCapture && !matchesCurrentScreens {
-                Text("OTHER DISPLAYS".localized(language))
-                    .font(.system(size: 10, weight: .bold))
-                    .padding(.horizontal, 6).padding(.vertical, 1.5)
-                    .background(Capsule().fill(Color.secondary.opacity(0.18)))
+                Label("OTHER DISPLAYS".localized(language), systemImage: "display.trianglebadge.exclamationmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
                     .foregroundStyle(.secondary)
             }
         }
         .foregroundStyle(!hasCapture || isStale ? AnyShapeStyle(.secondary) : AnyShapeStyle(tint))
     }
 
-    private func footnote(_ text: String) -> some View {
-        Text(text.localized(language))
+    private func footnote(_ text: String, systemImage: String) -> some View {
+        Label(text.localized(language), systemImage: systemImage)
             .font(.system(size: 11))
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
 

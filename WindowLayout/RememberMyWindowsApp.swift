@@ -805,18 +805,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     title = count == 1 ? String(format: format, ageStr) : String(format: format, ageStr, count)
                 }
 
-                let item = NSMenuItem(title: title, action: #selector(restoreAutoSaveEntry(_:)), keyEquivalent: "")
+                let item = NSMenuItem(
+                    title: title,
+                    action: #selector(restoreAutoSaveEntry(_:)),
+                    keyEquivalent: ""
+                )
                 item.representedObject = entry.id.uuidString
                 item.image = menuSymbolImage("clock.arrow.circlepath")
 
-                // Hover flyout submenu showing visual preview
+                // Hover flyout showing the visual preview and its title-row restore action.
                 let previewMenu = NSMenu()
                 let previewMenuItem = NSMenuItem()
                 let entryID = entry.id
 
                 let previewView = AutoSavePreviewCardView(
                     snapshot: snap,
-                    capturedAt: entry.capturedAt,
                     tint: tint,
                     language: appLanguage,
                     onRestore: {
@@ -827,7 +830,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
                 let hostingView = NSHostingView(rootView: previewView)
                 hostingView.wantsLayer = true
-                hostingView.frame = CGRect(x: 0, y: 0, width: 280, height: 230)
+                hostingView.frame = CGRect(x: 0, y: 0, width: 280, height: 195)
                 previewMenuItem.view = hostingView
                 previewMenu.addItem(previewMenuItem)
 

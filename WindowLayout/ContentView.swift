@@ -1,5 +1,6 @@
 //this file is the main view of the app
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var manager: WindowManager
@@ -38,17 +39,6 @@ struct ContentView: View {
             // Content: Selected Snapshot Detail
             LayoutsView()
                 .navigationSplitViewColumnWidth(min: 400, ideal: 500)
-                .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        liquidGlassHeaderSlider
-                    }
-                    ToolbarItem(placement: .principal) {
-                        actionButtonsToolbar
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        settingsToolbarButton
-                    }
-                }
                 .background {
                     if themeColor.isGalaxy {
                         ZStack {
@@ -85,6 +75,17 @@ struct ContentView: View {
                             .ignoresSafeArea()
                     }
                 }
+        }
+        .toolbar {
+            ToolbarItem(id: "mainSettings", placement: .navigation) {
+                settingsToolbarContent
+            }
+            ToolbarItem(placement: .navigation) {
+                liquidGlassHeaderSlider
+            }
+            ToolbarItem(placement: .principal) {
+                actionButtonsToolbar
+            }
         }
         .overlay(alignment: .top) {
             if !manager.hasAccessibilityPermission && !hidePermissionBanner {
@@ -125,6 +126,7 @@ struct ContentView: View {
             }
         }
         .background(WindowTransparencyAccessor())
+        .background(MainToolbarOrderFix())
     }
 
     // MARK: - Inspector Column
@@ -240,12 +242,13 @@ struct ContentView: View {
         }
     }
 
-    private var settingsToolbarButton: some View {
+    private var settingsToolbarContent: some View {
         Button {
             openSettings()
         } label: {
             Image(systemName: "gearshape")
         }
+        .buttonBorderShape(.circle)
         .help("Settings".localized(appLanguage))
     }
 
@@ -318,6 +321,58 @@ struct ContentView: View {
         }
         .padding(16)
         .transition(.move(edge: .top).combined(with: .opacity))
+    }
+}
+
+/// SwiftUI always places the NavigationSplitView sidebar toggle before custom
+/// navigation toolbar items on macOS 14. Move the settings item ahead of that
+/// native item once AppKit has created the toolbar.
+private struct MainToolbarOrderFix: NSViewRepresentable {
+    final class Coordinator {
+        weak var scheduledWindow: NSWindow?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { [weak view] in
+            guard let view else { return }
+            scheduleReorder(for: view, coordinator: context.coordinator)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        scheduleReorder(for: nsView, coordinator: context.coordinator)
+    }
+
+    private func scheduleReorder(for view: NSView, coordinator: Coordinator) {
+        guard let window = view.window,
+              coordinator.scheduledWindow !== window else { return }
+
+        coordinator.scheduledWindow = window
+        for delay in [0.0, 0.1, 0.3, 0.7] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                reorderSettingsItem(in: window)
+            }
+        }
+    }
+
+    private func reorderSettingsItem(in window: NSWindow) {
+        guard let toolbar = window.toolbar,
+              let settingsIndex = toolbar.items.firstIndex(where: {
+                  $0.itemIdentifier.rawValue.contains("mainSettings")
+              }),
+              let sidebarIndex = toolbar.items.firstIndex(where: {
+                  $0.label.localizedCaseInsensitiveContains("sidebar") ||
+                  $0.itemIdentifier.rawValue.localizedCaseInsensitiveContains("sidebar")
+              }),
+              settingsIndex > sidebarIndex else { return }
+
+        let settingsIdentifier = toolbar.items[settingsIndex].itemIdentifier
+        toolbar.removeItem(at: settingsIndex)
+        toolbar.insertItem(withItemIdentifier: settingsIdentifier, at: sidebarIndex)
     }
 }
 
