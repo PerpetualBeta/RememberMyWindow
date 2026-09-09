@@ -25,6 +25,10 @@ xcuserdata/
 *.dmg
 *.ipa
 *.dSYM/
+*.o
+
+# Root-level Swift compiler output
+/main
 
 # Archives and packages
 *.zip
