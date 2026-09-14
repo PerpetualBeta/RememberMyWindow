@@ -166,6 +166,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         return d.snapshot.records.filter { d.bundleIDs.contains($0.windowID.appBundleID) }.count
     }
 
+    /// Tracks recent full restore completions and their restored application bundle IDs
+    /// to guard against spurious single-app auto-restores immediately following full restore.
+    private var lastFullRestoreTime: Date = .distantPast
+    private var lastFullRestoreBundleIDs: Set<String> = []
+
     override private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent("RememberMyWindows", isDirectory: true)
@@ -839,6 +844,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     /// Brings the app with the given bundle ID above all other windows.
     func bringAppToFront(bundleID: String) {
+        lastFullRestoreBundleIDs.insert(bundleID)
         guard let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == bundleID || $0.localizedName == bundleID
         }) else {
@@ -1119,14 +1125,23 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
             
             if self.store.autoRestoreOnAppOpen,
-               let targetID = app.bundleIdentifier ?? app.localizedName,
-               let source = self.automaticRestoreSnapshot(forAppLaunch: targetID) {
-                self.restore(snapshot: source.snapshot,
-                             animated: self.store.restoreAnimated,
-                             specificAppBundleID: targetID,
-                             isAppLaunch: true,
-                             showNotification: true,
-                             skipCommandSend: source.isAuto)
+               let targetID = app.bundleIdentifier ?? app.localizedName {
+                if self.restoresInFlight > 0 || self.isHandlingDisplayChange {
+                    self.log("⏭️ Skipping auto-restore on launch for '\(targetID)' — layout restore is currently in progress", level: .verbose, type: .restore)
+                    return
+                }
+                if Date().timeIntervalSince(self.lastFullRestoreTime) < 3.0 && self.lastFullRestoreBundleIDs.contains(targetID) {
+                    self.log("⏭️ Skipping auto-restore on launch for '\(targetID)' — recently placed by full layout restore", level: .verbose, type: .restore)
+                    return
+                }
+                if let source = self.automaticRestoreSnapshot(forAppLaunch: targetID) {
+                    self.restore(snapshot: source.snapshot,
+                                 animated: self.store.restoreAnimated,
+                                 specificAppBundleID: targetID,
+                                 isAppLaunch: true,
+                                 showNotification: true,
+                                 skipCommandSend: source.isAuto)
+                }
             }
         }
     }
@@ -3704,8 +3719,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             // Pre-check if single-app windows were already in place before restoration
             let wasAlreadyInPlace: Bool = {
                 guard specificAppBundleID != nil, !records.isEmpty else { return false }
+                var claimedLiveIDs = Set<UUID>()
                 for record in records {
-                    let appLive = liveRecords.filter { $0.windowID.appBundleID == record.windowID.appBundleID }
+                    let appLive = liveRecords.filter {
+                        $0.windowID.appBundleID == record.windowID.appBundleID && !claimedLiveIDs.contains($0.id)
+                    }
                     guard !appLive.isEmpty else { return false }
                     
                     let matchingLR: WindowRecord?
@@ -3723,6 +3741,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     }
                     
                     guard let lr = matchingLR else { return false }
+                    claimedLiveIDs.insert(lr.id)
                     
                     let wantsFS = record.isNativeFullScreen || record.isFullScreenMode
                     let liveFS = lr.isNativeFullScreen || lr.isFullScreenMode
@@ -3975,6 +3994,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         completion()
                     }
                 }
+
+                var restoredBundleIDs = Set(records.map { $0.windowID.appBundleID })
+                if let fg = snapshot.foregroundBundleID {
+                    restoredBundleIDs.insert(fg)
+                }
+                self.lastFullRestoreBundleIDs = restoredBundleIDs
+                self.lastFullRestoreTime = Date()
 
                 // ---------- Per-App WindowServer Verification (Background) ----------
                 // The live layout is built from CGWindowList, so it is the source of truth for the

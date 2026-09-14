@@ -164,16 +164,7 @@ struct ContentView: View {
                             snapshot: snapshot,
                             selectedRecordID: manager.selectedRecordID,
                             tint: themeColor.color(seed: 2),
-                            enable3DHover: true,
-                            onSelectRecord: { recordID in
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    if manager.selectedRecordID == recordID {
-                                        manager.selectedRecordID = nil
-                                    } else {
-                                        manager.selectedRecordID = recordID
-                                    }
-                                }
-                            }
+                            enable3DHover: true
                         )
                             .frame(height: 160)
                             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snapshot.previewRecords.count)

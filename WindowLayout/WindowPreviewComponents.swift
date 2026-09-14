@@ -550,7 +550,6 @@ struct LayoutPreviewView: View {
     let selectedRecordID: UUID?
     let tint: Color
     var enable3DHover: Bool = false
-    var onSelectRecord: ((UUID) -> Void)? = nil
     
     @Environment(\.controlActiveState) private var controlActiveState
     
@@ -723,9 +722,6 @@ struct LayoutPreviewView: View {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
                 hoveredRecordID = hovering ? record.id : nil
             }
-        }
-        .onTapGesture {
-            onSelectRecord?(record.id)
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.7), value: record.globalFrame)
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isHighlighted)
@@ -937,8 +933,7 @@ struct LayoutPreviewView: View {
                         boundingBox: boundingBox,
                         offsetX: centerOffsetX,
                         offsetY: centerOffsetY,
-                        peelData: peelDataMap[record.id] ?? WindowPeelData(),
-                        onSelectRecord: onSelectRecord
+                        peelData: peelDataMap[record.id] ?? WindowPeelData()
                     )
                 }
             }
@@ -1222,7 +1217,6 @@ private struct WindowPreviewTileView: View {
     let offsetX: CGFloat
     let offsetY: CGFloat
     let peelData: WindowPeelData
-    let onSelectRecord: ((UUID) -> Void)?
     
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var dwellTask: Task<Void, Never>? = nil
@@ -1418,9 +1412,6 @@ private struct WindowPreviewTileView: View {
             if newState != .key {
                 dwellTask?.cancel()
             }
-        }
-        .onTapGesture {
-            onSelectRecord?(record.id)
         }
         .offset(x: baseX, y: baseY) // Stationary base position! Never shifts on hover!
         .zIndex(Double(rank) + (isFocused ? 100 : 0) + (isSelected ? 50 : 0) + peelData.zIndexBoost)

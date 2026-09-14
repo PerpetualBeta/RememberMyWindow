@@ -1018,12 +1018,7 @@ struct AutoLayoutCenterView: View {
                             snapshot: snap,
                             selectedRecordID: manager.selectedRecordID,
                             tint: themeColor.color(seed: 0),
-                            enable3DHover: true,
-                            onSelectRecord: { recID in
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                    manager.selectedRecordID = (manager.selectedRecordID == recID ? nil : recID)
-                                }
-                            }
+                            enable3DHover: true
                         )
                         .frame(maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
                         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snap.previewRecords.count)
