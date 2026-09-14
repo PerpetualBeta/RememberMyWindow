@@ -2,6 +2,20 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v14.6] — 2026-09-14
+
+### 🛠️ "Polish & Reliability"
+
+#### 🐛 Bug Fixes
+- **No More Duplicate Apps**: Saved Sessions and the menu-bar app list now remove duplicate app entries without altering the underlying saved window records.
+- **Safer Automatic Restores**: Auto Layout and Saved Sessions no longer send an unintended frontmost-app command while restoring windows.
+- **Smoother 3D Peeling**: Corrected the center peel animation timing and final-window sequencing so the preview transitions feel continuous and predictable.
+- **Clearer Disabled Settings**: Disabled notification event cards and settings sections now use consistent rounded overlays and styling, making their inactive state easier to understand.
+
+#### ✨ Interface Polish
+- Added interactive hover, selection, and empty-state animations to SF Symbols throughout the main window.
+- Refined preview cards with larger app icons, clearer title-bar details, inline app labels, and larger auto-save previews.
+
 ## [v14.5] — 2026-09-08
 
 ### 🔮 "No Pane, All Gain: Polish Pass Deluxe"

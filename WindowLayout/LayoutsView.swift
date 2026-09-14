@@ -71,17 +71,6 @@ struct SnapshotListView: View {
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @State private var hoveredKey: String? = nil
-    /// Whether the user has opened Saved Sessions. Stored, so reopening sticks.
-    ///
-    /// Read through `sessionsExpanded`, never directly: the section is only
-    /// demoted while Auto is carrying the everyday case. With Auto off, saved
-    /// sessions are the only thing in this window, and collapsing them by
-    /// default would hide the app's entire content behind a disclosure triangle.
-    @AppStorage("savedSessionsOpened") private var savedSessionsOpened: Bool = false
-
-    private var sessionsExpanded: Bool {
-        savedSessionsOpened || !manager.store.autoSaveEnabled
-    }
 
     var liveSnapshot: (key: String, snapshot: LayoutSnapshot)? {
         guard !manager.liveRecords.isEmpty else { return nil }
@@ -161,71 +150,50 @@ struct SnapshotListView: View {
                         .padding(.horizontal, 8)
                     }
 
-                    // SAVED SESSIONS SECTION — demoted, and collapsible, once the
-                    // Auto layout is doing the everyday work.
+                    // SAVED SESSIONS SECTION
                     VStack(alignment: .leading, spacing: 8) {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.18)) { savedSessionsOpened = !sessionsExpanded }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "chevron.right")
-                                    .mainWindowSymbolAnimation(.wiggle, capturesClicks: false)
-                                    .font(.system(size: 9, weight: .bold))
-                                    .rotationEffect(.degrees(sessionsExpanded ? 90 : 0))
-                                Text("SAVED SESSIONS".localized(appLanguage))
-                                    .font(.system(size: 11, weight: .bold))
-                                if !sessionsExpanded, !savedSnapshots.isEmpty {
-                                    Text("\(savedSnapshots.count)")
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundStyle(.tertiary)
-                                }
-                                Spacer()
-                            }
+                        Text("SAVED SESSIONS".localized(appLanguage))
+                            .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.secondary)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.leading, 8)
-                        .mainWindowSymbolHoverRegion()
+                            .padding(.leading, 8)
+                            .accessibilityAddTraits(.isHeader)
 
-                        if sessionsExpanded {
-                            if savedSnapshots.isEmpty {
-                                Text("No saved sessions".localized(appLanguage))
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.leading, 8)
-                            } else {
-                                ForEach(savedSnapshots, id: \.key) { item in
-                                    snapshotRow(item.snapshot, key: item.key, isLive: false)
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 10)
-                                        .liquidGlass(
-                                            isSelected: manager.selectedSnapshotKey == item.key,
-                                            prominent: false,
-                                            tint: themeColor.color(seed: 1),
-                                            isHovered: hoveredKey == item.key
-                                        )
-                                        .contentShape(Rectangle())
-                                        .mainWindowSymbolHoverRegion()
-                                        .onHover { isHovered in
-                                            if isHovered { hoveredKey = item.key }
-                                            else if hoveredKey == item.key { hoveredKey = nil }
+                        if savedSnapshots.isEmpty {
+                            Text("No saved sessions".localized(appLanguage))
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .padding(.leading, 8)
+                        } else {
+                            ForEach(savedSnapshots, id: \.key) { item in
+                                snapshotRow(item.snapshot, key: item.key, isLive: false)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .liquidGlass(
+                                        isSelected: manager.selectedSnapshotKey == item.key,
+                                        prominent: false,
+                                        tint: themeColor.color(seed: 1),
+                                        isHovered: hoveredKey == item.key
+                                    )
+                                    .contentShape(Rectangle())
+                                    .mainWindowSymbolHoverRegion()
+                                    .onHover { isHovered in
+                                        if isHovered { hoveredKey = item.key }
+                                        else if hoveredKey == item.key { hoveredKey = nil }
+                                    }
+                                    .onTapGesture {
+                                        manager.selectedSnapshotKey = item.key
+                                        manager.selectedAppBundleID = nil
+                                    }
+                                    .contextMenu {
+                                        Button("Restore") {
+                                            manager.restore(key: item.key)
                                         }
-                                        .onTapGesture {
-                                            manager.selectedSnapshotKey = item.key
-                                            manager.selectedAppBundleID = nil
+                                        Divider()
+                                        Button("Delete", role: .destructive) {
+                                            manager.deleteSnapshot(key: item.key)
+                                            if manager.selectedSnapshotKey == item.key { manager.selectedSnapshotKey = nil }
                                         }
-                                        .contextMenu {
-                                            Button("Restore") {
-                                                manager.restore(key: item.key)
-                                            }
-                                            Divider()
-                                            Button("Delete", role: .destructive) {
-                                                manager.deleteSnapshot(key: item.key)
-                                                if manager.selectedSnapshotKey == item.key { manager.selectedSnapshotKey = nil }
-                                            }
-                                        }
-                                }
+                                    }
                             }
                         }
                     }
