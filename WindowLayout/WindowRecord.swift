@@ -666,5 +666,18 @@ extension Array where Element == WindowRecord {
             return false
         }
     }
+
+    /// Window records deduplicated by application bundle identifier, preserving the first (frontmost/primary) window record for each application.
+    /// Non-destructive display helper for UI list presentations.
+    var deduplicatedByApp: [WindowRecord] {
+        var seen = Set<String>()
+        return filter { rec in
+            let bid = rec.windowID.appBundleID
+            guard !bid.isEmpty else { return true }
+            if seen.contains(bid) { return false }
+            seen.insert(bid)
+            return true
+        }
+    }
 }
 

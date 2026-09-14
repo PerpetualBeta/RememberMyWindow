@@ -896,12 +896,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     func removeAppFromSnapshot(key: String, windowID: WindowID) {
         if var snap = store.snapshots[key] {
-            snap.records.removeAll { $0.windowID == windowID }
-            // Clean up excluded app set if this was the last window of that app in the snapshot
-            let hasRemaining = snap.records.contains { $0.windowID.appBundleID == windowID.appBundleID }
-            if !hasRemaining {
-                snap.commandExcludedBundleIDs.remove(windowID.appBundleID)
-            }
+            snap.records.removeAll { $0.windowID.appBundleID == windowID.appBundleID }
+            snap.commandExcludedBundleIDs.remove(windowID.appBundleID)
             store.snapshots[key] = snap
             persist()
             log("Removed '\(windowID.displayName)' from session: \(snap.name)", level: .moderate, type: .system)

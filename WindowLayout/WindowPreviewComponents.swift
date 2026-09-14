@@ -1693,27 +1693,17 @@ struct MenuWindowListView: View {
     private var activeBadgeBgOpacity: Double { colorScheme == .dark ? 0.15 : 0.22 }
 
     var body: some View {
-        // Track which bundle IDs have already received the Active badge so that
-        // only the first (topmost) window row for the frontmost app gets it.
-        var seenActiveBundleIDs: Set<String> = []
-
-        return VStack(spacing: 2) {
+        VStack(spacing: 2) {
             if let customList = specificRecords {
-                ForEach(customList) { record in
-                    let isFirstOfApp: Bool = {
-                        let bid = record.windowID.appBundleID
-                        if seenActiveBundleIDs.contains(bid) { return false }
-                        seenActiveBundleIDs.insert(bid)
-                        return true
-                    }()
-                    appRow(record, isFirstOfApp: isFirstOfApp)
+                ForEach(customList.deduplicatedByApp) { record in
+                    appRow(record, isFirstOfApp: true)
                         .scaleEffect(isAppeared ? 1.0 : 0.96)
                         .offset(y: isAppeared ? 0 : 4)
                         .opacity(isAppeared ? 1.0 : 0.0)
                 }
             } else {
                 let frontmostBundleID = activeBundleID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                let baseRecords = snapshot.previewRecords
+                let baseRecords = snapshot.previewRecords.deduplicatedByApp
                 let activeRecords = baseRecords.filter { $0.windowID.appBundleID == frontmostBundleID }
                 let otherRecords = limitToActiveApp ? [] : baseRecords.filter { $0.windowID.appBundleID != frontmostBundleID }
                 let displayedActiveRecords = (!activeRecords.isEmpty || !limitToActiveApp) ? activeRecords : [baseRecords.first].compactMap { $0 }

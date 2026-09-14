@@ -402,7 +402,7 @@ struct SnapshotDetailView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(snapshot.records.filter { !$0.windowID.appBundleID.isEmpty }) { record in
+                        ForEach(snapshot.records.deduplicatedByApp.filter { !$0.windowID.appBundleID.isEmpty }) { record in
                             let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
                             let isCurrentApp = record.windowID.appBundleID == manager.selectedAppBundleID
                             windowRow(record, isForeground: isForeground, isCurrentApp: isCurrentApp)
@@ -455,7 +455,7 @@ struct SnapshotDetailView: View {
 
     private func scrollToCurrentApp(using proxy: ScrollViewProxy) {
         guard let currentAppID = manager.selectedAppBundleID,
-              let record = snapshot.records.first(where: { $0.windowID.appBundleID == currentAppID }) else {
+              let record = snapshot.records.deduplicatedByApp.first(where: { $0.windowID.appBundleID == currentAppID }) else {
             return
         }
         withAnimation(.smooth) {

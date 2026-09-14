@@ -676,10 +676,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             
             let groupSubmenu = WindowManager.shared.store.groupOtherAppsInSubmenu
-            let frontmostRecords = snap.records.filter { $0.windowID.appBundleID == activeAppID }
-            let activeRecords = groupSubmenu ? frontmostRecords : snap.records
+            let uniqueRecords = snap.records.deduplicatedByApp
+            let frontmostRecords = uniqueRecords.filter { $0.windowID.appBundleID == activeAppID }
+            let activeRecords = groupSubmenu ? frontmostRecords : uniqueRecords
             let otherRecords = groupSubmenu
-                ? snap.records.filter { rec in !activeRecords.contains { $0.id == rec.id } }
+                ? uniqueRecords.filter { rec in !activeRecords.contains { $0.id == rec.id } }
                 : []
 
             if !activeRecords.isEmpty {
@@ -693,7 +694,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let size = hostingView.fittingSize
                 let viewHeight = size.height > 0 ? size.height : CGFloat(displayRecords.count * 36 + 12)
                 hostingView.frame = CGRect(x: 0, y: 0, width: 280, height: viewHeight)
-                hostingView.autoresizingMask = .width
+                hostingView.autoresizingMask = [.width]
                 listViewItem.view = hostingView
                 menu.addItem(listViewItem)
             }
@@ -713,7 +714,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let subSize = subHostingView.fittingSize
                 let subViewHeight = subSize.height > 0 ? subSize.height : CGFloat(otherRecords.count * 36 + 12)
                 subHostingView.frame = CGRect(x: 0, y: 0, width: 280, height: subViewHeight)
-                subHostingView.autoresizingMask = .width
+                subHostingView.autoresizingMask = [.width]
                 submenuItem.view = subHostingView
                 otherAppsMenu.addItem(submenuItem)
 
