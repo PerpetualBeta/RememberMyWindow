@@ -33,6 +33,7 @@ struct AutoLayoutHeroCard: View {
     var onSelectEarlier: ((UUID) -> Void)? = nil
     var isExpanded: Binding<Bool>? = nil
     @State private var internalExpanded: Bool = true
+    @State private var isHeaderHovered: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -164,45 +165,90 @@ struct AutoLayoutHeroCard: View {
     /// usually recorded it into the newest slot already. Keeping four more on
     /// disk with no way to reach them is not a safeguard.
     private var earlierCaptures: some View {
-        DisclosureGroup(isExpanded: expandedBinding) {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(earlier) { capture in
-                    EarlierRow(
-                        isSelected: selectedCaptureID == capture.id,
-                        age: age(of: capture.capturedAt),
-                        windowCount: capture.windowCount,
-                        isApplicable: capture.matchesCurrentScreens,
-                        tint: tint,
-                        language: language,
-                        action: {
-                            if let onSelect = onSelectEarlier {
-                                onSelect(capture.id)
-                            } else {
-                                onRestoreEarlier(capture.id)
-                            }
-                        }
-                    )
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    expandedBinding.wrappedValue.toggle()
                 }
-            }
-            .padding(.top, 3)
-        } label: {
-            HStack(spacing: 8) {
-                Text(earlier.count == 1 ? "1 earlier capture".localized(language) : "\(earlier.count) \("earlier captures".localized(language))")
-                    .font(.system(size: 12, weight: .semibold))
+            } label: {
+                HStack(spacing: 8) {
+                    Text(earlier.count == 1 ? "1 earlier capture".localized(language) : "\(earlier.count) \("earlier captures".localized(language))")
+                        .font(.system(size: 12, weight: .semibold))
 
-                Spacer(minLength: 8)
+                    Text("\(earlier.count)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.08), in: Capsule())
 
-                Text("\(earlier.count)")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.08), in: Capsule())
+                    Spacer(minLength: 8)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(expandedBinding.wrappedValue ? 90 : 0))
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .foregroundStyle(.primary)
-            .contentShape(Rectangle())
-            .mainWindowSymbolHoverRegion()
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                isHeaderHovered = hovering
+            }
+            .background(
+                RoundedRectangle(cornerRadius: expandedBinding.wrappedValue ? 10 : 12, style: .continuous)
+                    .fill(isHeaderHovered ? Color.primary.opacity(colorScheme == .dark ? 0.06 : 0.04) : Color.clear)
+            )
+
+            if expandedBinding.wrappedValue {
+                Divider()
+                    .opacity(colorScheme == .dark ? 0.35 : 0.20)
+                    .padding(.horizontal, 4)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(earlier) { capture in
+                        EarlierRow(
+                            isSelected: selectedCaptureID == capture.id,
+                            age: age(of: capture.capturedAt),
+                            windowCount: capture.windowCount,
+                            isApplicable: capture.matchesCurrentScreens,
+                            tint: tint,
+                            language: language,
+                            action: {
+                                if let onSelect = onSelectEarlier {
+                                    onSelect(capture.id)
+                                } else {
+                                    onRestoreEarlier(capture.id)
+                                }
+                            }
+                        )
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.10), lineWidth: 1)
+        }
+        .shadow(
+            color: Color.black.opacity(colorScheme == .dark ? 0.25 : 0.06),
+            radius: 4,
+            x: 0,
+            y: 2
+        )
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: expandedBinding.wrappedValue)
     }
 
     /// A row that displays or restores one earlier capture.

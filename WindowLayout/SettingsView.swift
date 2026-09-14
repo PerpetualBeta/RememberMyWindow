@@ -581,26 +581,27 @@ struct SettingsView: View {
 
                     Divider().padding(.horizontal, 12)
 
-                    SettingsToggle(
-                        title: "Restore focused app on left click",
-                        subtitle: "Left-clicking the menu bar icon restores the window position of the frontmost app",
-                        icon: "cursorarrow.click",
-                        isOn: $restoreFocusedAppOnLeftClick
-                    )
-                    .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
+                    VStack(spacing: 0) {
+                        SettingsToggle(
+                            title: "Restore focused app on left click",
+                            subtitle: "Left-clicking the menu bar icon restores the window position of the frontmost app",
+                            icon: "cursorarrow.click",
+                            isOn: $restoreFocusedAppOnLeftClick
+                        )
 
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.turn.down.right")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
-                        Text("When either trigger fires, **Trigger Command on Single Restore** in Experimental also applies.".localized(appLanguage))
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.turn.down.right")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                            Text("When either trigger fires, **Trigger Command on Single Restore** in Experimental also applies.".localized(appLanguage))
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
                 }
             }
@@ -621,7 +622,6 @@ struct SettingsView: View {
                             }
                         )
                     )
-                    .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
 
                     if manager.store.quickKeyRestoreEnabled {
                         Divider().padding(.horizontal, 12)
@@ -658,7 +658,6 @@ struct SettingsView: View {
                             .frame(width: 175)
                         }
                         .padding(12)
-                        .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
 
                         if manager.store.quickKeyTrigger == .fnLongPress || manager.store.quickKeyTrigger == .both {
                             Divider().padding(.horizontal, 12)
@@ -676,7 +675,6 @@ struct SettingsView: View {
                                 step: 0.1,
                                 unit: "s"
                             )
-                            .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
                         }
 
                         Divider().padding(.horizontal, 12)
@@ -709,7 +707,6 @@ struct SettingsView: View {
                             .frame(width: 140)
                         }
                         .padding(12)
-                        .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
 
                         HStack(spacing: 8) {
                             Image(systemName: "info.circle")
@@ -727,9 +724,9 @@ struct SettingsView: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
                     }
                 }
+                .autoLayoutDisabled(isAutoLayoutActive, appLanguage: appLanguage)
             }
         }
     }
@@ -750,29 +747,26 @@ struct SettingsView: View {
 
                     Divider().padding(.horizontal, 12)
 
-                    SettingsShortcutRecorder(
-                        title: "Desktop Toggle shortcut",
-                        subtitle: "Press any combination with at least one modifier",
-                        icon: "command",
-                        hotkey: $desktopToggleManager.hotkey,
-                        onBeginRecording: { desktopToggleManager.suspendForRecording() },
-                        onEndRecording: { desktopToggleManager.resumeAfterRecording() }
-                    )
-                    .settingsDisabled(
-                        !desktopToggleManager.isEnabled,
-                        reason: "Enable Desktop Toggle first",
-                        appLanguage: appLanguage,
-                        showsReason: true
-                    )
+                    VStack(spacing: 0) {
+                        SettingsShortcutRecorder(
+                            title: "Desktop Toggle shortcut",
+                            subtitle: "Press any combination with at least one modifier",
+                            icon: "command",
+                            hotkey: $desktopToggleManager.hotkey,
+                            onBeginRecording: { desktopToggleManager.suspendForRecording() },
+                            onEndRecording: { desktopToggleManager.resumeAfterRecording() }
+                        )
 
-                    Divider().padding(.horizontal, 12)
+                        Divider().padding(.horizontal, 12)
 
-                    SettingsToggle(
-                        title: "Restore layout on unhide",
-                        subtitle: "Automatically run a full layout restore when the windows come back",
-                        icon: "arrow.uturn.backward",
-                        isOn: $desktopToggleManager.restoreOnUnhide
-                    )
+                        SettingsToggle(
+                            title: "Restore layout on unhide",
+                            subtitle: "Automatically run a full layout restore when the windows come back",
+                            icon: "arrow.uturn.backward",
+                            isOn: $desktopToggleManager.restoreOnUnhide
+                        )
+                        .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
+                    }
                     .settingsDisabled(
                         !desktopToggleManager.isEnabled,
                         reason: "Enable Desktop Toggle first",
@@ -838,7 +832,6 @@ struct SettingsView: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 12)
                     .padding(.bottom, 6)
-                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage, showsReason: false)
 
                     Divider().padding(.horizontal, 12)
 
@@ -851,7 +844,6 @@ struct SettingsView: View {
                             set: { manager.store.refreshFrontmostOnFullRestore = $0; manager.persist() }
                         )
                     )
-                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                     Divider().padding(.horizontal, 12)
 
@@ -864,7 +856,6 @@ struct SettingsView: View {
                             set: { manager.store.refreshFrontmostOnSingleRestore = $0; manager.persist() }
                         )
                     )
-                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                     if manager.store.refreshFrontmostOnSingleRestore {
                         Divider().padding(.horizontal, 12)
@@ -881,7 +872,6 @@ struct SettingsView: View {
                             step: 0.5,
                             unit: "s"
                         )
-                        .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                         if manager.store.singleAppCommandDelay < 4.3 {
                             HStack(spacing: 8) {
@@ -896,7 +886,6 @@ struct SettingsView: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage, showsReason: false)
                         }
 
                         Divider().padding(.horizontal, 12)
@@ -913,10 +902,8 @@ struct SettingsView: View {
                             step: 0.5,
                             unit: "s"
                         )
-                        .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                         CustomWebAppsManagementView(manager: manager, appLanguage: appLanguage)
-                            .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
                     }
 
                     Divider().padding(.horizontal, 12)
@@ -930,7 +917,6 @@ struct SettingsView: View {
                             set: { manager.store.refreshFrontmostOnlyOnExternalDisplay = $0; manager.persist() }
                         )
                     )
-                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                     Divider().padding(.horizontal, 12)
 
@@ -943,7 +929,6 @@ struct SettingsView: View {
                             set: { manager.store.showCommandOverlayAnimation = $0; manager.persist() }
                         )
                     )
-                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Label("How it works".localized(appLanguage), systemImage: "info.circle")
@@ -959,8 +944,8 @@ struct SettingsView: View {
                     .background(Color.blue.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage, showsReason: false)
                 }
+                .autoLayoutDisabled(manager.store.autoSaveEnabled, appLanguage: appLanguage)
             }
         }
     }
@@ -1367,9 +1352,13 @@ private struct DisabledSettingModifier: ViewModifier {
                     .accessibilityElement(children: .combine)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             if isDisabled {
-                Color.black.opacity(0.42)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.black.opacity(0.42))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
             }
         }
     }

@@ -394,26 +394,29 @@ struct LiquidGlassModifier: ViewModifier {
             : Color.black.opacity(colorScheme == .dark ? 0.30 : 0.06)
 
         if style == .card {
+            let cardShape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            let clippedContent = content.clipShape(cardShape)
+
             if isGalaxy {
                 // Dramatic Deep Obsidian Galaxy Card
-                content
+                clippedContent
                     .background {
                         ZStack {
-                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            cardShape
                                 .fill(Color(red: 0.04, green: 0.07, blue: 0.16).opacity(0.82))
 
-                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            cardShape
                                 .fill(.ultraThinMaterial)
 
                             if isHovered {
-                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                cardShape
                                     .fill(Color(red: 0.18, green: 0.38, blue: 0.85).opacity(0.16))
                             }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                        .clipShape(cardShape)
                     }
                     .overlay {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        cardShape
                             .stroke(cardBorderColor, lineWidth: 1.0)
                     }
                     .shadow(
@@ -423,26 +426,26 @@ struct LiquidGlassModifier: ViewModifier {
                         y: 4
                     )
             } else if isDefault {
-                content
+                clippedContent
                     .background {
                         ZStack {
-                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            cardShape
                                 .fill(.ultraThinMaterial)
 
                             if colorScheme == .light {
-                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                cardShape
                                     .fill(Color.white.opacity(0.25))
                             }
 
                             if isHovered {
-                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                cardShape
                                     .fill(Color.white.opacity(colorScheme == .dark ? 0.05 : 0.08))
                             }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                        .clipShape(cardShape)
                     }
                     .overlay {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        cardShape
                             .stroke(cardBorderColor, lineWidth: 1.0)
                     }
                     .shadow(
@@ -453,24 +456,24 @@ struct LiquidGlassModifier: ViewModifier {
                     )
             } else {
                 let accent = tint ?? themeColor.color ?? .accentColor
-                content
+                clippedContent
                     .background {
                         ZStack {
-                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            cardShape
                                 .fill(.ultraThinMaterial)
 
                             if isSelected {
-                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                cardShape
                                     .fill(accent.opacity(0.15))
                             } else if isHovered {
-                                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                cardShape
                                     .fill(Color.primary.opacity(0.05))
                             }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                        .clipShape(cardShape)
                     }
                     .overlay {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        cardShape
                             .stroke(cardBorderColor, lineWidth: 1.0)
                     }
                     .shadow(

@@ -914,6 +914,22 @@ struct AutoLayoutCenterView: View {
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @State private var isEarlierExpanded: Bool = true
 
+    private var activeEntry: AutoSaveEntry? {
+        if let id = manager.selectedAutoSaveEntryID,
+           let found = (manager.autoSaveStore?.visibleEntries ?? (rememberedEntries + entries)).first(where: { $0.id == id }) {
+            return found
+        }
+        return currentEntry
+    }
+
+    private var activeScreenKey: String {
+        activeEntry?.screenKey ?? manager.currentFingerprint.key
+    }
+
+    private var displayEntries: [AutoSaveEntry] {
+        manager.autoSaveStore?.entries(forScreenKey: activeScreenKey) ?? []
+    }
+
     private var entries: [AutoSaveEntry] {
         // Restorable here, not merely recorded somewhere. See
         // `AutoSaveStore.entries(forScreenKey:)`.
@@ -927,14 +943,6 @@ struct AutoLayoutCenterView: View {
     private var currentEntry: AutoSaveEntry? {
         manager.autoSaveStore?.entry(forScreenKey: manager.currentFingerprint.key)
             ?? entries.first
-    }
-
-    private var activeEntry: AutoSaveEntry? {
-        if let id = manager.selectedAutoSaveEntryID,
-           let found = (rememberedEntries + entries).first(where: { $0.id == id }) {
-            return found
-        }
-        return currentEntry
     }
 
     private var activeSnapshot: LayoutSnapshot? {
@@ -959,10 +967,10 @@ struct AutoLayoutCenterView: View {
         GeometryReader { outerGeo in
             VStack(alignment: .leading, spacing: 16) {
                 // Return to latest banner if an earlier capture is selected
-                if let selectedID = manager.selectedAutoSaveEntryID,
-                   selectedID != currentEntry?.id,
-                   let entry = activeEntry {
-                    earlierCaptureBanner(entry: entry)
+                let isViewingEarlier = (manager.selectedAutoSaveEntryID != nil) &&
+                                       (manager.selectedAutoSaveEntryID != manager.autoSaveStore?.entry(forScreenKey: activeScreenKey)?.id)
+                if isViewingEarlier, let entry = activeEntry {
+                    earlierCaptureBanner(entry: entry, activeScreenKey: activeScreenKey)
                 }
 
                 // 1. Auto Layout Card on top (takes natural height)
@@ -983,7 +991,7 @@ struct AutoLayoutCenterView: View {
                                 manager.restoreAutoLayout()
                             }
                         },
-                        earlier: entries.dropFirst().map {
+                        earlier: displayEntries.dropFirst().map {
                             AutoLayoutHeroCard.EarlierCapture(
                                 id: $0.id,
                                 capturedAt: $0.capturedAt,
@@ -1073,7 +1081,7 @@ struct AutoLayoutCenterView: View {
         }
     }
 
-    private func earlierCaptureBanner(entry: AutoSaveEntry) -> some View {
+    private func earlierCaptureBanner(entry: AutoSaveEntry, activeScreenKey: String) -> some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
                 Image(systemName: "clock.arrow.circlepath")
@@ -1097,7 +1105,11 @@ struct AutoLayoutCenterView: View {
 
             Button {
                 withAnimation(.easeInOut(duration: 0.18)) {
-                    manager.selectedAutoSaveEntryID = nil
+                    if activeScreenKey == manager.currentFingerprint.key {
+                        manager.selectedAutoSaveEntryID = nil
+                    } else {
+                        manager.selectedAutoSaveEntryID = manager.autoSaveStore?.entry(forScreenKey: activeScreenKey)?.id
+                    }
                     isEarlierExpanded = false
                 }
             } label: {
@@ -1129,8 +1141,10 @@ struct AutoLayoutCenterView: View {
 
 struct AutoLayoutSidebarWindowListView: View {
     @EnvironmentObject var manager: WindowManager
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @State private var isOtherDisplaysExpanded: Bool = false
 
     private var entries: [AutoSaveEntry] {
         // Restorable here, not merely recorded somewhere. See
@@ -1153,9 +1167,24 @@ struct AutoLayoutSidebarWindowListView: View {
         }
     }
 
+    private var currentDisplayEntry: AutoSaveEntry? {
+        rememberedDisplays.first(where: { $0.screenKey == manager.currentFingerprint.key })
+            ?? manager.autoSaveStore?.entry(forScreenKey: manager.currentFingerprint.key)
+            ?? currentEntry
+    }
+
+    private var otherDisplays: [AutoSaveEntry] {
+        rememberedDisplays.filter { $0.screenKey != manager.currentFingerprint.key }
+    }
+
+    private var currentEntry: AutoSaveEntry? {
+        manager.autoSaveStore?.entry(forScreenKey: manager.currentFingerprint.key)
+            ?? entries.first
+    }
+
     private var activeEntry: AutoSaveEntry? {
         if let id = manager.selectedAutoSaveEntryID,
-           let found = (rememberedEntries + entries).first(where: { $0.id == id }) {
+           let found = (manager.autoSaveStore?.visibleEntries ?? (rememberedEntries + entries)).first(where: { $0.id == id }) {
             return found
         }
         return manager.autoSaveStore?.entry(forScreenKey: manager.currentFingerprint.key)
@@ -1173,38 +1202,76 @@ struct AutoLayoutSidebarWindowListView: View {
                 // 1. REMEMBERED DISPLAYS Section (Above Windows List)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text("REMEMBERED DISPLAYS".localized(appLanguage))
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if !rememberedDisplays.isEmpty {
-                            Text("\(rememberedDisplays.count)")
-                                .font(.system(size: 11, weight: .bold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(themeColor.color(seed: 0).opacity(0.15))
-                                .foregroundStyle(themeColor.color(seed: 0))
-                                .clipShape(Capsule())
+                        Button {
+                            if !otherDisplays.isEmpty {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                    isOtherDisplaysExpanded.toggle()
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("REMEMBERED DISPLAYS".localized(appLanguage))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+
+                                if !otherDisplays.isEmpty {
+                                    Text("\(otherDisplays.count)")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(themeColor.color(seed: 0).opacity(0.15))
+                                        .foregroundStyle(themeColor.color(seed: 0))
+                                        .clipShape(Capsule())
+
+                                    Spacer()
+
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                        .rotationEffect(.degrees(isOtherDisplaysExpanded ? 90 : 0))
+                                } else {
+                                    Spacer()
+                                }
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 8)
                     .padding(.top, 4)
 
-                    if rememberedDisplays.isEmpty {
+                    // Current display is always visible directly
+                    if let currentDisplay = currentDisplayEntry {
+                        let isSelected = (activeEntry?.screenKey == currentDisplay.screenKey)
+                        AutoLayoutRememberedDisplayRow(
+                            entry: currentDisplay,
+                            isSelected: isSelected,
+                            isLive: true,
+                            themeColor: themeColor,
+                            appLanguage: appLanguage
+                        )
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                manager.selectedAutoSaveEntryID = currentDisplay.id
+                                manager.selectedRecordID = nil
+                            }
+                        }
+                    } else if rememberedDisplays.isEmpty {
                         Text("No remembered displays".localized(appLanguage))
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 8)
-                    } else {
-                        LazyVStack(spacing: 6) {
-                            ForEach(rememberedDisplays) { displayEntry in
-                                let isSelected = (activeEntry?.screenKey == displayEntry.screenKey)
-                                let isLive = displayEntry.screenKey == manager.currentFingerprint.key
+                    }
 
+                    // Other displays dropdown
+                    if isOtherDisplaysExpanded && !otherDisplays.isEmpty {
+                        LazyVStack(spacing: 6) {
+                            ForEach(otherDisplays) { displayEntry in
+                                let isSelected = (activeEntry?.screenKey == displayEntry.screenKey)
                                 AutoLayoutRememberedDisplayRow(
                                     entry: displayEntry,
                                     isSelected: isSelected,
-                                    isLive: isLive,
+                                    isLive: false,
                                     themeColor: themeColor,
                                     appLanguage: appLanguage
                                 )
@@ -1216,6 +1283,7 @@ struct AutoLayoutSidebarWindowListView: View {
                                 }
                             }
                         }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
 
@@ -1238,6 +1306,14 @@ struct AutoLayoutSidebarWindowListView: View {
                                     .background(themeColor.color(seed: 0).opacity(0.15))
                                     .foregroundStyle(themeColor.color(seed: 0))
                                     .clipShape(Capsule())
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if isOtherDisplaysExpanded {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    isOtherDisplaysExpanded = false
+                                }
                             }
                         }
 
@@ -1282,6 +1358,9 @@ struct AutoLayoutSidebarWindowListView: View {
                                             manager.selectedRecordID = nil
                                         } else {
                                             manager.selectedRecordID = record.id
+                                        }
+                                        if isOtherDisplaysExpanded {
+                                            isOtherDisplaysExpanded = false
                                         }
                                     }
                                 }
@@ -1380,6 +1459,10 @@ struct AutoLayoutSidebarWindowRow: View {
     @State private var isHovered = false
 
     var body: some View {
+        let isFull = record.isFullScreenMode
+        let baseTint = isFull ? Color.indigo : themeColor.color(seed: 0)
+        let thumbTint = isSelected ? baseTint : (isHovered ? baseTint : baseTint.opacity(0.85))
+
         HStack(spacing: 10) {
             // App Icon
             AppIconView(bundleID: record.windowID.appBundleID)
@@ -1393,7 +1476,7 @@ struct AutoLayoutSidebarWindowRow: View {
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .lineLimit(1)
 
-                    if record.isFullScreenMode {
+                    if isFull {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .mainWindowSymbolAnimation(.wiggle, capturesClicks: false)
                             .font(.system(size: 9, weight: .bold))
@@ -1425,7 +1508,18 @@ struct AutoLayoutSidebarWindowRow: View {
                 }
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 8)
+
+            // Window Thumbnail from Saved Sessions
+            Group {
+                if isFull {
+                    FullScreenPreviewIcon(tint: thumbTint)
+                } else {
+                    WindowPreviewIcon(record: record, tint: thumbTint)
+                }
+            }
+            .frame(width: 52, height: 34)
+            .shadow(color: isSelected ? baseTint.opacity(0.35) : (isHovered ? baseTint.opacity(0.20) : .clear), radius: 3)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)

@@ -734,7 +734,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     ///   display reconnecting, for instance. Those honour the Auto layout when
     ///   it is switched on. A restore the user asked for stays as it was.
     func restoreNow(animated: Bool? = nil, triggerSubtitle: String? = nil, automatic: Bool = false) {
-        if automatic {
+        if automatic || store.autoSaveEnabled {
             // Ask the one place that knows how to choose. Reading
             // autoLayoutSnapshot directly here is what made a reconnected
             // display restore nothing: that property only ever looks at the
@@ -754,7 +754,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
             restore(snapshot: source.snapshot,
                     animated: animated ?? store.restoreAnimated,
-                    skipCommandSend: source.isAuto,
+                    skipCommandSend: source.isAuto || store.autoSaveEnabled,
                     triggerSubtitle: triggerSubtitle)
             return
         }
@@ -3927,7 +3927,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // allow-list inside `sendCommandToFrontmostAppAsync`, which
                 // gives the right outcome for the wrong reason — the flag has to
                 // be read on the path it is passed to.
-                if !isLocked && self.store.refreshFrontmostOnFullRestore && !skipCommandSend {
+                if !isLocked && self.store.refreshFrontmostOnFullRestore && !self.store.autoSaveEnabled && !skipCommandSend {
                     await self.sendCommandToFrontmostAppAsync(targetBundleID: snapshot.foregroundBundleID, snapshot: snapshot)
                 }
 
@@ -5457,8 +5457,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // every automatic path, but this types into somebody else's app, so the
         // rule is restated where the keystroke actually leaves: an auto layout
         // never sends one.
-        guard snapshot?.isAutoSave != true else {
-            log("Command skipped: an auto layout has no chosen frontmost app to send to.",
+        guard snapshot?.isAutoSave != true && !self.store.autoSaveEnabled else {
+            log("Command skipped: Saved Sessions mode is off (Auto Layout is active) or an auto layout has no chosen frontmost app.",
                 level: .verbose, type: .system)
             return
         }

@@ -606,8 +606,8 @@ struct LayoutPreviewView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(20)
-        .liquidGlass(cornerRadius: 16, style: .card)
+        .padding(10)
+        .liquidGlass(cornerRadius: 14, style: .card)
     }
     
     private func classicScreenView(
@@ -652,6 +652,8 @@ struct LayoutPreviewView: View {
         offsetY: CGFloat
     ) -> some View {
         let isSelected = record.id == selectedRecordID
+        let isHovered = record.id == hoveredRecordID
+        let isHighlighted = isSelected || isHovered
         let x = offsetX + (record.globalFrame.origin.x - boundingBox.origin.x) * scale
         let y = offsetY + (boundingBox.height - (record.globalFrame.origin.y - boundingBox.origin.y + record.globalFrame.height)) * scale
         let w = record.globalFrame.width * scale
@@ -660,43 +662,73 @@ struct LayoutPreviewView: View {
         // Match Theme Colors (Use high-contrast slate for Black theme so preview window cards remain visible)
         let baseTint = (tint == .black || tint == Color.black) ? Color(white: 0.8) : tint
         let winCorner: CGFloat = max(4, 8 * scale)
-        
-        return ZStack {
+        let baseSize: CGFloat = min(max(w * 0.24, 20.0), 30.0)
+        let iconSize: CGFloat = min(baseSize, max(8.0, min(w - 3, h - 3)))
+        let titleBarHeight: CGFloat = max(iconSize + 3, 14 * scale)
+
+        return ZStack(alignment: .topLeading) {
             // Window body with theme-colored glass
             RoundedRectangle(cornerRadius: winCorner, style: .continuous)
-                .fill(baseTint.opacity(isSelected ? 0.45 : 0.25))
+                .fill(baseTint.opacity(isHighlighted ? 0.45 : 0.22))
                 .overlay {
                     // Vibrant theme-colored border
                     RoundedRectangle(cornerRadius: winCorner, style: .continuous)
-                        .stroke(baseTint.opacity(isSelected ? 1.0 : 0.6), lineWidth: isSelected ? 1.5 : 0.75)
+                        .stroke(baseTint.opacity(isHighlighted ? 1.0 : 0.65), lineWidth: isHighlighted ? 1.5 : 0.8)
                 }
-                .shadow(color: baseTint.opacity(isSelected ? 0.5 : 0.0), radius: 8, x: 0, y: 0)
+                .shadow(color: isHighlighted ? baseTint.opacity(0.5) : Color.black.opacity(0.35), radius: isHighlighted ? 6 : 2.5, x: 0, y: 1)
             
-            // App Icon
-            AppIconView(bundleID: record.windowID.appBundleID)
-                .frame(width: min(w * 0.7, 32), height: min(h * 0.7, 32))
-                .shadow(color: .black.opacity(0.2), radius: 2)
-            
-            // Optional label if window is large enough
-            if w > 60 && h > 40 {
-                VStack {
-                    Spacer()
-                    Text(record.windowID.appName?.prefix(12) ?? "")
-                        .font(.system(size: 10 * scale, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .padding(.bottom, 4)
-                        .shadow(color: .black.opacity(0.5), radius: 2)
+            // Thin title bar divider line if window is tall enough
+            if h > titleBarHeight + 4 {
+                Rectangle()
+                    .fill(baseTint.opacity(0.35))
+                    .frame(height: 0.75)
+                    .offset(y: titleBarHeight)
+            }
+
+            // Top-left App Icon badge with inline app name on hover or selection
+            if w >= 12 && h >= 10 {
+                HStack(spacing: 4) {
+                    AppIconView(bundleID: record.windowID.appBundleID)
+                        .frame(width: iconSize, height: iconSize)
+                        .clipShape(RoundedRectangle(cornerRadius: max(2.5, 3.5 * scale), style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: max(2.5, 3.5 * scale), style: .continuous)
+                                .stroke(Color.white.opacity(0.35), lineWidth: 0.5)
+                        }
+                        .shadow(color: .black.opacity(0.35), radius: 1.5, y: 0.5)
+
+                    if isHighlighted && w > 52 {
+                        Text(record.windowID.appName?.prefix(14) ?? "")
+                            .font(.system(size: max(7.5, 9 * scale), weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background {
+                                Capsule()
+                                    .fill(Color.black.opacity(0.65))
+                            }
+                            .shadow(color: .black.opacity(0.6), radius: 2)
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
                 }
+                .padding(.leading, 2.5)
+                .padding(.top, 1.5)
             }
         }
         .frame(width: max(8, w), height: max(8, h))
         .position(x: x + w/2, y: y + h/2)
-        .scaleEffect(isSelected ? 1.05 : 1.0)
+        .scaleEffect(isHighlighted ? 1.04 : 1.0)
+        .onHover { hovering in
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
+                hoveredRecordID = hovering ? record.id : nil
+            }
+        }
         .onTapGesture {
             onSelectRecord?(record.id)
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.7), value: record.globalFrame)
-        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSelected)
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isHighlighted)
     }
     
     // MARK: - Interactive 3D Preview (For Auto Layout Mode)
@@ -811,8 +843,8 @@ struct LayoutPreviewView: View {
                     return map
                 }
                 
-                let stepInterval = 1.0 / CGFloat(totalRecords - 1)
-                let flightDuration = stepInterval * 1.35  // 35% overlap for continuous liquid peeling
+                let stepInterval = 1.0 / CGFloat(totalRecords)
+                let flightDuration = stepInterval * 1.12  // Fluid overlap between peeling windows
                 
                 for (idx, record) in frontToBackRecords.enumerated() {
                     let isLast = (idx == totalRecords - 1)
@@ -855,8 +887,8 @@ struct LayoutPreviewView: View {
                             targetIsPeeling = false
                         }
                     } else {
-                        // Last background window: revealed and zooms heroic forward
-                        let lastStart = CGFloat(totalRecords - 2) * stepInterval
+                        // Last background window: dedicated finale slot with zero squash against previous window
+                        let lastStart = CGFloat(totalRecords - 1) * stepInterval
                         let lastT = max(0.0, min(1.0, (scrubProgress - lastStart) / stepInterval))
                         let easeLast = lastT * lastT * (3.0 - 2.0 * lastT)
                         targetScale = 1.0 + easeLast * 0.85
@@ -1076,8 +1108,8 @@ struct LayoutPreviewView: View {
     
     private func calculateScale(for size: CGSize, boundingBox: CGRect) -> CGFloat {
         guard boundingBox.width > 0, boundingBox.height > 0 else { return 1.0 }
-        let horizontalScale = (size.width - 24) / boundingBox.width
-        let verticalScale = (size.height - 24) / boundingBox.height
+        let horizontalScale = (size.width - 12) / boundingBox.width
+        let verticalScale = (size.height - 12) / boundingBox.height
         return min(horizontalScale, verticalScale) * 0.98
     }
 }
@@ -1260,7 +1292,7 @@ private struct WindowPreviewTileView: View {
         
         return ZStack {
             // Visual Tablet (Lifts forward & expands on focus/peel, without displacing hit-test bounds)
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 // Single Unified Glass Tablet with Thick Solid Dual-Layer Border (NO offset duplicate!)
                 RoundedRectangle(cornerRadius: winCorner, style: .continuous)
                     .fill(cardFillColor.opacity(fillOpacity))
@@ -1307,35 +1339,58 @@ private struct WindowPreviewTileView: View {
                         y: is3D ? (CGFloat(rank) * 2.2 - peelLift * 0.25) : 0
                     )
                 
-                // Special Place Handle: App Icon & Title Pill
-                let iconSize: CGFloat = {
-                    if is3D {
-                        let maxTarget: CGFloat = (isFocused || isPeeling) ? 54.0 : 48.0
-                        return min(max(w * 0.75, 28), maxTarget)
-                    }
-                    return min(w * 0.7, 32)
-                }()
+                // ── Titlebar divider line ───────────────────────────────
+                if h >= 14 {
+                    let titleBarH: CGFloat = max(6, h * 0.14)
+                    Rectangle()
+                        .fill(baseTint.opacity(strokeOpacity * 0.35))
+                        .frame(height: 0.75)
+                        .offset(y: titleBarH)
+                }
 
-                VStack(spacing: 3) {
-                    AppIconView(bundleID: record.windowID.appBundleID)
-                        .frame(width: iconSize, height: iconSize)
-                        .shadow(color: .black.opacity(0.35), radius: 3)
-                        .opacity(isFocused || isSelected || isPeeling ? 1.0 : (hasHoverFocus ? 0.75 : 0.95))
+                // ── Top-left App Icon Badge ─────────────────────────────
+                if w >= 14 && h >= 12 {
+                    let badgeSize: CGFloat = {
+                        let maxBounds = min(w - 4, h - 4)
+                        if is3D {
+                            let maxTarget: CGFloat = (isFocused || isPeeling) ? 42.0 : 36.0
+                            let base = max(28.0, min(w * 0.26, maxTarget))
+                            return min(base, max(12.0, maxBounds))
+                        }
+                        let base = max(22.0, min(w * 0.24, 32.0))
+                        return min(base, max(12.0, maxBounds))
+                    }()
 
-                    if (w > 44 && h > 26) || isFocused || isSelected || isPeeling {
-                        Text(record.windowID.appName?.prefix(14) ?? "")
-                            .font(.system(size: is3D ? max(9, 11 * scale) : max(8, 10 * scale), weight: (isFocused || isSelected || isPeeling) ? .bold : .semibold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2.5)
-                            .background {
-                                if is3D {
-                                    Capsule()
-                                        .fill(Color.black.opacity((isFocused || isPeeling) ? 0.80 : 0.40))
-                                }
+                    HStack(spacing: 5) {
+                        AppIconView(bundleID: record.windowID.appBundleID)
+                            .frame(width: badgeSize, height: badgeSize)
+                            .clipShape(RoundedRectangle(cornerRadius: max(3.5, badgeSize * 0.22), style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: max(3.5, badgeSize * 0.22), style: .continuous)
+                                    .stroke(Color.white.opacity(0.35), lineWidth: 0.75)
                             }
-                            .shadow(color: .black.opacity(0.7), radius: 2)
+                            .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+                            .opacity(isFocused || isSelected || isPeeling ? 1.0 : (hasHoverFocus ? 0.80 : 0.95))
+
+                        if (isFocused || isSelected || isPeeling) && w > 52 {
+                            Text(record.windowID.appName?.prefix(14) ?? "")
+                                .font(.system(
+                                    size: is3D ? max(8, 9 * scale) : max(7, 8 * scale),
+                                    weight: .semibold, design: .rounded
+                                ))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background {
+                                    Capsule()
+                                        .fill(Color.black.opacity((isFocused || isPeeling) ? 0.75 : 0.45))
+                                }
+                                .shadow(color: .black.opacity(0.6), radius: 2)
+                        }
                     }
+                    .padding(.top, 4)
+                    .padding(.leading, 4)
                 }
             }
             .frame(width: w, height: h)
@@ -1860,7 +1915,7 @@ struct AutoSavePreviewCardView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
         }
-        .padding(10)
-        .frame(width: 280, height: 195)
+        .padding(8)
+        .frame(width: 320, height: 210)
     }
 }

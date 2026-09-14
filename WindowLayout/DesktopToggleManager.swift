@@ -286,8 +286,9 @@ final class DesktopToggleManager: ObservableObject {
 
         // Restore the previously active app or the configured frontmost app.
         var targetBundleID = previousFrontmostAppBundleID
+        let isSavedSessionsMode = !WindowManager.shared.store.autoSaveEnabled
         
-        if focusConfiguredAppOnUnhide {
+        if isSavedSessionsMode && focusConfiguredAppOnUnhide {
             let fp = ScreenFingerprint.current()
             let store = WindowManager.shared.store
             let candidate: LayoutSnapshot?
@@ -316,8 +317,8 @@ final class DesktopToggleManager: ObservableObject {
         previouslyVisibleApps.removeAll()
         previousFrontmostAppBundleID = nil
         
-        // Auto-restore layout if enabled.
-        if restoreOnUnhide {
+        // Auto-restore layout if enabled and in Saved Sessions mode.
+        if restoreOnUnhide && isSavedSessionsMode {
             WindowManager.shared.log("Desktop toggle: triggering layout restore", type: .system)
             WindowManager.shared.restoreNow()
         } else {

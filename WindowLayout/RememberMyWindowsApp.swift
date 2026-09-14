@@ -830,7 +830,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
                 let hostingView = NSHostingView(rootView: previewView)
                 hostingView.wantsLayer = true
-                hostingView.frame = CGRect(x: 0, y: 0, width: 280, height: 195)
+                hostingView.frame = CGRect(x: 0, y: 0, width: 320, height: 210)
                 previewMenuItem.view = hostingView
                 previewMenu.addItem(previewMenuItem)
 
