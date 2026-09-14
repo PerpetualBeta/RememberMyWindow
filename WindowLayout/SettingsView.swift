@@ -3318,25 +3318,33 @@ private struct EventCardView: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor).opacity(isDisabled ? 0.35 : (isHovered ? 0.85 : 0.65)))
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor).opacity(isDisabled ? 0.35 : (isHovered ? 0.85 : 0.65)))
+                if isDisabled {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.black.opacity(0.42))
+                }
+            }
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(
-                    isHovered && isOn
-                        ? activeColor.opacity(0.4)
-                        : (isOn ? activeColor.opacity(0.15) : Color.primary.opacity(0.06)),
-                    lineWidth: (isHovered && isOn) ? 1.4 : 1.0
+                    isDisabled
+                        ? Color.black.opacity(0.15)
+                        : (isHovered && isOn
+                            ? activeColor.opacity(0.4)
+                            : (isOn ? activeColor.opacity(0.15) : Color.primary.opacity(0.06))),
+                    lineWidth: (isHovered && isOn && !isDisabled) ? 1.4 : 1.0
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(
-            color: (isHovered && isOn) ? activeColor.opacity(0.16) : Color.black.opacity(0.03),
-            radius: (isHovered && isOn) ? 8 : 2,
-            y: (isHovered && isOn) ? 3 : 1
+            color: (isHovered && isOn && !isDisabled) ? activeColor.opacity(0.16) : Color.black.opacity(isDisabled ? 0.0 : 0.03),
+            radius: (isHovered && isOn && !isDisabled) ? 8 : 2,
+            y: (isHovered && isOn && !isDisabled) ? 3 : 1
         )
-        .offset(y: (isHovered && isOn) ? -1.5 : 0)
+        .offset(y: (isHovered && isOn && !isDisabled) ? -1.5 : 0)
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isHovered)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isOn)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: soundIsOn)
