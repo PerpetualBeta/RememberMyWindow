@@ -34,6 +34,9 @@ struct AutoLayoutHeroCard: View {
     var isExpanded: Binding<Bool>? = nil
     @State private var internalExpanded: Bool = true
     @State private var isHeaderHovered: Bool = false
+    /// Briefly true after a new capture arrives (not when viewing an earlier one).
+    @State private var justUpdated: Bool = false
+    @State private var updateFlashTask: Task<Void, Never>? = nil
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -45,6 +48,10 @@ struct AutoLayoutHeroCard: View {
     /// Restoring a days-old layout is worse than not restoring, so past this
     /// the card mutes rather than raising a warning nobody asked for.
     static let staleAfter: TimeInterval = 60 * 60 * 12
+
+    /// Keep hour precision until a capture is more than two days old. A
+    /// "1 day ago" label is too vague for the first 48 hours of the timeline.
+    static let dayDisplayThreshold: TimeInterval = 48 * 60 * 60
 
     /// Injectable so the stale and fresh states can both be rendered.
     var now: Date = Date()
@@ -102,21 +109,44 @@ struct AutoLayoutHeroCard: View {
                         .padding(.top, 10)
                 }
             } else {
+                // No capture recorded yet — show a disabled placeholder button
+                // so the layout stays consistent, then explain why.
+                noCaptureButton
+                    .padding(.top, 4)
                 footnote("Nothing captured yet. Move a window and it will appear here.", systemImage: "macwindow.badge.plus")
+                    .padding(.top, 8)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: capturedAt) { _, newDate in
+            // Only flash when the user is looking at the live/latest state,
+            // not when they are browsing an earlier capture.
+            guard newDate != nil, !isViewingEarlierCapture else { return }
+            updateFlashTask?.cancel()
+            withAnimation(.easeInOut(duration: 0.25)) { justUpdated = true }
+            updateFlashTask = Task {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.4)) { justUpdated = false }
+            }
+        }
     }
+
+    /// Whether the user has focused on an earlier capture (not the latest).
+    private var isViewingEarlierCapture: Bool { selectedCaptureID != nil }
 
     @ViewBuilder
     private var restoreButton: some View {
-        // Spelled "Restore" because the card it sits in is headed AUTO LAYOUT TIMELINE,
-        // which is the only thing that separates it from the toolbar's Restore.
-        // That reads correctly on screen and not at all through accessibility,
-        // where both are a button described as "Restore", so the distinction
-        // has to be stated there explicitly.
+        // Label varies by state:
+        //   • No capture at all        → disabled, "No Capture Yet"
+        //   • Latest capture, no focus → passive,  "Layout Saved" (clock)
+        //   • Earlier capture focused  → active,   "Restore" (back-arrow)
+        //
+        // The card heading (AUTO LAYOUT TIMELINE) already distinguishes this
+        // button from the toolbar's Restore. Accessibility labels spell it out
+        // explicitly so VoiceOver users hear the difference.
         if #available(macOS 26.0, *) {
             restoreButtonContent
                 .glassEffect(
@@ -136,26 +166,99 @@ struct AutoLayoutHeroCard: View {
         }
     }
 
+    /// The inner content of the restore button, split by interaction mode.
+    ///
+    /// - **Active** (`isViewingEarlierCapture`): a real tappable `Button` that
+    ///   restores the focused earlier capture. Label: "Restore".
+    /// - **Passive** (latest / no focus): a non-interactive label that flashes
+    ///   "Layout updated ✓" for 2.5 s after every new capture, then rests as
+    ///   "Layout Saved". Nothing happens on tap — the layout is already current.
+    @ViewBuilder
     private var restoreButtonContent: some View {
-        Button(action: onRestore) {
+        if isViewingEarlierCapture {
+            // Active: tappable restore for the earlier capture in focus.
+            Button(action: onRestore) {
+                HStack(spacing: 7) {
+                    Image(systemName: "arrow.uturn.backward")
+                        .mainWindowSymbolAnimation(.flip, capturesClicks: false)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(tint)
+                    Text("Restore".localized(language))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.black)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .mainWindowSymbolHoverRegion()
+            .disabled(!matchesCurrentScreens)
+            .opacity(matchesCurrentScreens ? 1 : 0.42)
+            .accessibilityLabel(Text("Restore the selected earlier capture".localized(language)))
+        } else {
+            // Passive: non-interactive status label. Flashes "Layout updated ✓"
+            // briefly after a new capture, then returns to "Layout Saved".
+            let icon  = justUpdated ? "checkmark.circle.fill" : "clock"
+            let label = justUpdated
+                ? "Layout updated".localized(language)
+                : "Layout Saved".localized(language)
             HStack(spacing: 7) {
-                Image(systemName: "arrow.uturn.backward")
-                    .mainWindowSymbolAnimation(.flip, capturesClicks: false)
+                Image(systemName: icon)
+                    .mainWindowSymbolAnimation(justUpdated ? .breathePlain : .wiggleByLayer,
+                                              capturesClicks: false)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(tint)
-                Text("Restore".localized(language))
+                    .foregroundStyle(justUpdated ? Color.green : tint)
+                Text(label)
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(.black)
+                    .contentTransition(.numericText())
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .opacity(matchesCurrentScreens ? 1 : 0.42)
+            .accessibilityLabel(Text(label))
+            .accessibilityAddTraits(.isStaticText)
         }
-        .buttonStyle(.plain)
-        .mainWindowSymbolHoverRegion()
-        .disabled(!matchesCurrentScreens)
-        .opacity(matchesCurrentScreens ? 1 : 0.42)
-        .accessibilityLabel(Text("Restore the auto layout".localized(language)))
+    }
+
+    /// Disabled placeholder shown when no capture exists yet.
+    private var noCaptureButton: some View {
+        let content = HStack(spacing: 7) {
+            Image(systemName: "clock.badge.questionmark")
+                .mainWindowSymbolAnimation(.breathePlain, capturesClicks: false)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text("No Capture Yet".localized(language))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 9)
+
+        return Group {
+            if #available(macOS 26.0, *) {
+                content
+                    .glassEffect(
+                        .regular.tint(Color.secondary.opacity(0.12)).interactive(),
+                        in: .rect(cornerRadius: 18)
+                    )
+            } else {
+                content
+                    .background(
+                        .ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.secondary.opacity(0.20), lineWidth: 1)
+                    }
+            }
+        }
+        .opacity(0.55)
+        .accessibilityLabel(Text("No capture recorded yet".localized(language)))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityRemoveTraits(.isSelected)
     }
 
     /// The rest of the ring.
@@ -363,7 +466,9 @@ struct AutoLayoutHeroCard: View {
         let f = DateComponentsFormatter()
         f.unitsStyle = .full
         f.maximumUnitCount = 1
-        f.allowedUnits = seconds < 3600 ? [.minute] : (seconds < 86_400 ? [.hour] : [.day])
+        f.allowedUnits = seconds < 3600
+            ? [.minute]
+            : (seconds <= Self.dayDisplayThreshold ? [.hour] : [.day])
         let spelled = f.string(from: max(seconds, 60)) ?? ""
         // The formatter localises the quantity; the suffix has to be localised
         // too, or a Hebrew system reads "5 דקות ago" in the largest text on the
