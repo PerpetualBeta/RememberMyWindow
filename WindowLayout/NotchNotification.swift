@@ -193,6 +193,12 @@ final class NotchNotificationWindow: NSPanel {
         NotificationCenter.default.post(name: NSNotification.Name("NotchDismiss"), object: nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             self?.close()
+            // Release the SwiftUI view with the window's contents. WindowManager
+            // keeps this window in `notchWindow` after it closes, so without this
+            // the view stays alive and its repeatForever `dotPulse` keeps running
+            // off screen: a Core Animation commit every frame for WindowServer to
+            // composite, for as long as the app runs.
+            self?.contentView = nil
         }
     }
 }
