@@ -172,6 +172,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let shouldSendShortcut: Bool
     }
     private var pendingUnlockAction: PendingUnlockRestoreAction?
+    /// Set when a display change lands while the screen is locked. The restore
+    /// is held until unlock instead of running behind the lock, because window
+    /// positions set there do not stick: measured, every set-position returned
+    /// -25205, and seven windows never moved through eighteen correction passes
+    /// and three nudges, while the same layout restored by hand once unlocked
+    /// placed all seven in about four seconds, with no error. Across eight
+    /// restores, the unlocked ones logged no AX errors and the locked or
+    /// lock-spanning ones logged seven and eleven. See `restoreHeldForUnlock()`.
+    private var displayRestoreHeldForUnlock = false
 
     /// Windows a restore could not reach because they are parked on a Space the
     /// user is not on, held until they go there. See `retryDeferredRestore`.
@@ -1757,16 +1766,66 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         handleScreenUnlockedIfNeeded()
     }
 
+    /// How long the unlock transition is given before windows are touched,
+    /// the same allowance the post-unlock settlement below makes.
+    private static let unlockSettleNanoseconds: UInt64 = 400_000_000
+    /// How often to look again while an earlier restore is still running.
+    private static let restoreInFlightPollNanoseconds: UInt64 = 250_000_000
+
+    /// Runs the restore a display change held back while the screen was
+    /// locked. One restore, once, with the screen unlocked. If the displays are
+    /// still changing, nothing runs here: the change restores when it settles,
+    /// and it will find the screen unlocked. Waits for any other restore to
+    /// finish first, on the state rather than a clock, because two restores
+    /// asserting the same frames is the fight this exists to avoid.
+    private func restoreHeldForUnlock() {
+        if isHandlingDisplayChange || settlingDisplayFingerprint != nil {
+            log("🔓 Mac unlocked — the displays are still changing; the layout restores when they settle", level: .moderate, type: .restore)
+            return
+        }
+        log("🔓 Mac unlocked — running the restore held back while the screen was locked", level: .moderate, type: .restore)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.unlockSettleNanoseconds)
+            while let self, self.isRestoreInFlight, !self.isScreenLocked {
+                try? await Task.sleep(nanoseconds: Self.restoreInFlightPollNanoseconds)
+            }
+            guard let self, !self.isScreenLocked else { return }
+            self.restoreNow(automatic: true)
+        }
+    }
+
     private func handleScreenUnlockedIfNeeded() {
+        if displayRestoreHeldForUnlock {
+            displayRestoreHeldForUnlock = false
+            // Nothing was restored behind the lock, so there is nothing for the
+            // settlement below to settle.
+            pendingUnlockAction = nil
+            restoreHeldForUnlock()
+            return
+        }
         guard let pending = pendingUnlockAction else { return }
         pendingUnlockAction = nil
+
+        // The displays can change while the screen is locked: arrive, lock,
+        // unplug, unlock. The display change then starts its own restore for
+        // the new configuration, and settling the old snapshot as well puts two
+        // restores on the same windows at once, the stale one dragging them
+        // back toward screens that are no longer there. Measured: an Acer
+        // settlement ran three correction sweeps over the Built-in restore that
+        // started 0.7s after the unlock. Read the live configuration, not
+        // `currentFingerprint`, because an unlock can land while a display
+        // change is still settling.
+        guard pending.snapshot.screenKey == ScreenFingerprint.current().key else {
+            log("🔓 Mac unlocked, but the displays changed since '\(pending.snapshot.name)' was restored — skipping its settlement; the display change restores the current layout", level: .moderate, type: .restore)
+            return
+        }
 
         log("🔓 Mac unlocked. Executing post-unlock layout settlement for '\(pending.snapshot.name)'...", level: .moderate, type: .restore)
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             // Settle delay: allow WindowServer and Spaces to finish the unlock transition
-            try? await Task.sleep(nanoseconds: 400_000_000) // 400ms (0.4s)
+            try? await Task.sleep(nanoseconds: Self.unlockSettleNanoseconds)
 
             // 1. 3-pass progressive verification & correction sweep for positions and dimensions
             await self.verifyAndCorrectWindowFrames(for: pending.snapshot)
@@ -2166,9 +2225,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled, let self = self else { return }
 
-                let isLocked = self.isScreenLocked
-                if isLocked {
-                    self.log("🔒 Screen is locked. Performing silent background restore (suppressing notch overlay and shortcuts until unlock)...", level: .necessary, type: .restore)
+                // Hold the restore until unlock rather than run it behind the
+                // lock, where positions do not stick. See
+                // `displayRestoreHeldForUnlock`.
+                if self.isScreenLocked {
+                    self.log("🔒 Screen is locked — holding the restore until unlock; window positions set behind the lock do not stick", level: .necessary, type: .restore)
+                    self.displayRestoreHeldForUnlock = true
+                    self.pendingConnectedNames.removeAll()
+                    return
                 }
 
                 // Show initial "Connected" notification (or send system notification if locked)
@@ -3404,6 +3468,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // including the early returns.
         restoresInFlight += 1
 
+        // A display change that starts after this restore makes its layout the
+        // wrong one. Measured on a dual-to-laptop unplug: the restore for a
+        // transient one-display state ran on for sixteen seconds alongside the
+        // restore for the laptop, both writing the same windows. So every stage
+        // that writes a frame asks first whether the displays have moved on.
+        let generationAtStart = displayChangeGeneration
+
         Task {
             defer { self.restoresInFlight -= 1 }
             let runningApps = Dictionary(
@@ -3498,6 +3569,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             )
 
             for (bundleID, appRecords) in groupedRecords {
+                guard self.displayChangeGeneration == generationAtStart else {
+                    self.log("⏹️ Abandoning the restore of '\(snapshot.name)' — the displays changed while it was resolving windows", level: .moderate, type: .restore)
+                    return
+                }
                 // Skip if app is still not running
                 guard let app = updatedRunningApps.values.first(where: { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID }) else {
                     self.log("⏭️ Skipping '\(bundleID)' — app is not running", level: .verbose, type: .restore)
@@ -3826,6 +3901,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
             // 2. Restore all resolved external window targets (every window of every app)
             for targetItem in resolvedTargets {
+                guard self.displayChangeGeneration == generationAtStart else {
+                    self.log("⏹️ Abandoning the restore of '\(snapshot.name)' — the displays changed while it was placing windows", level: .moderate, type: .restore)
+                    return
+                }
                 let record = targetItem.record
                 let appName = record.windowID.appBundleID
                 let target = targetItem.targetFrame
@@ -4190,6 +4269,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     var mismatchesByApp: [String: [WindowRecord]] = [:]
 
                     while true {
+                        guard self.displayChangeGeneration == generationAtStart else {
+                            self.log("⏹️ Abandoning verification of '\(snapshot.name)' — the displays changed", level: .moderate, type: .restore)
+                            return
+                        }
                         verificationAttempt += 1
                         let liveLayout = self.captureAllWindows(for: ScreenFingerprint.current(), silent: true)
                         mismatchesByApp = [:]
@@ -4298,6 +4381,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                                 attempt += 1
                                 try? await Task.sleep(nanoseconds: delay)
                                 guard let self, !contested.isEmpty else { return }
+                                guard self.displayChangeGeneration == generationAtStart else {
+                                    self.log("⏹️ Dropping \(contested.count) contested window(s) of '\(snapshot.name)' — the displays changed", level: .moderate, type: .restore)
+                                    return
+                                }
+                                // Nor behind the lock, where a write does not stick.
+                                // Measured: a nudge ran eight seconds after the
+                                // screen locked. The restore held for unlock, or
+                                // the next display change, puts them back.
+                                guard !self.isScreenLocked else {
+                                    self.log("⏹️ Dropping \(contested.count) contested window(s) of '\(snapshot.name)' — the screen locked", level: .moderate, type: .restore)
+                                    return
+                                }
                                 // Whether a changed frame can be read as a person's
                                 // placement. It cannot while something else is moving
                                 // windows: a display change that is still settling, and a
