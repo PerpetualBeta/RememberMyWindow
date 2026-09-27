@@ -3578,7 +3578,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // that writes a frame asks first whether the displays have moved on.
         let generationAtStart = displayChangeGeneration
 
-        Task {
+        Task { [self] in
             defer { self.restoresInFlight -= 1 }
             let runningApps = Dictionary(
                 NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) },

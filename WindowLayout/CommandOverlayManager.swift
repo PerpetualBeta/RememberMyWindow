@@ -32,7 +32,7 @@ final class CommandOverlayManager {
     /// - Parameter app: The target running application receiving the shortcut.
     func showOverlay(for app: NSRunningApplication) {
         guard !WindowManager.shared.isScreenLocked else { return }
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [self] in
             self.dismissTimer?.invalidate()
             self.dismissTimer = nil
             
