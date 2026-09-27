@@ -224,7 +224,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 shown.append(bundleID)
             }
         }
-        guard !shown.isEmpty else { return }
+        guard !shown.isEmpty else {
+            log("\(reason) — \(held.apps.count) app(s) still held, none shown yet", level: .verbose, type: .restore)
+            return
+        }
         log("\(reason) — restoring \(shown.count) app(s) with windows held until shown", level: .moderate, type: .restore)
         var remaining = held
         for bundleID in shown { remaining.apps.removeValue(forKey: bundleID) }
@@ -5151,11 +5154,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // The C callback is a plain C function pointer — captures a raw unmanaged pointer to self.
         // We hop to the MainActor explicitly so WindowManager's actor isolation is respected.
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        let err = AXObserverCreate(pid, { _, _, _, refcon in
+        let err = AXObserverCreate(pid, { _, _, notification, refcon in
             guard let refcon = refcon else { return }
             let manager = Unmanaged<WindowManager>.fromOpaque(refcon).takeUnretainedValue()
+            let deminiaturised = (notification as String) == kAXWindowDeminiaturizedNotification
             Task { @MainActor in
-                manager.scheduleAXEventFlush()
+                if deminiaturised {
+                    manager.restoreShownHeldApps(reason: "a window was un-minimised")
+                } else {
+                    manager.scheduleAXEventFlush()
+                }
             }
         }, &observer)
 
@@ -5169,7 +5177,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             kAXWindowMovedNotification,
             kAXWindowResizedNotification,
             kAXWindowCreatedNotification,
-            kAXUIElementDestroyedNotification
+            kAXUIElementDestroyedNotification,
+            // The one trigger that fires once a held window really is back.
+            // Focus changes first: measured bringing TextEdit back from its
+            // Dock icon, the app activated with the window still reading as
+            // minimised, it read as shown 50 ms later, and this notification
+            // arrived 438 ms after the activation. So the focus-change retry
+            // looked, found nothing shown, and the window was never restored.
+            kAXWindowDeminiaturizedNotification
         ]
         for n in notifications {
             // Errors here are expected for apps that don't expose AX windows — ignore them.
