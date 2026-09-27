@@ -175,9 +175,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     /// What a restore held back for one app because it was not displayed.
     struct HeldUntilShown {
-        /// Minimised windows when the restore ran. Fewer now means one has
-        /// been brought back.
-        let minimisedCount: Int
+        /// The minimised windows this restore held. One that is no longer
+        /// minimised has been brought back.
+        ///
+        /// The windows themselves, not a count of them. A count taken over
+        /// the held windows and compared against every minimised window in
+        /// the app never falls when an extra minimised window, one with no
+        /// saved record, stays down: two minimised, one held, and restoring
+        /// the held one leaves `1 < 1`.
+        let minimisedWindows: [AXUIElement]
         let appWasHidden: Bool
     }
     /// Windows the last restore held because they were minimised or their
@@ -211,11 +217,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 if !app.isHidden { shown.append(bundleID) }
                 continue
             }
-            let element = WindowManager.createAXElement(for: app.processIdentifier)
-            var value: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
-                  let windows = value as? [AXUIElement] else { continue }
-            if windows.filter(WindowManager.isMinimised).count < entry.minimisedCount {
+            // A held window that has closed also reads as not minimised. The
+            // restore that follows finds nothing for it and holds whatever
+            // is still down, so that costs one pass and nothing else.
+            if entry.minimisedWindows.contains(where: { !WindowManager.isMinimised($0) }) {
                 shown.append(bundleID)
             }
         }
@@ -3822,20 +3827,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // ones keep theirs; dropping it before matching would hand its
                 // record to a window it does not describe.
                 let appHidden = app.isHidden
-                var minimisedHere = 0
+                var minimisedHere: [AXUIElement] = []
                 matchedTargetsForApp.removeAll { target in
                     let minimised = WindowManager.isMinimised(target.element)
                     guard appHidden || minimised else { return false }
-                    if minimised { minimisedHere += 1 }
+                    if minimised { minimisedHere.append(target.element) }
                     recordsHeldUntilShown.insert(target.record.id)
                     return true
                 }
                 // Nor are extra windows broadcast to the template position while
                 // they are out of sight.
                 unclaimed.removeAll { appHidden || WindowManager.isMinimised($0) }
-                if appHidden || minimisedHere > 0 {
-                    heldUntilShownByApp[bundleID] = HeldUntilShown(minimisedCount: minimisedHere, appWasHidden: appHidden)
-                    let why = appHidden ? "the app is hidden" : "\(minimisedHere) minimised"
+                if appHidden || !minimisedHere.isEmpty {
+                    heldUntilShownByApp[bundleID] = HeldUntilShown(minimisedWindows: minimisedHere, appWasHidden: appHidden)
+                    let why = appHidden ? "the app is hidden" : "\(minimisedHere.count) minimised"
                     self.log("⏸️ Holding window(s) of '\(bundleID)' — \(why); will restore when shown",
                              level: .moderate, type: .restore)
                 }
