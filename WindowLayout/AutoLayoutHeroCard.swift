@@ -185,7 +185,7 @@ struct AutoLayoutHeroCard: View {
                         .foregroundStyle(tint)
                     Text("Restore".localized(language))
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.black)
+                        .foregroundStyle(.primary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 9)
@@ -211,7 +211,7 @@ struct AutoLayoutHeroCard: View {
                     .foregroundStyle(justUpdated ? Color.green : tint)
                 Text(label)
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(.primary)
                     .contentTransition(.numericText())
             }
             .frame(maxWidth: .infinity)

@@ -52,6 +52,7 @@ private let translationDict: [String: String] = [
     "Continue": "המשך",
     "Next": "הבא",
     "Get Started": "בואו נתחיל",
+    "Preparing window tracking…": "מכין את מעקב החלונות…",
     // Slide 0
     "Your Windows, Always Where You Left Them": "החלונות שלך, תמיד במקום שהשארת אותם",
     "Save your layout once. It'll be there every time you need it.": "שמור את הסידור פעם אחת. הוא יהיה שם בכל פעם שתזדקק לו.",
@@ -95,6 +96,7 @@ private let translationDict: [String: String] = [
     "Reload": "רענון",
     "Picture-in-Picture": "תמונה בתוך תמונה",
     "PiP": "תמונה בתוך תמונה",
+    "fires automatically": "מופעל אוטומטית",
     // Misc onboarding
     "Saved": "נשמר",
     "Restored": "שוחזר",
@@ -193,7 +195,7 @@ private let translationDict: [String: String] = [
     "All windows hidden": "כל החלונות הוסתרו",
     "Windows Restored": "החלונות שוחזרו",
     "All windows unhidden": "כל החלונות הוצגו מחדש",
-    "Others Saved in your session": "אחרים שנשמרו בסידור",
+    "Others Saved in your session": "אחרים שנשמרו במפגש",
     "Group other apps in submenu": "קבץ יישומים נוספים בתפריט משני",
     "Keep the menu bar dropdown compact by placing background apps in a submenu": "שמור על תפריט שורת המצב קומפקטי על ידי הצגת יישומי רקע בתפריט משני",
     "Notch Sound": "צליל מגרעת",
@@ -339,6 +341,8 @@ private let translationDict: [String: String] = [
     "Theme Color": "צבע ערכת נושא",
     "Primary accent for the interface": "צבע הדגשה ראשי לממשק",
     "Primary accent color highlights across the app interface": "צבע ההדגשה הראשי המופיע לכל אורך אלמנטי הממשק באפליקציה",
+    "Minimal Visual Animations": "הנפשות חזותיות מינימליות",
+    "Use simple transitions for controls and layout previews": "השתמש במעברים פשוטים עבור בקרות ותצוגות מקדימות של פריסות",
     "App Language": "שפת היישום",
     "Override the system language": "עקוף את שפת המערכת",
     "Restart app to apply to system menus": "הפעל מחדש את היישום כדי להחיל על תפריטי המערכת",
@@ -460,6 +464,7 @@ private let translationDict: [String: String] = [
     "SCREEN ID": "מזהה מסך",
     "Windows": "חלונות",
     "windows": "חלונות",
+    "%@ · %@/%@ windows": "שוחזרו %@ מתוך %@ חלונות · %@",
     "Created": "נוצר",
     "Updated": "עודכן",
     "External Screens Missing": "מסכים חיצוניים חסרים",
@@ -626,6 +631,7 @@ private let translationDict: [String: String] = [
 ]
 
 private let reverseDict: [String: String] = [
+    "מכין את מעקב החלונות…": "Preparing window tracking…",
     "מראה והתראות": "Appearance & Notifications",
     "%@ אינו בסידור הנוכחי": "%@ is not in this layout",
     "צג Retina מובנה": "Built-in Retina Display",

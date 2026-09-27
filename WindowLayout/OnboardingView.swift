@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Carbon
 
 // MARK: - Root
@@ -7,7 +8,8 @@ struct OnboardingView: View {
     var onComplete: () -> Void
 
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
-    @State private var phase: OnboardingPhase = .languagePicker
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @State private var phase: OnboardingPhase = .setup
 
     var body: some View {
         ZStack {
@@ -15,25 +17,14 @@ struct OnboardingView: View {
                 .ignoresSafeArea()
 
             switch phase {
-            case .languagePicker:
-                OnboardingLanguageView(selectedLanguage: $appLanguage) {
-                    withAnimation(.spring(response: 0.52, dampingFraction: 0.82)) {
-                        phase = .permissions
-                    }
-                }
-                .transition(.asymmetric(
-                    insertion: .opacity,
-                    removal: .move(edge: .leading).combined(with: .opacity)
-                ))
-
-            case .permissions:
-                OnboardingPermissionsView(language: appLanguage) {
+            case .setup:
+                OnboardingSetupView(selectedLanguage: $appLanguage) {
                     withAnimation(.spring(response: 0.52, dampingFraction: 0.82)) {
                         phase = .guide
                     }
                 }
                 .transition(.asymmetric(
-                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    insertion: .opacity,
                     removal: .move(edge: .leading).combined(with: .opacity)
                 ))
 
@@ -45,349 +36,231 @@ struct OnboardingView: View {
                     ))
             }
         }
-        .frame(width: 560, height: 520)
+        .frame(width: 760, height: 460)
         .environment(\.layoutDirection, appLanguage == .hebrew ? .rightToLeft : .leftToRight)
+        .appThemeColorScheme(themeColor)
     }
 }
 
-private enum OnboardingPhase { case languagePicker, permissions, guide }
+private enum OnboardingPhase { case setup, guide }
 
-// MARK: - Phase 1: Language Picker
+// MARK: - Phase 1: Permissions & Mode
 
-struct OnboardingLanguageView: View {
+struct OnboardingSetupView: View {
+    @EnvironmentObject private var manager: WindowManager
     @Binding var selectedLanguage: AppLanguage
-    var onContinue: () -> Void
-
-    @State private var hoverContinue = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-
-            // App icon glow
-            ZStack {
-                Circle()
-                    .fill(LinearGradient(
-                        colors: [Color.accentColor.opacity(0.28), Color.accentColor.opacity(0.06)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: 96, height: 96)
-                    .overlay { Circle().stroke(Color.accentColor.opacity(0.22), lineWidth: 1) }
-                    .shadow(color: Color.accentColor.opacity(0.22), radius: 22, x: 0, y: 8)
-
-                Image(systemName: "macwindow.on.rectangle")
-                    .font(.system(size: 44, weight: .light))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .padding(.bottom, 14)
-
-            Text("RememberMyWindows")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-
-            Text("Your window manager".localized(selectedLanguage))
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-                .padding(.top, 4)
-
-            Spacer()
-
-            Text("Choose Your Language".localized(selectedLanguage))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 12)
-
-            // Sleek Custom Glass Language List Card — works in Dark Mode & RTL cleanly
-            VStack(spacing: 6) {
-                languageOptionRow(
-                    lang: .auto,
-                    title: "System Default".localized(selectedLanguage),
-                    subtitle: "Follow System Language".localized(selectedLanguage),
-                    iconName: "gearshape.fill",
-                    iconColor: .blue
-                )
-                
-                Divider()
-                    .padding(.horizontal, 10)
-                    .opacity(0.3)
-
-                languageOptionRow(
-                    lang: .english,
-                    title: "English",
-                    subtitle: "English",
-                    iconName: "globe.americas.fill",
-                    iconColor: .indigo
-                )
-
-                Divider()
-                    .padding(.horizontal, 10)
-                    .opacity(0.3)
-
-                languageOptionRow(
-                    lang: .hebrew,
-                    title: "עברית",
-                    subtitle: "Hebrew".localized(selectedLanguage),
-                    iconName: "globe.europe.africa.fill",
-                    iconColor: .orange
-                )
-            }
-            .padding(8)
-            .frame(width: 280)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.primary.opacity(0.06))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                    )
-            )
-            .environment(\.layoutDirection, selectedLanguage == .hebrew ? .rightToLeft : .leftToRight)
-            .padding(.bottom, 24)
-
-            Button {
-                onContinue()
-            } label: {
-                HStack(spacing: 8) {
-                    Text(selectedLanguage == .hebrew ? "המשך" : "Continue")
-                    Image(systemName: selectedLanguage == .hebrew ? "arrow.left" : "arrow.right")
-                }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 24).frame(minHeight: 44)
-                .background(Color.accentColor)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: Color.accentColor.opacity(0.4), radius: 12, x: 0, y: 4)
-                .scaleEffect(hoverContinue ? 1.03 : 1.0)
-                .animation(.spring(response: 0.25, dampingFraction: 0.75), value: hoverContinue)
-            }
-            .buttonStyle(.plain)
-            .onHover { hoverContinue = $0 }
-
-            Spacer()
-        }
-        .padding(.horizontal, 60)
-    }
-
-    @ViewBuilder
-    private func languageOptionRow(lang: AppLanguage, title: String, subtitle: String, iconName: String, iconColor: Color) -> some View {
-        let isSelected = selectedLanguage == lang
-
-        Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                selectedLanguage = lang
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: iconName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 24, height: 24)
-                    .background(iconColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(size: 13, weight: isSelected ? .bold : .medium))
-                        .foregroundStyle(isSelected ? .primary : .secondary)
-
-                    Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                }
-
-                Spacer()
-
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                        .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(isSelected ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Phase 1.5: Accessibility Permissions
-
-struct OnboardingPermissionsView: View {
-    let language: AppLanguage
     var onContinue: () -> Void
 
     @State private var hasAccessibility = AXIsProcessTrusted()
     @State private var hasFinderAutomation = false
-    @State private var hoverGrant = false
-    @State private var hoverSkip  = false
-    @State private var pulseShield = false
+    @State private var hoverPrimary = false
     @State private var permissionTimer: Timer?
 
     private var allGranted: Bool { hasAccessibility && hasFinderAutomation }
 
     var body: some View {
         VStack(spacing: 0) {
-            Spacer()
+            header
 
-            // Combined shield icon
-            ZStack {
-                Circle()
-                    .fill(LinearGradient(
-                        colors: [Color.orange.opacity(0.30), Color.orange.opacity(0.06)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: 96, height: 96)
-                    .overlay { Circle().stroke(Color.orange.opacity(0.25), lineWidth: 1) }
-                    .shadow(color: Color.orange.opacity(0.22), radius: 22, x: 0, y: 8)
-                    .scaleEffect(pulseShield ? 1.06 : 1.0)
-                    .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true), value: pulseShield)
-
-                Image(systemName: allGranted ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
-                    .font(.system(size: 44, weight: .light))
-                    .foregroundStyle(allGranted ? Color.green : Color.orange)
-                    .contentTransition(.symbolEffect(.replace))
+            HStack(alignment: .top, spacing: 14) {
+                modePickerPanel
+                permissionsPanel
             }
-            .padding(.bottom, 20)
+            .padding(.horizontal, 28)
 
-            Text(allGranted
-                 ? "Permissions granted".localized(language)
-                 : "Permissions Required".localized(language))
-                .font(.system(size: 22, weight: .bold, design: .rounded))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(allGranted ? .green : .primary)
-                .animation(.easeInOut(duration: 0.3), value: allGranted)
+            Spacer(minLength: 10)
 
-            Text("Two quick permissions let RememberMyWindows do its job properly.".localized(language))
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 440)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
-
-            // Permission cards
-            VStack(spacing: 12) {
-                // 1. Finder Automation (first, as user requested)
-                permissionCard(
-                    icon: "folder.fill",
-                    iconColor: .blue,
-                    title: "Finder Control".localized(language),
-                    description: "Required for the Desktop Toggle — collapses and restores Finder windows.".localized(language),
-                    isGranted: hasFinderAutomation,
-                    buttonLabel: "Grant Finder Access…".localized(language)
-                ) {
-                    triggerFinderPermission()
-                }
-
-                // 2. Accessibility
-                permissionCard(
-                    icon: "figure.wave",
-                    iconColor: .orange,
-                    title: "Accessibility".localized(language),
-                    description: "Needed to restore window positions in apps like Chrome, Telegram, etc.".localized(language),
-                    isGranted: hasAccessibility,
-                    buttonLabel: "Grant Accessibility…".localized(language)
-                ) {
-                    NSWorkspace.shared.open(
-                        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-                    )
-                }
-            }
-            .frame(maxWidth: 440)
-
-            Spacer()
-
-            // Continue / Skip
-            if allGranted {
-                Button { onContinue() } label: {
-                    HStack(spacing: 8) {
-                        Text("Continue".localized(language))
-                        Image(systemName: "arrow.right")
-                    }
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 24).frame(minHeight: 44)
-                    .background(Color.green)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .shadow(color: Color.green.opacity(0.4), radius: 12, x: 0, y: 4)
-                    .scaleEffect(hoverGrant ? 1.03 : 1.0)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.75), value: hoverGrant)
-                }
-                .buttonStyle(.plain)
-                .onHover { hoverGrant = $0 }
-                .transition(.scale.combined(with: .opacity))
-            } else {
-                Button {
-                    // If Accessibility not yet granted and it is the missing one, open it
-                    if !hasAccessibility {
-                        NSWorkspace.shared.open(
-                            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-                        )
-                    } else if !hasFinderAutomation {
-                        triggerFinderPermission()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "lock.open.fill")
-                        Text("Grant Permissions…".localized(language))
-                    }
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 24).frame(minHeight: 44)
-                    .background(Color.orange)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .shadow(color: Color.orange.opacity(0.4), radius: 12, x: 0, y: 4)
-                    .scaleEffect(hoverGrant ? 1.03 : 1.0)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.75), value: hoverGrant)
-                }
-                .buttonStyle(.plain)
-                .onHover { hoverGrant = $0 }
-            }
-
-            // Skip link
-            Button { onContinue() } label: {
-                Text("Skip for now".localized(language))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
-                    .underline()
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 12)
-            .onHover { hoverSkip = $0 }
-
-            Spacer()
+            footer
         }
-        .padding(.horizontal, 50)
+        .padding(.vertical, 24)
         .onAppear {
-            pulseShield = true
-            // NOTE: Do NOT call checkFinderPermission here – that would
-            // silently fire the macOS Automation dialog before the user sees the UI.
-            // Instead, start with false and let the user tap the button.
-            permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-                let ax = AXIsProcessTrusted()
-                if ax != hasAccessibility {
-                    withAnimation { hasAccessibility = ax }
-                    if ax { closeSystemSettings() }
-                }
-                // Poll using the SILENT check (no dialog triggered)
-                let finder = checkFinderPermissionSilently()
-                if finder != hasFinderAutomation {
-                    withAnimation { hasFinderAutomation = finder }
-                }
-            }
+            startPermissionMonitoring()
         }
-        .onDisappear { permissionTimer?.invalidate() }
+        .onDisappear {
+            permissionTimer?.invalidate()
+            permissionTimer = nil
+        }
     }
 
-    // MARK: - Permission Card
+    private var appIconImage: NSImage? {
+        if let path = Bundle.main.path(forResource: "AppIcon", ofType: "png"),
+           let image = NSImage(contentsOfFile: path) {
+            return image
+        }
+        if let path = Bundle.main.path(forResource: "AppIcon", ofType: "icns"),
+           let image = NSImage(contentsOfFile: path) {
+            return image
+        }
+        if let image = NSImage(contentsOfFile: "/Applications/RememberMyWindows/AppIcon.png") {
+            return image
+        }
+        if let image = NSImage(contentsOfFile: "/Applications/RememberMyWindows/WindowLayout/AppIcon.png") {
+            return image
+        }
+        if let image = NSImage(contentsOfFile: "/Applications/RememberMyWindows/WindowLayout/AppIcon.icns") {
+            return image
+        }
+        if let icon = NSApp?.applicationIconImage {
+            return icon
+        }
+        return NSImage(named: "AppIcon")
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            if let icon = appIconImage {
+                Image(nsImage: icon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 58, height: 58)
+                    .shadow(color: Color.black.opacity(0.18), radius: 6, x: 0, y: 3)
+            } else {
+                ZStack {
+                    Circle()
+                        .fill(LinearGradient(
+                            colors: [Color.accentColor.opacity(0.28), Color.accentColor.opacity(0.06)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ))
+                        .frame(width: 60, height: 60)
+                        .overlay { Circle().stroke(Color.accentColor.opacity(0.22), lineWidth: 1) }
+                        .shadow(color: Color.accentColor.opacity(0.22), radius: 18, x: 0, y: 6)
+
+                    Image(systemName: "macwindow.on.rectangle")
+                        .font(.system(size: 27, weight: .light))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+
+            VStack(alignment: selectedLanguage == .hebrew ? .trailing : .leading, spacing: 2) {
+                Text("RememberMyWindows")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+
+                Text("Your window manager".localized(selectedLanguage))
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
+
+            if manager.isWindowServerInitializing {
+                WindowServerLoadingStatus(language: selectedLanguage)
+                    .transition(.opacity)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: selectedLanguage == .hebrew ? .trailing : .leading)
+        .padding(.horizontal, 28)
+        .padding(.bottom, 18)
+    }
+
+    private var modePickerPanel: some View {
+        OBIllustrationModePicker()
+            .frame(width: 360, height: 220)
+            .liquidGlass(cornerRadius: 16, style: .card)
+            .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 6)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Choose your layout mode".localized(selectedLanguage))
+    }
+
+    private var permissionsPanel: some View {
+        VStack(alignment: selectedLanguage == .hebrew ? .trailing : .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill((allGranted ? Color.green : Color.orange).opacity(0.14))
+                        .frame(width: 30, height: 30)
+
+                    Image(systemName: allGranted ? "checkmark.shield.fill" : "lock.shield.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(allGranted ? Color.green : Color.orange)
+                }
+                .frame(width: 30, height: 30)
+
+                VStack(alignment: selectedLanguage == .hebrew ? .trailing : .leading, spacing: 1) {
+                    Text(allGranted ? "Permissions granted".localized(selectedLanguage) : "Permissions Required".localized(selectedLanguage))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(allGranted ? Color.green : Color.primary)
+
+                    Text("Two quick permissions let RememberMyWindows do its job properly.".localized(selectedLanguage))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: selectedLanguage == .hebrew ? .trailing : .leading)
+            }
+
+            permissionCard(
+                icon: "folder.fill",
+                iconColor: .blue,
+                title: "Finder Control".localized(selectedLanguage),
+                description: "Required for the Desktop Toggle — collapses and restores Finder windows.".localized(selectedLanguage),
+                isGranted: hasFinderAutomation,
+                buttonLabel: "Grant Finder Access…".localized(selectedLanguage)
+            ) {
+                triggerFinderPermission()
+            }
+
+            permissionCard(
+                icon: "figure.wave",
+                iconColor: .orange,
+                title: "Accessibility".localized(selectedLanguage),
+                description: "Needed to restore window positions in apps like Chrome, Telegram, etc.".localized(selectedLanguage),
+                isGranted: hasAccessibility,
+                buttonLabel: "Grant Accessibility…".localized(selectedLanguage)
+            ) {
+                openAccessibilitySettings()
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+        }
+    }
+
+    private var footer: some View {
+        VStack(spacing: 8) {
+            Button(action: primaryAction) {
+                HStack(spacing: 8) {
+                    Image(systemName: allGranted
+                          ? (selectedLanguage == .hebrew ? "arrow.left" : "arrow.right")
+                          : "lock.open.fill")
+                    Text(allGranted
+                         ? "Continue".localized(selectedLanguage)
+                         : "Grant Permissions…".localized(selectedLanguage))
+                }
+                .font(.system(size: 15, weight: .semibold))
+                // Both status fills are bright in Light Mode; black keeps the
+                // action label readable on either the orange or green state.
+                .foregroundStyle(.black)
+                .padding(.horizontal, 22)
+                .frame(minWidth: 188, minHeight: 42)
+                .background(allGranted ? Color.green : Color.orange, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: (allGranted ? Color.green : Color.orange).opacity(0.35), radius: 10, x: 0, y: 4)
+                .scaleEffect(hoverPrimary ? 1.03 : 1)
+                .animation(.spring(response: 0.25, dampingFraction: 0.75), value: hoverPrimary)
+            }
+            .buttonStyle(.plain)
+            .onHover { hoverPrimary = $0 }
+
+            Button(action: onContinue) {
+                Text("Skip for now".localized(selectedLanguage))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.primary.opacity(0.07), in: Capsule())
+                    .overlay {
+                        Capsule()
+                            .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 28)
+    }
 
     @ViewBuilder
     private func permissionCard(
@@ -399,69 +272,100 @@ struct OnboardingPermissionsView: View {
         buttonLabel: String,
         onTap: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 14) {
-            // Status icon
+        HStack(alignment: .top, spacing: 10) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(iconColor.opacity(0.15))
-                    .frame(width: 44, height: 44)
-                if isGranted {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(.green)
-                        .transition(.scale.combined(with: .opacity))
-                } else {
-                    Image(systemName: icon)
-                        .font(.system(size: 20))
-                        .foregroundStyle(iconColor)
-                }
-            }
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isGranted)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(iconColor.opacity(0.14))
+                    .frame(width: 32, height: 32)
 
-            // Text
-            VStack(alignment: language == .hebrew ? .trailing : .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isGranted ? .green : .primary)
-                    .animation(.easeInOut(duration: 0.2), value: isGranted)
+                Image(systemName: isGranted ? "checkmark" : icon)
+                    .font(.system(size: isGranted ? 14 : 15, weight: .semibold))
+                    .foregroundStyle(isGranted ? AnyShapeStyle(.green) : AnyShapeStyle(iconColor))
+                    .contentTransition(.symbolEffect(.replace))
+            }
+
+            VStack(alignment: selectedLanguage == .hebrew ? .trailing : .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(isGranted ? AnyShapeStyle(.green) : AnyShapeStyle(.primary))
+                        .lineLimit(1)
+
+                    Spacer(minLength: 4)
+
+                    if isGranted {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.green)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+
                 Text(description)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(language == .hebrew ? .trailing : .leading)
+                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-            }
 
-            Spacer(minLength: 8)
-
-            // Grant button (custom capsule pill — never truncates with ...)
-            if !isGranted {
-                Button(action: onTap) {
-                    Text(buttonLabel)
-                        .font(.system(size: 11, weight: .semibold))
-                        .lineLimit(1)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(.white)
-                        .background(iconColor)
-                        .clipShape(Capsule())
-                        .shadow(color: iconColor.opacity(0.3), radius: 3, x: 0, y: 2)
+                if !isGranted {
+                    Button(action: onTap) {
+                        Label(buttonLabel, systemImage: "arrow.up.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .foregroundStyle(iconColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(iconColor.opacity(0.12), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
                 }
-                .buttonStyle(.plain)
-                .fixedSize()
             }
+            .frame(maxWidth: .infinity, alignment: selectedLanguage == .hebrew ? .trailing : .leading)
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isGranted ? Color.green.opacity(0.4) : Color.primary.opacity(0.1), lineWidth: 1)
+                .stroke(isGranted ? Color.green.opacity(0.30) : Color.primary.opacity(0.10), lineWidth: 1)
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isGranted)
+    }
+
+    private func primaryAction() {
+        if allGranted {
+            onContinue()
+        } else if !hasAccessibility {
+            openAccessibilitySettings()
+        } else if !hasFinderAutomation {
+            triggerFinderPermission()
+        }
+    }
+
+    private func openAccessibilitySettings() {
+        NSWorkspace.shared.open(
+            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
         )
     }
 
-    // MARK: - Finder Permission Helpers
+    private func startPermissionMonitoring() {
+        permissionTimer?.invalidate()
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            let ax = AXIsProcessTrusted()
+            if ax != hasAccessibility {
+                withAnimation { hasAccessibility = ax }
+                if ax { closeSystemSettings() }
+            }
 
-    /// Triggers the macOS Automation permission dialog for Finder by sending an Apple Event.
-    /// Only call this from a user-initiated action (button tap) — it shows the system dialog.
+            let finder = checkFinderPermissionSilently()
+            if finder != hasFinderAutomation {
+                withAnimation { hasFinderAutomation = finder }
+            }
+        }
+    }
+
+    /// Triggers the macOS Automation permission dialog for Finder from a user action.
     private func triggerFinderPermission() {
         WindowManager.shared.requestFinderAutomationPermission()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
@@ -470,8 +374,7 @@ struct OnboardingPermissionsView: View {
         }
     }
 
-    /// Checks Finder automation permission silently using AEDeterminePermissionToAutomateTarget
-    /// with askUserIfNeeded = false.  This NEVER shows the macOS dialog.
+    /// Reads Finder's Automation permission without prompting for it.
     private func checkFinderPermissionSilently() -> Bool {
         guard let finder = NSRunningApplication
                 .runningApplications(withBundleIdentifier: "com.apple.finder")
@@ -481,7 +384,6 @@ struct OnboardingPermissionsView: View {
         let createErr = AECreateDesc(typeKernelProcessID, &pid, MemoryLayout<pid_t>.size, &target)
         guard createErr == noErr else { return false }
         defer { AEDisposeDesc(&target) }
-        // askUserIfNeeded = false  →  never prompts, just reads TCC state
         let status = AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, false)
         return status == noErr
     }
@@ -499,6 +401,34 @@ struct OnboardingPermissionsView: View {
     }
 }
 
+/// A compact, app-owned loading state for the short WindowServer startup scan.
+/// Keeping it in the existing onboarding file also lets the main window reuse
+/// the same visual language without introducing another project resource.
+struct WindowServerLoadingStatus: View {
+    var language: AppLanguage
+
+    var body: some View {
+        HStack(spacing: 7) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(.accentColor)
+
+            Text("Preparing window tracking…".localized(language))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.primary.opacity(0.07), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("Preparing window tracking…".localized(language)))
+    }
+}
 
 // MARK: - Phase 2: Guided Tour
 
@@ -506,10 +436,26 @@ struct OnboardingGuideView: View {
     let language: AppLanguage
     var onComplete: () -> Void
 
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @Environment(\.colorScheme) private var colorScheme
     @State private var currentSlide = 0
     @State private var hoverNext = false
 
-    private var slides: [OBSlide] { OBSlide.all(for: language) }
+    private var guideAccent: Color {
+        themeColor.color(seed: 0)
+    }
+
+    private var guideAccentText: Color {
+        if themeColor.isGalaxy {
+            return .black
+        }
+        return themeColor.onAccentColor(for: colorScheme)
+    }
+
+    // Personalisation comes immediately after the setup/permissions screen,
+    // before the feature walkthrough begins. Keep the settings carousel's
+    // regular feature order unchanged by reordering only this tour sequence.
+    private var slides: [OBSlide] { OBSlide.onboarding(for: language) }
     private var isLast: Bool { currentSlide == slides.count - 1 }
 
     var body: some View {
@@ -535,10 +481,17 @@ struct OnboardingGuideView: View {
                 // Dot indicator
                 HStack(spacing: 8) {
                     ForEach(slides.indices, id: \.self) { i in
-                        Capsule()
-                            .fill(i == currentSlide ? Color.accentColor : Color.primary.opacity(0.2))
-                            .frame(width: i == currentSlide ? 22 : 8, height: 8)
-                            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: currentSlide)
+                        Button {
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
+                                currentSlide = i
+                            }
+                        } label: {
+                            Capsule()
+                                .fill(i == currentSlide ? Color.accentColor : Color.primary.opacity(0.2))
+                                .frame(width: i == currentSlide ? 22 : 8, height: 8)
+                                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: currentSlide)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
@@ -558,11 +511,11 @@ struct OnboardingGuideView: View {
                         Image(systemName: isLast ? "checkmark" : (language == .hebrew ? "arrow.left" : "arrow.right"))
                     }
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(guideAccentText)
                     .padding(.horizontal, 24).frame(minHeight: 44)
-                    .background(Color.accentColor)
+                    .background(guideAccent)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .shadow(color: Color.accentColor.opacity(0.4), radius: 12, x: 0, y: 4)
+                    .shadow(color: guideAccent.opacity(0.4), radius: 12, x: 0, y: 4)
                     .scaleEffect(hoverNext ? 1.03 : 1.0)
                     .animation(.spring(response: 0.25, dampingFraction: 0.75), value: hoverNext)
                 }
@@ -633,6 +586,16 @@ struct OBSlide: Identifiable {
                     illustration: AnyView(OBIllustrationCustomize())),
         ]
     }
+
+    @MainActor
+    static func onboarding(for lang: AppLanguage) -> [OBSlide] {
+        let slides = all(for: lang)
+        guard let customize = slides.first(where: { $0.id == 8 }) else {
+            return slides
+        }
+
+        return [customize] + slides.filter { $0.id != customize.id }
+    }
 }
 
 struct OBSlideView: View {
@@ -643,32 +606,35 @@ struct OBSlideView: View {
     @State private var timer: Timer?
 
     var body: some View {
-        HStack(spacing: 20) {
-            Spacer()
+        HStack(spacing: 24) {
+            Spacer(minLength: 4)
 
-            if slide.id == 7 {
-                OBIllustrationSettingsGuide(activeIndex: settingsActiveIndex)
-                    .frame(width: 320, height: 200)
-                    .liquidGlass(cornerRadius: 20, style: .card)
-                    .shadow(color: .black.opacity(0.14), radius: 20, x: 0, y: 8)
-            } else {
-                slide.illustration
-                    .frame(width: 320, height: 200)
-                    .liquidGlass(cornerRadius: 20, style: .card)
-                    .shadow(color: .black.opacity(0.14), radius: 20, x: 0, y: 8)
+            // High-detail realistic macOS Sequoia mockup canvas
+            ZStack {
+                if slide.id == 7 {
+                    OBIllustrationSettingsGuide(activeIndex: settingsActiveIndex)
+                } else {
+                    slide.illustration
+                }
             }
+            .frame(width: 380, height: 236)
 
-            VStack(alignment: language == .hebrew ? .trailing : .leading, spacing: 8) {
+            // Onboarding explainers keep their supporting copy. The separate
+            // Settings Feature Guide carousel controls its own shorter layout.
+            VStack(alignment: language == .hebrew ? .trailing : .leading, spacing: 10) {
                 Text(slide.headline)
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(.primary)
                     .multilineTextAlignment(language == .hebrew ? .trailing : .leading)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if slide.id == 7 {
                     Text(getSettingsDescription(for: settingsActiveIndex, lang: language))
-                        .font(.system(size: 12))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(language == .hebrew ? .trailing : .leading)
-                        .lineSpacing(2)
+                        .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
                         .id(settingsActiveIndex)
                         .transition(.asymmetric(
@@ -677,21 +643,22 @@ struct OBSlideView: View {
                         ))
                 } else {
                     Text(slide.body)
-                        .font(.system(size: 12))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(language == .hebrew ? .trailing : .leading)
-                        .lineSpacing(2)
+                        .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .frame(width: 150, alignment: language == .hebrew ? .trailing : .leading)
+            .frame(width: 200, alignment: language == .hebrew ? .trailing : .leading)
 
-            Spacer()
+            Spacer(minLength: 4)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
         .onAppear {
             if slide.id == 7 {
-                timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+                timer = Timer.scheduledTimer(withTimeInterval: 3.2, repeats: true) { _ in
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         settingsActiveIndex = (settingsActiveIndex + 1) % 4
                     }
@@ -719,176 +686,2530 @@ struct OBSlideView: View {
     }
 }
 
-// MARK: - Illustrations
+// MARK: - Shared Realistic macOS Tour Components
+
+struct TourDesktopBackground: View {
+    var body: some View {
+        Color.clear
+    }
+}
+
+struct RealisticTrafficLights: View {
+    var size: CGFloat = 5
+    var body: some View {
+        HStack(spacing: 3.5) {
+            Circle()
+                .fill(Color(red: 1.0, green: 0.36, blue: 0.32))
+                .frame(width: size, height: size)
+                .overlay(Circle().stroke(Color.black.opacity(0.25), lineWidth: 0.5))
+            Circle()
+                .fill(Color(red: 1.0, green: 0.74, blue: 0.18))
+                .frame(width: size, height: size)
+                .overlay(Circle().stroke(Color.black.opacity(0.25), lineWidth: 0.5))
+            Circle()
+                .fill(Color(red: 0.16, green: 0.79, blue: 0.25))
+                .frame(width: size, height: size)
+                .overlay(Circle().stroke(Color.black.opacity(0.25), lineWidth: 0.5))
+        }
+    }
+}
+
+struct TourTrafficLights: View {
+    var size: CGFloat = 5
+    var body: some View {
+        RealisticTrafficLights(size: size)
+    }
+}
+
+// MARK: - Photorealistic Universal App Windows
+
+struct RealisticSafariWindow: View {
+    var width: CGFloat = 145
+    var height: CGFloat = 85
+    var urlText: String = "apple.com/macos"
+    var tabTitle: String = "macOS Sequoia"
+    var showsText: Bool = true
+    var isReaderMode: Bool = false
+    var isHighlightBorder: Bool = false
+    var highlightColor: Color = .accentColor
+
+    var body: some View {
+        VStack(spacing: 0) {
+            toolbarView
+            tabStripView
+            contentBodyView
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isHighlightBorder ? highlightColor.opacity(0.85) : Color.white.opacity(0.18), lineWidth: isHighlightBorder ? 1.0 : 0.6)
+        )
+        .shadow(color: isHighlightBorder ? highlightColor.opacity(0.35) : Color.black.opacity(0.35), radius: 10, x: 0, y: 5)
+    }
+
+    private var toolbarView: some View {
+        HStack(spacing: 4) {
+            RealisticTrafficLights(size: 4)
+
+            HStack(spacing: 3) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.3))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.3))
+            }
+            .padding(.leading, 1)
+
+            HStack(spacing: 3) {
+                Image(systemName: isReaderMode ? "doc.plaintext.fill" : "lock.fill")
+                    .font(.system(size: 5))
+                    .foregroundStyle(isReaderMode ? .blue : .white.opacity(0.5))
+                if showsText {
+                    Text(urlText)
+                        .font(.system(size: 6, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                } else {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.white.opacity(0.32))
+                        .frame(height: 2.5)
+                        .frame(maxWidth: .infinity)
+                }
+                Spacer()
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 4.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Color.white.opacity(0.12), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.15), lineWidth: 0.5))
+
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 5.5))
+                .foregroundStyle(.white.opacity(0.5))
+            Image(systemName: "plus")
+                .font(.system(size: 5.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3.5)
+        .background(Color(white: 0.16).opacity(0.95))
+    }
+
+    private var tabStripView: some View {
+        HStack(spacing: 4) {
+            HStack(spacing: 3) {
+                Image(systemName: "safari.fill")
+                    .font(.system(size: 5))
+                    .foregroundStyle(.blue)
+                if showsText {
+                    Text(tabTitle)
+                        .font(.system(size: 5.5, weight: .medium))
+                        .foregroundStyle(.white)
+                } else {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: 26, height: 2.5)
+                }
+                Image(systemName: "xmark")
+                    .font(.system(size: 4.5))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(Color(white: 0.22), in: RoundedRectangle(cornerRadius: 3))
+            Spacer()
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color(white: 0.12))
+    }
+
+    private var contentBodyView: some View {
+        ZStack {
+            Color(white: 0.08)
+
+            if isReaderMode && showsText {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("The Future of macOS")
+                        .font(.system(size: 7.5, weight: .bold, design: .serif))
+                        .foregroundStyle(.white)
+                    Text("Streamlined productivity through automated window layouts and dynamic display management.")
+                        .font(.system(size: 5.5, weight: .regular, design: .serif))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(3)
+                        .lineSpacing(1.5)
+                    Spacer()
+                }
+                .padding(6)
+                .transition(.opacity)
+            } else if isReaderMode {
+                VStack(alignment: .leading, spacing: 4) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.white.opacity(0.55))
+                        .frame(width: 72, height: 3)
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.white.opacity(0.25))
+                        .frame(width: 120, height: 2)
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: 92, height: 2)
+                    Spacer()
+                }
+                .padding(6)
+                .transition(.opacity)
+            } else {
+                VStack(spacing: 4) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1.5) {
+                            RoundedRectangle(cornerRadius: 1).fill(Color.blue).frame(width: 24, height: 3)
+                            RoundedRectangle(cornerRadius: 1).fill(Color.white.opacity(0.7)).frame(width: 50, height: 2.5)
+                        }
+                        Spacer()
+                        Circle().fill(Color.purple.opacity(0.6)).frame(width: 12, height: 12)
+                    }
+                    .padding(4)
+                    .background(Color(white: 0.14), in: RoundedRectangle(cornerRadius: 3))
+
+                    HStack(spacing: 3) {
+                        VStack(alignment: .leading, spacing: 1.5) {
+                            RoundedRectangle(cornerRadius: 1).fill(Color.orange.opacity(0.7)).frame(height: 10)
+                            RoundedRectangle(cornerRadius: 1).fill(Color.white.opacity(0.4)).frame(width: 28, height: 2)
+                        }
+                        .padding(2)
+                        .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 2))
+
+                        VStack(alignment: .leading, spacing: 1.5) {
+                            RoundedRectangle(cornerRadius: 1).fill(Color.green.opacity(0.7)).frame(height: 10)
+                            RoundedRectangle(cornerRadius: 1).fill(Color.white.opacity(0.4)).frame(width: 28, height: 2)
+                        }
+                        .padding(2)
+                        .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 2))
+                    }
+                }
+                .padding(5)
+            }
+        }
+    }
+}
+
+struct RealisticXcodeWindow: View {
+    var width: CGFloat = 145
+    var height: CGFloat = 85
+    var fileName: String = "WindowLayout.swift"
+    var isHighlightBorder: Bool = false
+    var highlightColor: Color = .accentColor
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Xcode Toolbar
+            HStack(spacing: 4) {
+                RealisticTrafficLights(size: 4)
+
+                // Scheme pill
+                HStack(spacing: 2.5) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 4.5))
+                        .foregroundStyle(.green)
+                    Text("RememberMyWindows")
+                        .font(.system(size: 5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 3.5))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Text("Mac")
+                        .font(.system(size: 5))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1.5)
+                .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 3))
+
+                Spacer()
+
+                HStack(spacing: 2) {
+                    Image(systemName: "swift")
+                        .font(.system(size: 5))
+                        .foregroundStyle(.orange)
+                    Text(fileName)
+                        .font(.system(size: 5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+            .background(Color(red: 0.13, green: 0.14, blue: 0.17))
+
+            // Editor with Navigator Sidebar & Gutter
+            HStack(spacing: 0) {
+                // Mini Project Navigator Sidebar
+                VStack(alignment: .leading, spacing: 2.5) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "folder.fill").font(.system(size: 4)).foregroundStyle(.blue)
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color.white.opacity(0.4)).frame(width: 14, height: 2)
+                    }
+                    HStack(spacing: 2) {
+                        Image(systemName: "swift").font(.system(size: 4)).foregroundStyle(.orange)
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color.white.opacity(0.6)).frame(width: 18, height: 2)
+                    }
+                    HStack(spacing: 2) {
+                        Image(systemName: "swift").font(.system(size: 4)).foregroundStyle(.orange)
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color.white.opacity(0.3)).frame(width: 12, height: 2)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 3)
+                .frame(width: 26)
+                .background(Color(red: 0.11, green: 0.12, blue: 0.14))
+
+                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 0.5)
+
+                // Code Gutter + Syntax Highlighted Editor
+                VStack(alignment: .leading, spacing: 2) {
+                    // Line 1: import SwiftUI
+                    HStack(spacing: 3) {
+                        Text("1").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.3)).frame(width: 6)
+                        Text("import").font(.system(size: 4.5, weight: .bold, design: .monospaced)).foregroundStyle(Color(red: 0.95, green: 0.35, blue: 0.65))
+                        Text("SwiftUI").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(Color(red: 0.38, green: 0.78, blue: 0.92))
+                    }
+                    // Line 2: struct WindowManager {
+                    HStack(spacing: 3) {
+                        Text("2").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.3)).frame(width: 6)
+                        Text("struct").font(.system(size: 4.5, weight: .bold, design: .monospaced)).foregroundStyle(Color(red: 0.95, green: 0.35, blue: 0.65))
+                        Text("Layout").font(.system(size: 4.5, weight: .semibold, design: .monospaced)).foregroundStyle(Color(red: 0.96, green: 0.82, blue: 0.44))
+                        Text(": View {").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
+                    }
+                    // Line 3: @State var isRestored = true
+                    HStack(spacing: 3) {
+                        Text("3").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.3)).frame(width: 6)
+                        Text("  @State").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(Color(red: 0.88, green: 0.55, blue: 0.28))
+                        Text("var").font(.system(size: 4.5, weight: .bold, design: .monospaced)).foregroundStyle(Color(red: 0.95, green: 0.35, blue: 0.65))
+                        Text("saved").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white)
+                        Text("= true").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(Color(red: 0.38, green: 0.78, blue: 0.92))
+                    }
+                    // Line 4: var body: some View {
+                    HStack(spacing: 3) {
+                        Text("4").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.3)).frame(width: 6)
+                        Text("  var").font(.system(size: 4.5, weight: .bold, design: .monospaced)).foregroundStyle(Color(red: 0.95, green: 0.35, blue: 0.65))
+                        Text("body:").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.9))
+                        Text("some").font(.system(size: 4.5, weight: .bold, design: .monospaced)).foregroundStyle(Color(red: 0.95, green: 0.35, blue: 0.65))
+                        Text("View").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(Color(red: 0.38, green: 0.78, blue: 0.92))
+                    }
+                    // Line 5: restoreWindows()
+                    HStack(spacing: 3) {
+                        Text("5").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.3)).frame(width: 6)
+                        Text("    restoreLayout()").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(Color(red: 0.45, green: 0.75, blue: 0.98))
+                    }
+                    // Line 6: }
+                    HStack(spacing: 3) {
+                        Text("6").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.3)).frame(width: 6)
+                        Text("  }").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(red: 0.09, green: 0.10, blue: 0.12))
+            }
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isHighlightBorder ? highlightColor.opacity(0.85) : Color.white.opacity(0.18), lineWidth: isHighlightBorder ? 1.0 : 0.6)
+        )
+        .shadow(color: isHighlightBorder ? highlightColor.opacity(0.35) : Color.black.opacity(0.35), radius: 10, x: 0, y: 5)
+    }
+}
+
+struct RealisticTerminalWindow: View {
+    var width: CGFloat = 135
+    var height: CGFloat = 75
+    var isHighlightBorder: Bool = false
+    var highlightColor: Color = .accentColor
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Terminal Header
+            HStack(spacing: 4) {
+                RealisticTrafficLights(size: 4)
+                Spacer()
+                Text("zsh — 80×24")
+                    .font(.system(size: 5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.6))
+                Spacer()
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color(white: 0.14))
+
+            // Terminal Console Body
+            VStack(alignment: .leading, spacing: 2.5) {
+                // Command line
+                HStack(spacing: 3) {
+                    Text("~/Projects").font(.system(size: 4.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.cyan)
+                    Text("(main)").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(Color.yellow)
+                    Text("❯").font(.system(size: 4.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.green)
+                    Text("remember-windows").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white)
+                }
+
+                // Output lines
+                HStack(spacing: 3) {
+                    Circle().fill(Color.green).frame(width: 3, height: 3)
+                    Text("Active layout loaded: Studio Display").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.75))
+                }
+
+                HStack(spacing: 3) {
+                    Text("✓").font(.system(size: 4.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.green)
+                    Text("3 windows restored in 0.2s").font(.system(size: 4.5, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
+                }
+
+                HStack(spacing: 2) {
+                    Text("❯").font(.system(size: 4.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.green)
+                    Rectangle().fill(Color.white).frame(width: 3, height: 6)
+                }
+                Spacer()
+            }
+            .padding(5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(white: 0.06))
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isHighlightBorder ? highlightColor.opacity(0.85) : Color.white.opacity(0.18), lineWidth: isHighlightBorder ? 1.0 : 0.6)
+        )
+        .shadow(color: isHighlightBorder ? highlightColor.opacity(0.35) : Color.black.opacity(0.35), radius: 10, x: 0, y: 5)
+    }
+}
+
+struct RealisticNotesWindow: View {
+    var width: CGFloat = 135
+    var height: CGFloat = 75
+    var isDragging: Bool = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Notes Titlebar
+            HStack(spacing: 4) {
+                RealisticTrafficLights(size: 4)
+                Spacer()
+                Image(systemName: "note.text")
+                    .font(.system(size: 5.5))
+                    .foregroundStyle(.yellow)
+                Text("Meeting Notes")
+                    .font(.system(size: 5.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer()
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 5))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+            .background(Color(red: 0.16, green: 0.15, blue: 0.14))
+
+            // Note Content
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Project Milestones")
+                    .font(.system(size: 6.5, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Text("Today at 2:30 PM")
+                    .font(.system(size: 4.5))
+                    .foregroundStyle(.yellow.opacity(0.8))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 4.5))
+                            .foregroundStyle(.yellow)
+                        Text("Multi-monitor auto restore")
+                            .font(.system(size: 5))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                    HStack(spacing: 3) {
+                        Image(systemName: "circle")
+                            .font(.system(size: 4.5))
+                            .foregroundStyle(.white.opacity(0.4))
+                        Text("Live coordinate tracking")
+                            .font(.system(size: 5))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+                Spacer()
+            }
+            .padding(6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(red: 0.11, green: 0.11, blue: 0.10))
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isDragging ? Color.orange.opacity(0.9) : Color.white.opacity(0.2), lineWidth: isDragging ? 1.2 : 0.6)
+        )
+        .shadow(color: isDragging ? Color.orange.opacity(0.5) : Color.black.opacity(0.35), radius: isDragging ? 12 : 8, x: 0, y: 4)
+    }
+}
+
+struct TourKeyCap: View {
+    let label: String
+    var icon: String? = nil
+    var lit: Bool = false
+    var width: CGFloat = 34
+    var height: CGFloat = 28
+    var activeColor: Color = .accentColor
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            if !label.isEmpty {
+                Text(label)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+            }
+        }
+        .foregroundStyle(lit ? .white : .primary)
+        .frame(width: width, height: height)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(LinearGradient(
+                    colors: lit
+                        ? [activeColor, activeColor.opacity(0.85)]
+                        : [Color.white.opacity(0.22), Color.white.opacity(0.08)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(lit ? activeColor.opacity(0.8) : Color.white.opacity(0.25), lineWidth: 0.8)
+        )
+        .shadow(color: lit ? activeColor.opacity(0.45) : Color.black.opacity(0.15), radius: lit ? 6 : 2, x: 0, y: lit ? 1 : 2)
+        .offset(y: lit ? 1.5 : 0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: lit)
+    }
+}
+
+// MARK: - macOS Desktop Illustration Components
+
+private struct MacDesktopPlainSurface: View {
+    var body: some View {
+        Color.clear
+    }
+}
+
+private struct MacDesktopMenuBar: View {
+    var showsSystemStatus: Bool = true
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "applelogo")
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+
+            Spacer(minLength: 6)
+
+            if showsSystemStatus {
+                HStack(spacing: 8) {
+                    Text("9:41")
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.65))
+                    Image(systemName: "wifi")
+                        .font(.system(size: 8.5))
+                        .foregroundStyle(.white.opacity(0.55))
+                    Image(systemName: "battery.75")
+                        .font(.system(size: 8.5))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Text("9:41")
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.65))
+                    Image(systemName: "wifi")
+                        .font(.system(size: 8.5))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(width: 356, height: 26)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.black.opacity(0.65))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 0.75)
+        )
+        .padding(.top, 4)
+    }
+}
+
+private enum MacDesktopFileKind {
+    case presentation
+    case pdf
+    case screenshotsFolder
+}
+
+private struct MacDesktopFileIcon: View {
+    let title: String
+    let kind: MacDesktopFileKind
+
+    var body: some View {
+        VStack(spacing: 2.5) {
+            iconArtwork
+
+            Text(title)
+                .font(.system(size: 5.8, weight: .medium))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .shadow(color: .black.opacity(0.80), radius: 1.2, x: 0, y: 0.8)
+        }
+        .frame(width: 58)
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var iconArtwork: some View {
+        switch kind {
+        case .presentation:
+            documentArtwork(accent: Color(red: 0.98, green: 0.48, blue: 0.16))
+        case .pdf:
+            documentArtwork(accent: Color(red: 0.91, green: 0.24, blue: 0.28))
+        case .screenshotsFolder:
+            Image(systemName: "folder.fill")
+                .font(.system(size: 18, weight: .regular))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Color.cyan)
+                .frame(width: 20, height: 22)
+                .shadow(color: .black.opacity(0.32), radius: 1.2, x: 0, y: 0.8)
+        }
+    }
+
+    private func documentArtwork(accent: Color) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                .fill(LinearGradient(
+                    colors: [Color(white: 0.98), Color(white: 0.82)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ))
+
+            VStack(alignment: .leading, spacing: 1.3) {
+                RoundedRectangle(cornerRadius: 0.8, style: .continuous)
+                    .fill(LinearGradient(
+                        colors: [accent, accent.opacity(0.70)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                    .frame(height: 8)
+
+                Rectangle()
+                    .fill(Color.black.opacity(0.20))
+                    .frame(width: 10, height: 0.7)
+                Rectangle()
+                    .fill(Color.black.opacity(0.13))
+                    .frame(width: 13, height: 0.7)
+                Rectangle()
+                    .fill(Color.black.opacity(0.10))
+                    .frame(width: 8, height: 0.7)
+
+                Spacer(minLength: 0)
+            }
+            .padding(2.2)
+
+            Path { path in
+                path.move(to: .zero)
+                path.addLine(to: CGPoint(x: 5, y: 0))
+                path.addLine(to: CGPoint(x: 5, y: 5))
+                path.closeSubpath()
+            }
+            .fill(Color(white: 0.73))
+            .frame(width: 5, height: 5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }
+        .frame(width: 18, height: 22)
+        .overlay {
+            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                .stroke(Color.black.opacity(0.24), lineWidth: 0.45)
+        }
+        .shadow(color: .black.opacity(0.32), radius: 1.2, x: 0, y: 0.8)
+    }
+}
+
+private struct MacDesktopDock: View {
+    var body: some View {
+        HStack(spacing: 0) {
+            dockIcon(symbol: "face.smiling", color: Color(red: 0.12, green: 0.66, blue: 0.96), label: "Finder", isRunning: true)
+            Spacer(minLength: 0)
+            dockIcon(symbol: "safari.fill", color: .cyan, label: "Safari", isRunning: true)
+            Spacer(minLength: 0)
+            dockIcon(symbol: "message.fill", color: .green, label: "Messages")
+            Spacer(minLength: 0)
+            dockIcon(symbol: "note.text", color: .orange, label: "Notes", isRunning: true)
+            Spacer(minLength: 0)
+            dockIcon(symbol: "hammer.fill", color: .purple, label: "Xcode", isRunning: true)
+            Spacer(minLength: 7)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.22))
+                .frame(width: 0.7, height: 18)
+                .padding(.horizontal, 4)
+
+            Spacer(minLength: 7)
+            dockIcon(symbol: "trash.fill", color: .gray, label: "Trash")
+        }
+        .frame(width: 210, height: 26)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 3)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.black.opacity(0.25))
+                }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.32), Color.white.opacity(0.12)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 0.65
+                )
+        }
+        .overlay(alignment: .top) {
+            Capsule()
+                .fill(Color.white.opacity(0.13))
+                .frame(height: 0.5)
+                .padding(.horizontal, 12)
+                .padding(.top, 1)
+        }
+        .shadow(color: .black.opacity(0.34), radius: 8, x: 0, y: 3)
+    }
+
+    private func dockIcon(symbol: String, color: Color, label: String, isRunning: Bool = false) -> some View {
+        VStack(spacing: 1.5) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [color.opacity(0.96), color.opacity(0.62)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.white.opacity(0.34), lineWidth: 0.55)
+                    }
+
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.22), radius: 1, x: 0, y: 1)
+            }
+            .frame(width: 21, height: 21)
+
+            Circle()
+                .fill(Color.white.opacity(0.85))
+                .frame(width: 1.8, height: 1.8)
+                .opacity(isRunning ? 1 : 0)
+        }
+        .accessibilityLabel(label)
+    }
+}
+
+private struct MacShortcutBadge: View {
+    let isActive: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            TourKeyCap(label: "⌘", lit: isActive, width: 20, height: 17)
+
+            Text("+")
+                .font(.system(size: 6.8, weight: .light))
+                .foregroundStyle(.white.opacity(0.60))
+
+            TourKeyCap(label: "D", lit: isActive, width: 20, height: 17)
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(Color.black.opacity(0.30), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color.white.opacity(0.18), lineWidth: 0.6)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 3, x: 0, y: 1.5)
+        .scaleEffect(isActive ? 0.80 : 0.86)
+        .blur(radius: isActive ? 0.55 : 0.25)
+        .animation(.easeInOut(duration: 0.15), value: isActive)
+    }
+}
+
+// MARK: - Slide 0: Save Layout Illustration (Realistic macOS Multi-Window Shutter Snap)
 
 struct OBIllustrationSave: View {
-    @State private var saved = false
+    @State private var isSaved = false
+    @State private var shutterFlash = false
+    @State private var showNotchPill = false
+    @State private var showPolaroid = false
+    @State private var polaroidScale: CGFloat = 0.3
+    @State private var polaroidOffset: CGSize = .zero
+    @State private var cursorX: CGFloat = -90
+    @State private var cursorY: CGFloat = 40
+    @State private var cursorPressed = false
+    @State private var timer: Timer?
+    @State private var isMounted = false
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.black.opacity(0.65))
-                .frame(width: 230, height: 134)
+            TourDesktopBackground()
 
-            obWin(x: -58, y: -18, w: 95, h: 72, tint: .accentColor, show: saved)
-            obWin(x: 58, y: -14, w: 82, h: 62, tint: .blue, show: saved)
-            obWin(x: 0, y: 38, w: 104, h: 48, tint: .purple, show: saved)
 
-            if saved {
-                VStack(spacing: 3) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(.green)
-                    Text("Saved")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.green)
+            // Slim Menu Bar
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "applelogo")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+
+                    Spacer()
+
+                    // Save Layout icon button — no text
+                    ZStack {
+                        Capsule()
+                            .fill(cursorPressed ? Color.accentColor : Color.white.opacity(0.15))
+                            .frame(width: 26, height: 18)
+                        Image(systemName: "camera.viewfinder")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .scaleEffect(cursorPressed ? 0.92 : 1.0)
+                    .animation(.spring(response: 0.18), value: cursorPressed)
+
+                    // Clock & status
+                    HStack(spacing: 6) {
+                        Text("9:41")
+                            .font(.system(size: 8, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.65))
+                        Image(systemName: "wifi")
+                            .font(.system(size: 8.5))
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
                 }
-                .transition(.scale.combined(with: .opacity))
-                .offset(x: 88, y: -52)
+                .padding(.horizontal, 12)
+                .frame(width: 356, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.black.opacity(0.65))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 0.75)
+                )
+                .padding(.top, 4)
+
+                Spacer()
+            }
+
+            // Three app windows on the vivid desktop
+            ZStack {
+                RealisticSafariWindow(
+                    width: 142, height: 80,
+                    urlText: "apple.com/macos",
+                    tabTitle: "macOS Sequoia",
+                    isHighlightBorder: isSaved,
+                    highlightColor: .accentColor
+                )
+                .offset(x: isSaved ? -70 : -85, y: isSaved ? -20 : -10)
+                .rotationEffect(.degrees(isSaved ? 0 : -2))
+
+                RealisticXcodeWindow(
+                    width: 142, height: 80,
+                    fileName: "WindowLayout.swift",
+                    isHighlightBorder: isSaved,
+                    highlightColor: .accentColor
+                )
+                .offset(x: isSaved ? 75 : 88, y: isSaved ? -15 : -25)
+                .rotationEffect(.degrees(isSaved ? 0 : 2.5))
+
+                RealisticTerminalWindow(
+                    width: 138, height: 72,
+                    isHighlightBorder: isSaved,
+                    highlightColor: .accentColor
+                )
+                .offset(x: isSaved ? 0 : -15, y: isSaved ? 42 : 52)
+                .rotationEffect(.degrees(isSaved ? 0 : -1))
+            }
+            .animation(.spring(response: 0.55, dampingFraction: 0.72), value: isSaved)
+
+            // Camera shutter white flash
+            if shutterFlash {
+                Color.white.opacity(0.55)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+
+            // Polaroid thumbnail flying to top-right corner
+            if showPolaroid {
+                PolaroidThumbnail()
+                    .scaleEffect(polaroidScale)
+                    .offset(polaroidOffset)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+
+            // Minimal pill: just checkmark + count
+            if showNotchPill {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.green)
+                    Text("3")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                    Image(systemName: "macwindow.on.rectangle")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.88), in: Capsule())
+                .overlay(Capsule().stroke(Color.white.opacity(0.20), lineWidth: 0.75))
+                .shadow(color: Color.accentColor.opacity(0.45), radius: 10, x: 0, y: 3)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .offset(y: -92)
+            }
+
+            // Animated cursor
+            Image(systemName: "cursorarrow")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.6), radius: 3, x: 1, y: 1)
+                .offset(x: cursorX, y: cursorY)
+                .animation(.spring(response: 0.55, dampingFraction: 0.8), value: cursorX)
+                .animation(.spring(response: 0.55, dampingFraction: 0.8), value: cursorY)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture { triggerSaveSnap() }
+        .onAppear { isMounted = true; startAnimationLoop() }
+        .onDisappear { isMounted = false; timer?.invalidate() }
+    }
+
+    private func startAnimationLoop() {
+        runCycle()
+        timer = Timer.scheduledTimer(withTimeInterval: 5.2, repeats: true) { _ in runCycle() }
+    }
+
+    private func runCycle() {
+        withAnimation(.easeInOut(duration: 0.35)) {
+            isSaved = false
+            showNotchPill = false
+            shutterFlash = false
+            showPolaroid = false
+            polaroidScale = 0.3
+            polaroidOffset = .zero
+            cursorX = -90
+            cursorY = 40
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.78)) {
+                cursorX = 114
+                cursorY = -92
             }
         }
-        .onAppear {
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.5)) {
-                saved = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            cursorPressed = true
+            triggerSaveSnap()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) {
+            cursorPressed = false
+            withAnimation(.easeInOut(duration: 0.4)) {
+                cursorX = 140
+                cursorY = 60
             }
         }
     }
 
-    @ViewBuilder
-    func obWin(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat, tint: Color, show: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-            .fill(tint.opacity(show ? 0.6 : 0.18))
-            .overlay { RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(tint.opacity(show ? 0.9 : 0.3), lineWidth: 0.75) }
-            .frame(width: w, height: h)
-            .offset(x: x, y: y)
-            .animation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.4), value: show)
+    private func triggerSaveSnap() {
+        guard isMounted else { return }
+
+        // 1. Shutter flash
+        withAnimation(.easeOut(duration: 0.12)) { shutterFlash = true }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            guard isMounted else { return }
+            withAnimation(.easeOut(duration: 0.20)) { shutterFlash = false }
+
+            // 2. Windows snap into saved positions
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
+                isSaved = true
+            }
+
+            // 3. Polaroid thumbnail pops into center then flies to top-right
+            showPolaroid = true
+            polaroidScale = 0.3
+            polaroidOffset = .zero
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.65)) {
+                polaroidScale = 1.0
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                guard isMounted else { return }
+                withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) {
+                    polaroidScale = 0.22
+                    polaroidOffset = CGSize(width: 148, height: -95)
+                }
+            }
+
+            // 4. Minimal notification pill
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                guard isMounted else { return }
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.7)) {
+                    showNotchPill = true
+                }
+            }
+        }
+    }
+}
+
+// Polaroid-style layout snapshot thumbnail
+private struct PolaroidThumbnail: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            // Mini screenshot area
+            ZStack {
+                LinearGradient(
+                    colors: [Color(red: 0.08, green: 0.12, blue: 0.26), Color(red: 0.06, green: 0.09, blue: 0.18)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                // Tiny window silhouettes
+                HStack(spacing: 3) {
+                    RoundedRectangle(cornerRadius: 2).fill(Color.blue.opacity(0.55)).frame(width: 28, height: 20)
+                    VStack(spacing: 3) {
+                        RoundedRectangle(cornerRadius: 2).fill(Color(white: 0.25)).frame(width: 24, height: 9)
+                        RoundedRectangle(cornerRadius: 2).fill(Color(white: 0.18)).frame(width: 24, height: 9)
+                    }
+                }
+            }
+            .frame(width: 72, height: 48)
+
+            // White polaroid border strip
+            ZStack {
+                Color.white
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 72, height: 16)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.9), lineWidth: 1.5))
+        .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 6)
+        .rotationEffect(.degrees(-4))
+    }
+}
+
+// MARK: - Slide 1: Live Minimap Radar Illustration (with drag gesture)
+
+// MARK: - Slide 1: Live Minimap Radar Illustration (with automated cursor & menu bar popover)
+
+private struct MiniWindowCard: View {
+    let title: String
+    let icon: String
+    let color: Color
+    var isHighlighted: Bool = false
+    var highlightColor: Color = .accentColor
+    var width: CGFloat = 34
+    var height: CGFloat = 22
+
+    var body: some View {
+        VStack(spacing: 1.5) {
+            // Micro titlebar
+            HStack(spacing: 1.5) {
+                Circle().fill(Color.red.opacity(0.8)).frame(width: 1.5, height: 1.5)
+                Circle().fill(Color.yellow.opacity(0.8)).frame(width: 1.5, height: 1.5)
+                Circle().fill(Color.green.opacity(0.8)).frame(width: 1.5, height: 1.5)
+                Spacer()
+                Image(systemName: icon)
+                    .font(.system(size: 2.5))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .padding(.horizontal, 2)
+            .padding(.top, 1.5)
+
+            // Content representation
+            RoundedRectangle(cornerRadius: 1)
+                .fill(color.opacity(0.4))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(1.5)
+        }
+        .frame(width: width, height: height)
+        .background(Color(white: 0.14))
+        .clipShape(RoundedRectangle(cornerRadius: 2.5, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                .stroke(isHighlighted ? highlightColor : Color.white.opacity(0.2), lineWidth: isHighlighted ? 1.0 : 0.5)
+        )
+        .shadow(color: isHighlighted ? highlightColor.opacity(0.6) : Color.black.opacity(0.3), radius: isHighlighted ? 4 : 1.5)
+    }
+}
+
+private struct AuthenticRememberMyWindowsMenu: View {
+    let movingOffsetX: CGFloat
+    let movingOffsetY: CGFloat
+    let isTracking: Bool
+    let isSynced: Bool
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+
+    // Scaled coordinates for minimap
+    private var miniX: CGFloat { movingOffsetX * 0.32 }
+    private var miniY: CGFloat { movingOffsetY * 0.30 }
+    private var displayCoordX: Int { Int((movingOffsetX + 70) * 12.5) }
+    private var displayCoordY: Int { Int((movingOffsetY + 40) * 11.2) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            topArrow
+
+            VStack(alignment: .leading, spacing: 3) {
+                openRow
+                menuDivider
+                autoLayoutHeader
+                minimapCard
+                latestCaptureRow
+                menuDivider
+                savedSessionsRow
+                menuDivider
+                quitRow
+            }
+            .padding(.vertical, 4)
+            .frame(width: 142)
+            .background(Color(white: 0.15).opacity(0.96))
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(isSynced ? Color.green.opacity(0.5) : Color.white.opacity(0.18), lineWidth: 0.75)
+            )
+            .shadow(color: Color.black.opacity(0.5), radius: 14, x: 0, y: 6)
+        }
+    }
+
+    private var topArrow: some View {
+        HStack {
+            Spacer()
+            Triangle()
+                .fill(Color(white: 0.15).opacity(0.96))
+                .frame(width: 10, height: 5)
+                .padding(.trailing, 22)
+        }
+    }
+
+    private var openRow: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "macwindow.on.rectangle")
+                .font(.system(size: 6.5))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 10)
+            Text("Open RememberMyWindows".localized(appLanguage))
+                .font(.system(size: 6.5, weight: .medium))
+                .foregroundStyle(.white)
+            Spacer()
+            Text("⌘O")
+                .font(.system(size: 5.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.45))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2.5)
+    }
+
+    private var autoLayoutHeader: some View {
+        Text("Recent Auto Captures".localized(appLanguage).uppercased())
+            .font(.system(size: 5, weight: .bold))
+            .foregroundStyle(.white.opacity(0.45))
+            .padding(.horizontal, 6)
+            .padding(.top, 1)
+    }
+
+    private var minimapCard: some View {
+        VStack(spacing: 3) {
+            cardHeader
+            minimapCanvas
+        }
+        .padding(4)
+        .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(isSynced ? Color.green.opacity(0.55) : Color.white.opacity(0.12), lineWidth: 0.6)
+        )
+        .padding(.horizontal, 4)
+    }
+
+    private var cardHeader: some View {
+        HStack(spacing: 3) {
+            Circle()
+                .fill(Color.green)
+                .frame(width: 4, height: 4)
+                .shadow(color: Color.green.opacity(0.8), radius: 2)
+
+            Text("Built-in Display · 1920×1080".localized(appLanguage))
+                .font(.system(size: 5, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.85))
+
+            Spacer()
+
+            if isTracking || isSynced {
+                HStack(spacing: 2) {
+                    Image(systemName: "scope")
+                        .font(.system(size: 4.5))
+                    Text("\(displayCoordX), \(displayCoordY)")
+                        .font(.system(size: 4.5, weight: .bold, design: .monospaced))
+                }
+                .foregroundStyle(isSynced ? Color.green : Color.accentColor)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .background(Color.black.opacity(0.4), in: Capsule())
+                .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 3)
+    }
+
+    private var minimapCanvas: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                .fill(Color.black.opacity(0.85))
+
+            VStack(spacing: 6) {
+                Divider().background(Color.white.opacity(0.06))
+                Divider().background(Color.white.opacity(0.06))
+            }
+
+            MiniWindowCard(
+                title: "Xcode",
+                icon: "swift",
+                color: .blue,
+                isHighlighted: false,
+                width: 36,
+                height: 22
+            )
+            .offset(x: -24, y: -2)
+
+            MiniWindowCard(
+                title: "Safari",
+                icon: "safari.fill",
+                color: .purple,
+                isHighlighted: isTracking || isSynced,
+                highlightColor: isSynced ? .green : .accentColor,
+                width: 34,
+                height: 22
+            )
+            .offset(x: 18 + miniX, y: -2 + miniY)
+            .animation(.spring(response: 0.55, dampingFraction: 0.8), value: movingOffsetX)
+            .animation(.spring(response: 0.55, dampingFraction: 0.8), value: movingOffsetY)
+        }
+        .frame(width: 126, height: 46)
+        .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 3.5, style: .continuous).stroke(Color.white.opacity(0.16), lineWidth: 0.5))
+    }
+
+    private var latestCaptureRow: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 6.5))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 10)
+            Text("Latest (just now) · 2 windows".localized(appLanguage))
+                .font(.system(size: 6, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 4.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+    }
+
+    private var savedSessionsRow: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "folder")
+                .font(.system(size: 6.5))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 10)
+            Text("Saved Sessions".localized(appLanguage))
+                .font(.system(size: 6.5, weight: .medium))
+                .foregroundStyle(.white)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 4.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.45))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2.5)
+    }
+
+    private var quitRow: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "power")
+                .font(.system(size: 6.5))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 10)
+            Text("Quit".localized(appLanguage))
+                .font(.system(size: 6.5, weight: .medium))
+                .foregroundStyle(.white)
+            Spacer()
+            Text("⌘Q")
+                .font(.system(size: 5.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.45))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2.5)
+    }
+
+    private var menuDivider: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.08))
+            .frame(height: 0.5)
+            .padding(.horizontal, 4)
+    }
+}
+
+// Simple triangle for popover arrow
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
     }
 }
 
 struct OBIllustrationLive: View {
-    @State private var pulse = false
+    // Window dragging offsets
+    @State private var movingWindowX: CGFloat = 36
+    @State private var movingWindowY: CGFloat = 12
+    @State private var isDragging = false
+    @State private var isSyncedFlash = false
+
+    // Menu bar & Popover states
+    @State private var showPopover = false
+    @State private var menuBarItemActive = false
+
+    // Animated Cursor
+    @State private var cursorX: CGFloat = 60
+    @State private var cursorY: CGFloat = 40
+    @State private var cursorPressed = false
+    @State private var cursorVisible = true
+
+    @State private var loopTimer: Timer?
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.black.opacity(0.65))
-                .frame(width: 210, height: 130)
+            TourDesktopBackground()
 
-            VStack(spacing: 4) {
-                HStack(spacing: 4) {
-                    obCell(.accentColor, 72, 42)
-                    obCell(.blue, 64, 42)
+            // Desktop Canvas
+            ZStack(alignment: .top) {
+                // Top macOS Menu Bar Strip
+                HStack(spacing: 8) {
+                    Image(systemName: "applelogo")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+
+                    Spacer()
+
+                    // RememberMyWindows App Menu Bar Item
+                    HStack(spacing: 3) {
+                        Image(systemName: "macwindow.on.rectangle")
+                            .font(.system(size: 8))
+                    }
+                    .foregroundStyle(menuBarItemActive ? .white : .white.opacity(0.8))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2.5)
+                    .background(menuBarItemActive ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+
+                    Image(systemName: "wifi")
+                        .font(.system(size: 7.5))
+                        .foregroundStyle(.white.opacity(0.6))
+                    Text("9:41")
+                        .font(.system(size: 7.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.85))
                 }
-                HStack(spacing: 4) {
-                    obCell(.purple, 52, 36)
-                    obCell(.orange, 58, 36)
-                    obCell(.green, 26, 36)
+                .padding(.horizontal, 12)
+                .frame(width: 356, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.black.opacity(0.65))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 0.75)
+                )
+                .padding(.top, 4)
+
+                // Desktop Workspace Windows
+                ZStack {
+                    // Left Window: Photorealistic Xcode
+                    RealisticXcodeWindow(
+                        width: 126,
+                        height: 74,
+                        fileName: "WindowLayout.swift"
+                    )
+                    .offset(x: -80, y: 20)
+
+                    // Right Window: Photorealistic Safari (Animated Draggable Window)
+                    RealisticSafariWindow(
+                        width: 120,
+                        height: 70,
+                        urlText: "apple.com/macos",
+                        tabTitle: "macOS",
+                        isHighlightBorder: isDragging || isSyncedFlash,
+                        highlightColor: isSyncedFlash ? .green : .accentColor
+                    )
+                    .scaleEffect(isDragging ? 1.03 : 1.0)
+                    .shadow(
+                        color: isSyncedFlash ? Color.green.opacity(0.5) : Color.black.opacity(isDragging ? 0.45 : 0.28),
+                        radius: isDragging ? 14 : 7,
+                        x: 0,
+                        y: isDragging ? 8 : 4
+                    )
+                    .offset(x: movingWindowX, y: movingWindowY)
+                    .animation(.spring(response: 0.55, dampingFraction: 0.78), value: movingWindowX)
+                    .animation(.spring(response: 0.55, dampingFraction: 0.78), value: movingWindowY)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.top, 14)
+
+                // RememberMyWindows Dropdown Menu from Menu Bar
+                if showPopover {
+                    AuthenticRememberMyWindowsMenu(
+                        movingOffsetX: movingWindowX - 36,
+                        movingOffsetY: movingWindowY - 12,
+                        isTracking: isDragging,
+                        isSynced: isSyncedFlash
+                    )
+                    .offset(x: 122, y: 17)
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.85, anchor: .topTrailing).combined(with: .opacity),
+                        removal: .scale(scale: 0.9, anchor: .topTrailing).combined(with: .opacity)
+                    ))
+                }
+
+                // Photorealistic macOS Cursor
+                if cursorVisible {
+                    Image(systemName: "cursorarrow")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.6), radius: 2.5, x: 0.5, y: 1.5)
+                        .scaleEffect(cursorPressed ? 0.88 : 1.0)
+                        .offset(x: cursorX, y: cursorY)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.75), value: cursorX)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.75), value: cursorY)
+                        .animation(.easeInOut(duration: 0.15), value: cursorPressed)
                 }
             }
-
-            HStack(spacing: 4) {
-                Circle().fill(Color.green).frame(width: 6, height: 6)
-                    .scaleEffect(pulse ? 1.35 : 1.0)
-                    .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulse)
-                Text("LIVE").font(.system(size: 8, weight: .bold)).foregroundStyle(.green)
-            }
-            .offset(x: 78, y: -54)
         }
-        .onAppear { pulse = true }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onAppear {
+            startAutomatedStoryLoop()
+        }
+        .onDisappear {
+            loopTimer?.invalidate()
+            loopTimer = nil
+        }
     }
 
-    func obCell(_ color: Color, _ w: CGFloat, _ h: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(color.opacity(0.38))
-            .overlay { RoundedRectangle(cornerRadius: 3, style: .continuous).stroke(color.opacity(0.65), lineWidth: 0.5) }
-            .frame(width: w, height: h)
+    private func startAutomatedStoryLoop() {
+        runChoreographedCycle()
+        loopTimer?.invalidate()
+        loopTimer = Timer.scheduledTimer(withTimeInterval: 6.2, repeats: true) { _ in
+            runChoreographedCycle()
+        }
+    }
+
+    private func runChoreographedCycle() {
+        // Reset state
+        withAnimation(.easeInOut(duration: 0.35)) {
+            showPopover = false
+            menuBarItemActive = false
+            isDragging = false
+            isSyncedFlash = false
+            cursorPressed = false
+            movingWindowX = 36
+            movingWindowY = 12
+            cursorX = 75
+            cursorY = 50
+        }
+
+        // 1. Cursor moves to Menu Bar icon
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                cursorX = 138
+                cursorY = -98
+            }
+        }
+
+        // 2. Click Menu Bar Icon & open RememberMyWindows Menu
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            cursorPressed = true
+            menuBarItemActive = true
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.76)) {
+                showPopover = true
+            }
+        }
+
+        // 3. Release click & move cursor to Safari window titlebar
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
+            cursorPressed = false
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                cursorX = 36
+                cursorY = -16
+            }
+        }
+
+        // 4. Grab Safari titlebar
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            cursorPressed = true
+            withAnimation(.spring(response: 0.25)) {
+                isDragging = true
+            }
+        }
+
+        // 5. Drag Safari window across the desktop (mirrored live in minimap!)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.35) {
+            withAnimation(.spring(response: 0.85, dampingFraction: 0.75)) {
+                movingWindowX = -20
+                movingWindowY = 36
+                cursorX = -20
+                cursorY = 10
+            }
+        }
+
+        // 6. Release & Snap into place with synced green ripple
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.8) {
+            cursorPressed = false
+            isDragging = false
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isSyncedFlash = true
+            }
+            // Move cursor away slightly to showcase aligned windows
+            withAnimation(.spring(response: 0.45)) {
+                cursorX = 25
+                cursorY = 55
+            }
+        }
+
+        // 7. Shimmer settles
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.6) {
+            withAnimation(.easeOut(duration: 0.4)) {
+                isSyncedFlash = false
+            }
+        }
+    }
+}
+
+// MARK: - Live Mac Tour Context Helpers
+
+enum TourLiveContext {
+    static var runningAppNames: [String] {
+        let apps = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { $0.localizedName }
+        return apps.isEmpty ? ["Safari", "Xcode", "Finder", "Notes"] : apps
+    }
+}
+
+// MARK: - Slide 2: External Display Auto-Restore Illustration
+
+// Mini Realistic macOS Window Components for Slide 2
+private struct MiniXcodeWindow: View {
+    var width: CGFloat = 68
+    var height: CGFloat = 54
+    var isRestoredGlow: Bool = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack(spacing: 2.5) {
+                RealisticTrafficLights(size: 2.8)
+                Spacer()
+                HStack(spacing: 1.5) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 3))
+                        .foregroundStyle(.green)
+                    Text("App")
+                        .font(.system(size: 3.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                .padding(.horizontal, 2.5)
+                .padding(.vertical, 1)
+                .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 1.5))
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2.5)
+            .background(Color(red: 0.13, green: 0.14, blue: 0.17))
+
+            // Body: Sidebar + Code Editor
+            HStack(spacing: 0) {
+                // Mini Navigator
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 1.5) {
+                        Image(systemName: "folder.fill").font(.system(size: 3)).foregroundStyle(.blue)
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color.white.opacity(0.4)).frame(width: 8, height: 1.5)
+                    }
+                    HStack(spacing: 1.5) {
+                        Image(systemName: "swift").font(.system(size: 3)).foregroundStyle(.orange)
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color.white.opacity(0.6)).frame(width: 10, height: 1.5)
+                    }
+                    Spacer()
+                }
+                .padding(2.5)
+                .frame(width: 16)
+                .background(Color(red: 0.11, green: 0.12, blue: 0.14))
+
+                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 0.5)
+
+                // Code lines
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 2) {
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color(red: 0.95, green: 0.35, blue: 0.65)).frame(width: 10, height: 1.8)
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color(red: 0.38, green: 0.78, blue: 0.92)).frame(width: 14, height: 1.8)
+                    }
+                    HStack(spacing: 2) {
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color(red: 0.88, green: 0.55, blue: 0.28)).frame(width: 8, height: 1.8)
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color.white.opacity(0.75)).frame(width: 18, height: 1.8)
+                    }
+                    RoundedRectangle(cornerRadius: 0.5).fill(Color(red: 0.45, green: 0.75, blue: 0.98)).frame(width: 22, height: 1.8)
+                    RoundedRectangle(cornerRadius: 0.5).fill(Color.white.opacity(0.5)).frame(width: 12, height: 1.8)
+                    Spacer()
+                }
+                .padding(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(red: 0.09, green: 0.10, blue: 0.12))
+            }
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .stroke(isRestoredGlow ? Color.green.opacity(0.9) : Color.white.opacity(0.2), lineWidth: isRestoredGlow ? 1.0 : 0.5)
+        )
+        .shadow(color: isRestoredGlow ? Color.green.opacity(0.4) : Color.black.opacity(0.4), radius: isRestoredGlow ? 6 : 3, y: 1.5)
+    }
+}
+
+private struct MiniSafariWindow: View {
+    var width: CGFloat = 68
+    var height: CGFloat = 54
+    var isRestoredGlow: Bool = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Safari Header
+            HStack(spacing: 2.5) {
+                RealisticTrafficLights(size: 2.8)
+                // URL bar
+                HStack(spacing: 2) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 2.5))
+                        .foregroundStyle(.white.opacity(0.5))
+                    Text("design.apple.com")
+                        .font(.system(size: 3.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .background(Color.white.opacity(0.12), in: Capsule())
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2.5)
+            .background(Color(white: 0.16))
+
+            // Web Content Layout
+            VStack(spacing: 2.5) {
+                // Hero card
+                HStack {
+                    VStack(alignment: .leading, spacing: 1) {
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color.blue).frame(width: 14, height: 2)
+                        RoundedRectangle(cornerRadius: 0.5).fill(Color.white.opacity(0.6)).frame(width: 26, height: 1.5)
+                    }
+                    Spacer()
+                    Circle().fill(Color.purple.opacity(0.7)).frame(width: 8, height: 8)
+                }
+                .padding(2.5)
+                .background(Color(white: 0.14), in: RoundedRectangle(cornerRadius: 2))
+
+                // Dual mini cards
+                HStack(spacing: 2) {
+                    RoundedRectangle(cornerRadius: 1.5).fill(Color.orange.opacity(0.65)).frame(height: 12)
+                    RoundedRectangle(cornerRadius: 1.5).fill(Color.green.opacity(0.65)).frame(height: 12)
+                }
+                Spacer()
+            }
+            .padding(3)
+            .background(Color(white: 0.08))
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .stroke(isRestoredGlow ? Color.green.opacity(0.9) : Color.white.opacity(0.2), lineWidth: isRestoredGlow ? 1.0 : 0.5)
+        )
+        .shadow(color: isRestoredGlow ? Color.green.opacity(0.4) : Color.black.opacity(0.4), radius: isRestoredGlow ? 6 : 3, y: 1.5)
+    }
+}
+
+// MARK: - MacBook Pro 14" M4 Space Black — Front Elevation Model
+
+private struct RealisticMacBookMockup: View {
+    let windowsAreRestored: Bool
+    let windowNamespace: Namespace.ID
+    /// 0 = closed flat, 1 = fully open front-facing (0°)
+    let lidOpenFraction: CGFloat
+
+    // ── Dimensions Matching Reference Image ──────────────────────────────────
+    private let lidWidth: CGFloat = 118
+    private let lidHeight: CGFloat = 78
+    private let baseWidth: CGFloat = 136  // Extends ~9pt beyond lid on each side
+    private let baseHeight: CGFloat = 7.5
+
+    // ── Colors — Space Black anodized aluminum ────────────────────────────
+    private let sbHighlight = Color(red: 0.32, green: 0.32, blue: 0.35)
+    private let sbMid       = Color(red: 0.20, green: 0.20, blue: 0.22)
+    private let sbDark      = Color(red: 0.11, green: 0.11, blue: 0.13)
+    private let sbChassis   = Color(red: 0.15, green: 0.15, blue: 0.17)
+
+    // The lid rotates from upright front-facing (0°) to folded flat (-85°)
+    private var lidAngle: Double {
+        let open: Double = 0.0
+        let closed: Double = -85.0
+        return closed + (open - closed) * Double(lidOpenFraction)
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            // ── Base (Unibody Front Lip with Thumb Scoop & Rubber Feet) ────
+            macBookBase
+                .frame(width: baseWidth, height: baseHeight + 2)
+
+            // ── Lid pivots right at the rear hinge seam ───────────────────
+            macBookLid
+                .frame(width: lidWidth, height: lidHeight)
+                .rotation3DEffect(
+                    .degrees(lidAngle),
+                    axis: (x: 1, y: 0, z: 0),
+                    anchor: .bottom,
+                    anchorZ: 0,
+                    perspective: 0.30
+                )
+                .offset(y: -baseHeight + 1.0)
+                .shadow(
+                    color: .black.opacity(0.35 * Double(lidOpenFraction)),
+                    radius: 6,
+                    x: 0,
+                    y: 4
+                )
+        }
+        .frame(width: baseWidth, height: lidHeight + baseHeight + 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("MacBook Pro")
+    }
+
+    // MARK: - Lid (Display & Clamshell Top)
+
+    private var macBookLid: some View {
+        ZStack {
+            // Outer Space Black lid shell (fades in when closing / closed)
+            lidOuterShell
+                .opacity(Double(max(0, min(1, (0.35 - lidOpenFraction) / 0.18))))
+
+            // Inner Display Assembly (active when open, dims as lid comes down)
+            displayAssembly
+                .opacity(Double(max(0, min(1, (lidOpenFraction - 0.20) / 0.30))))
+        }
+    }
+
+    private var lidOuterShell: some View {
+        ZStack {
+            // Aluminum unibody back
+            RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                .fill(LinearGradient(
+                    colors: [sbHighlight, sbMid, sbDark],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ))
+
+            // Unibody chamfer highlight
+            RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.22), Color.white.opacity(0.05)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.55
+                )
+
+            // Polished Apple logo on outer lid
+            Image(systemName: "applelogo")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [Color(white: 0.40), Color(white: 0.20)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .rotationEffect(.degrees(180))
+                .shadow(color: .black.opacity(0.4), radius: 1, y: 0.5)
+        }
+    }
+
+    private var displayAssembly: some View {
+        ZStack {
+            // Edge-to-edge optical black glass (Liquid Retina XDR)
+            UnevenRoundedRectangle(
+                topLeadingRadius: 5.5,
+                bottomLeadingRadius: 1.0,
+                bottomTrailingRadius: 1.0,
+                topTrailingRadius: 5.5,
+                style: .continuous
+            )
+            .fill(Color(white: 0.015))
+
+            // Razor-thin Space Black perimeter rim
+            UnevenRoundedRectangle(
+                topLeadingRadius: 5.5,
+                bottomLeadingRadius: 1.0,
+                bottomTrailingRadius: 1.0,
+                topTrailingRadius: 5.5,
+                style: .continuous
+            )
+            .stroke(
+                LinearGradient(
+                    colors: [Color.white.opacity(0.20), Color.white.opacity(0.04)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 0.55
+            )
+
+            // Active display panel inside ultra-thin uniform black border
+            // Top: 2.0pt, Sides: 2.0pt, Bottom chin: 4.5pt (matches reference image)
+            displayContents
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 4.0,
+                        bottomLeadingRadius: 0.5,
+                        bottomTrailingRadius: 0.5,
+                        topTrailingRadius: 4.0,
+                        style: .continuous
+                    )
+                )
+                .padding(EdgeInsets(top: 2.0, leading: 2.0, bottom: 4.5, trailing: 2.0))
+
+            // Centered Display Notch (flush with top black border)
+            displayNotch
+        }
+    }
+
+    private var displayNotch: some View {
+        VStack {
+            ZStack {
+                // Notch housing
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 0,
+                    bottomLeadingRadius: 1.8,
+                    bottomTrailingRadius: 1.8,
+                    topTrailingRadius: 0,
+                    style: .continuous
+                )
+                .fill(Color.black)
+                .frame(width: 13.5, height: 3.6)
+
+                // FaceTime camera lens
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [Color(red: 0.16, green: 0.24, blue: 0.38), Color(white: 0.08)],
+                            center: .center,
+                            startRadius: 0.2,
+                            endRadius: 0.7
+                        )
+                    )
+                    .frame(width: 1.0, height: 1.0)
+            }
+            Spacer()
+        }
+        .padding(.top, 2.0)
+    }
+
+    private var displayContents: some View {
+        ZStack(alignment: .top) {
+            // macOS Sequoia / Sonoma wallpaper gradient
+            LinearGradient(
+                colors: [
+                    Color(red: 0.09, green: 0.14, blue: 0.32),
+                    Color(red: 0.05, green: 0.08, blue: 0.18)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            // macOS Menu Bar
+            HStack(spacing: 2.6) {
+                Image(systemName: "applelogo")
+                    .font(.system(size: 2.8))
+                Text("Finder").fontWeight(.semibold)
+                Text("File").foregroundStyle(.white.opacity(0.65))
+                Text("Edit").foregroundStyle(.white.opacity(0.65))
+                Spacer()
+                Image(systemName: "wifi").font(.system(size: 2.6))
+                Image(systemName: "battery.75").font(.system(size: 2.6))
+                Text("9:41").font(.system(size: 2.8, weight: .medium, design: .rounded))
+            }
+            .font(.system(size: 2.8, weight: .regular))
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.horizontal, 3.2)
+            .padding(.vertical, 1.6)
+            .background(Color.black.opacity(0.35))
+
+            // Open application windows on laptop screen
+            if !windowsAreRestored {
+                ZStack {
+                    MiniXcodeWindow(width: 44, height: 33)
+                        .offset(x: -11, y: 5)
+                        .matchedGeometryEffect(id: "restored-xcode-window", in: windowNamespace)
+                        .zIndex(1)
+
+                    MiniSafariWindow(width: 45, height: 34)
+                        .offset(x: 11, y: 10)
+                        .matchedGeometryEffect(id: "restored-safari-window", in: windowNamespace)
+                        .zIndex(1)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.top, 2.5)
+            }
+
+            // Glass screen reflection overlay
+            LinearGradient(
+                colors: [Color.white.opacity(0.06), .clear],
+                startPoint: .topLeading,
+                endPoint: .center
+            )
+            .allowsHitTesting(false)
+        }
+    }
+
+    // MARK: - Base (Unibody Front Lip from Reference Image)
+
+    private var macBookBase: some View {
+        ZStack(alignment: .bottom) {
+            // Contact shadow under laptop
+            Capsule()
+                .fill(Color.black.opacity(0.35))
+                .frame(width: baseWidth - 8, height: 1.8)
+                .blur(radius: 1.0)
+                .offset(y: 1.0)
+
+            // Rubber feet peeking underneath
+            HStack {
+                Capsule()
+                    .fill(Color.black.opacity(0.85))
+                    .frame(width: 6, height: 1.5)
+                Spacer()
+                Capsule()
+                    .fill(Color.black.opacity(0.85))
+                    .frame(width: 6, height: 1.5)
+            }
+            .padding(.horizontal, 14)
+            .offset(y: 0.5)
+
+            // Main Unibody Front Lip
+            ZStack(alignment: .top) {
+                // Aluminum unibody bar
+                RoundedRectangle(cornerRadius: 3.2, style: .continuous)
+                    .fill(LinearGradient(
+                        colors: [sbHighlight, sbMid, sbDark],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ))
+                    .frame(width: baseWidth, height: baseHeight)
+
+                // Top chamfer highlight line
+                RoundedRectangle(cornerRadius: 3.2, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.24), Color.white.opacity(0.06)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 0.5
+                    )
+                    .frame(width: baseWidth, height: baseHeight)
+
+                // Centered Thumb Scoop (Opening Notch)
+                thumbScoop
+            }
+
+            // Thunderbolt port indicator on the right edge
+            thunderboltPortSlot
+        }
+    }
+
+    private var thumbScoop: some View {
+        ZStack {
+            // Darker recessed cavity
+            RoundedRectangle(cornerRadius: 1.2, style: .continuous)
+                .fill(Color(white: 0.08))
+                .frame(width: 22, height: 2.0)
+
+            // Curved metallic bottom edge highlight
+            Capsule()
+                .fill(LinearGradient(
+                    colors: [Color.white.opacity(0.28), Color.white.opacity(0.08)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ))
+                .frame(width: 18, height: 0.6)
+                .offset(y: 0.7)
+        }
+        .frame(width: baseWidth, alignment: .center)
+    }
+
+    private var thunderboltPortSlot: some View {
+        // Right flank USB-C / Thunderbolt port slot
+        RoundedRectangle(cornerRadius: 0.5, style: .continuous)
+            .fill(Color(white: 0.06))
+            .frame(width: 1.2, height: 2.6)
+            .overlay(
+                RoundedRectangle(cornerRadius: 0.5, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 0.25)
+            )
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.trailing, 1.2)
+            .padding(.bottom, 2.5)
+    }
+}
+
+
+
+private struct RealisticStudioDisplayMockup: View {
+    let isAwake: Bool
+    let windowsAreRestored: Bool
+    let isRestoredGlow: Bool
+    let windowNamespace: Namespace.ID
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Main Display Enclosure
+            ZStack(alignment: .top) {
+                // Precision Aluminum Unibody Shell
+                RoundedRectangle(cornerRadius: 6.5, style: .continuous)
+                    .fill(LinearGradient(
+                        colors: [Color(white: 0.26), Color(white: 0.16)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6.5, style: .continuous)
+                            .stroke(
+                                isAwake ? Color.white.opacity(0.32) : Color.white.opacity(0.16),
+                                lineWidth: 0.75
+                            )
+                    )
+
+                // Screen Panel
+                ZStack(alignment: .top) {
+                    ZStack(alignment: .top) {
+                        Color(white: 0.045)
+
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.24, green: 0.14, blue: 0.38),
+                                Color(red: 0.10, green: 0.13, blue: 0.28)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .opacity(isAwake ? 1 : 0)
+
+                        if !isAwake {
+                            ZStack {
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.04), .clear],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+
+                                Circle()
+                                    .fill(Color.white.opacity(0.35))
+                                    .frame(width: 2.5, height: 2.5)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                                    .padding(6)
+                            }
+                            .transition(.opacity)
+                        }
+
+                        if isAwake {
+                            HStack(spacing: 3) {
+                                Image(systemName: "applelogo")
+                                    .font(.system(size: 3.5))
+                                Text("Finder").fontWeight(.semibold)
+                                Text("File").foregroundStyle(.white.opacity(0.68))
+                                Text("Edit").foregroundStyle(.white.opacity(0.68))
+                                Spacer(minLength: 3)
+                                Image(systemName: "wifi")
+                                Image(systemName: "battery.75")
+                                Text("9:41").font(.system(size: 3.5, weight: .medium, design: .rounded))
+                            }
+                            .font(.system(size: 3.5, weight: .regular))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.35))
+                            .transition(.opacity)
+
+                            if windowsAreRestored {
+                                HStack(spacing: 6) {
+                                    MiniXcodeWindow(width: 68, height: 56, isRestoredGlow: isRestoredGlow)
+                                        .matchedGeometryEffect(id: "restored-xcode-window", in: windowNamespace)
+                                        .zIndex(1)
+
+                                    MiniSafariWindow(width: 68, height: 56, isRestoredGlow: isRestoredGlow)
+                                        .matchedGeometryEffect(id: "restored-safari-window", in: windowNamespace)
+                                        .zIndex(1)
+                                }
+                                .padding(.top, 10)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .padding(2.5)
+            }
+            .frame(width: 168, height: 104)
+            .shadow(
+                color: isAwake ? Color(red: 0.3, green: 0.2, blue: 0.6).opacity(0.28) : Color.black.opacity(0.3),
+                radius: isAwake ? 9 : 6,
+                y: 4
+            )
+
+            // Aluminum Stand Neck with Cable Pass-Through Hole
+            ZStack {
+                Rectangle()
+                    .fill(LinearGradient(
+                        colors: [Color(white: 0.42), Color(white: 0.24)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ))
+                    .frame(width: 16, height: 18)
+
+                // Circular cable pass-through hole
+                Circle()
+                    .fill(Color.black.opacity(0.45))
+                    .frame(width: 5, height: 5)
+                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+                    .offset(y: 1)
+            }
+
+            // Weighted Aluminum Foot Plate
+            RoundedRectangle(cornerRadius: 2)
+                .fill(LinearGradient(
+                    colors: [Color(white: 0.40), Color(white: 0.26)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ))
+                .frame(width: 52, height: 3.5)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 2)
+                        .stroke(Color.white.opacity(0.25), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(0.3), radius: 3, y: 2)
+        }
+    }
+}
+
+private struct RealisticThunderboltCable: View {
+    let isConnected: Bool
+    let isPulseActive: Bool
+    let pulseProgress: CGFloat
+
+    private var plugOffset: CGFloat { isConnected ? 0 : 9 }
+    private var cableSag: CGFloat { isConnected ? 4.2 : 8 }
+    private var cableShape: ThunderboltCableShape {
+        ThunderboltCableShape(sag: cableSag, plugOffset: plugOffset)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                cableShape
+                    .stroke(Color.black.opacity(0.76), style: StrokeStyle(lineWidth: 3.4, lineCap: .round))
+
+                cableShape
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color(white: 0.48), Color(white: 0.22)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
+                    )
+
+                if isPulseActive {
+                    Circle()
+                        .fill(Color.yellow)
+                        .frame(width: 3.8, height: 3.8)
+                        .shadow(color: Color.yellow.opacity(0.85), radius: 3)
+                        .position(pulsePoint(in: geometry.size))
+                }
+
+                connector
+                    .position(x: 6.65 + plugOffset, y: geometry.size.height * 0.57)
+            }
+        }
+        .frame(width: 52, height: 28)
+        .accessibilityHidden(true)
+    }
+
+    private var connector: some View {
+        HStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 0.55, style: .continuous)
+                .fill(Color(white: 0.72))
+                .frame(width: 2.6, height: 3.5)
+
+            RoundedRectangle(cornerRadius: 1.3, style: .continuous)
+                .fill(LinearGradient(
+                    colors: [Color(white: 0.48), Color(white: 0.28)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 1.3, style: .continuous)
+                        .stroke(Color.white.opacity(0.28), lineWidth: 0.45)
+                }
+                .frame(width: 8.8, height: 5.1)
+
+            RoundedRectangle(cornerRadius: 0.85, style: .continuous)
+                .fill(Color(white: 0.22))
+                .frame(width: 2.1, height: 3.6)
+        }
+    }
+
+    private func pulsePoint(in size: CGSize) -> CGPoint {
+        let progress = min(max(pulseProgress, 0), 1)
+        let start = CGPoint(x: 13.5, y: size.height * 0.57)
+        let end = CGPoint(x: size.width, y: size.height * 0.72)
+        let control = CGPoint(x: size.width * 0.6, y: min(size.height - 1, start.y + cableSag))
+        let inverse = 1 - progress
+
+        return CGPoint(
+            x: inverse * inverse * start.x + 2 * inverse * progress * control.x + progress * progress * end.x,
+            y: inverse * inverse * start.y + 2 * inverse * progress * control.y + progress * progress * end.y
+        )
+    }
+}
+
+private struct ThunderboltCableShape: Shape {
+    var sag: CGFloat
+    var plugOffset: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(sag, plugOffset) }
+        set {
+            sag = newValue.first
+            plugOffset = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let start = CGPoint(x: 13.5 + plugOffset, y: rect.height * 0.57)
+        let end = CGPoint(x: rect.width, y: rect.height * 0.72)
+        let control = CGPoint(x: rect.width * 0.6, y: min(rect.height - 1, start.y + sag))
+        var path = Path()
+        path.move(to: start)
+        path.addQuadCurve(to: end, control: control)
+        return path
+    }
+}
+
+private enum RestoreAnimationPhase: Equatable {
+    case lidClosed          // MacBook lid fully shut
+    case lidOpening         // lid is animating open
+    case disconnected       // lid open, cable not connected
+    case connecting
+    case displayWaking
+    case restoringWindows
+    case restored
+    case settled
+    case returningWindows
+    case displaySleeping
+    case lidClosing         // lid animating back shut
+
+    var cableIsConnected: Bool {
+        switch self {
+        case .disconnected, .lidClosed, .lidOpening, .lidClosing:
+            return false
+        default:
+            return true
+        }
+    }
+
+    var displayIsAwake: Bool {
+        switch self {
+        case .displayWaking, .restoringWindows, .restored, .settled, .returningWindows:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var windowsAreRestored: Bool {
+        switch self {
+        case .restoringWindows, .restored, .settled:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var showsRestoreGlow: Bool { self == .restored }
+
+    /// 0 = fully closed, 1 = fully open
+    var lidOpenFraction: CGFloat {
+        switch self {
+        case .lidClosed:    return 0
+        case .lidOpening:   return 1   // animated via withAnimation
+        case .lidClosing:   return 0   // animated via withAnimation
+        default:            return 1
+        }
     }
 }
 
 struct OBIllustrationRestore: View {
-    @State private var connected = false
-    @State private var flash = false
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @Namespace private var windowNamespace
+    @State private var phase: RestoreAnimationPhase = .lidClosed
+    @State private var lidOpenFraction: CGFloat = 0
+    @State private var pulseIsActive = false
+    @State private var pulseProgress: CGFloat = 0
+    @State private var animationTask: Task<Void, Never>?
 
     var body: some View {
-        HStack(spacing: 18) {
-            obMonitor(tint: .accentColor, lit: connected)
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 24))
-                .foregroundStyle(flash ? .yellow : Color.primary.opacity(0.25))
-                .scaleEffect(flash ? 1.25 : 1.0)
-                .animation(.spring(response: 0.28, dampingFraction: 0.6), value: flash)
-            obMonitor(tint: .blue, lit: connected)
+        ZStack {
+            TourDesktopBackground()
+
+            HStack(alignment: .bottom, spacing: 0) {
+                RealisticMacBookMockup(
+                    windowsAreRestored: phase.windowsAreRestored,
+                    windowNamespace: windowNamespace,
+                    lidOpenFraction: lidOpenFraction
+                )
+
+                RealisticThunderboltCable(
+                    isConnected: phase.cableIsConnected,
+                    isPulseActive: pulseIsActive,
+                    pulseProgress: pulseProgress
+                )
+
+                RealisticStudioDisplayMockup(
+                    isAwake: phase.displayIsAwake,
+                    windowsAreRestored: phase.windowsAreRestored,
+                    isRestoredGlow: phase.showsRestoreGlow,
+                    windowNamespace: windowNamespace
+                )
+            }
         }
-        .onAppear {
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.7)) { connected = true }
-            withAnimation(.easeInOut(duration: 0.22).delay(1.0)) { flash = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-                withAnimation { flash = false }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: replayAnimation)
+        .onAppear(perform: startAnimationLoop)
+        .onDisappear {
+            animationTask?.cancel()
+            animationTask = nil
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Plug In, Pick Up Where You Left Off".localized(appLanguage))
+        .accessibilityHint("Replay Tour".localized(appLanguage))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: Text("Replay Tour".localized(appLanguage))) {
+            replayAnimation()
+        }
+    }
+
+    @MainActor
+    private func startAnimationLoop() {
+        animationTask?.cancel()
+        phase = .lidClosed
+        lidOpenFraction = 0
+        pulseIsActive = false
+        pulseProgress = 0
+
+        animationTask = Task { @MainActor in
+            guard await wait(for: 0.5) else { return }
+
+            while !Task.isCancelled {
+                await lidOpenSequence()
+                guard !Task.isCancelled else { return }
+
+                await connectSequence()
+                guard !Task.isCancelled else { return }
+                guard await wait(for: 2.4) else { return }
+
+                await disconnectSequence()
+                guard !Task.isCancelled else { return }
+
+                await lidCloseSequence()
+                guard !Task.isCancelled else { return }
+                guard await wait(for: 1.0) else { return }
             }
         }
     }
 
-    @ViewBuilder
-    func obMonitor(tint: Color, lit: Bool) -> some View {
-        VStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.black.opacity(0.7))
-                .frame(width: 84, height: 58)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(tint.opacity(lit ? 0.5 : 0.12))
-                        .frame(width: 64, height: 38)
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(lit ? tint.opacity(0.8) : Color.primary.opacity(0.18), lineWidth: 1)
-                }
-                .animation(.spring(response: 0.4, dampingFraction: 0.7), value: lit)
-            Image(systemName: "display")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
+    @MainActor
+    private func replayAnimation() {
+        animationTask?.cancel()
+        animationTask = Task { @MainActor in
+            // Close lid first if open
+            if lidOpenFraction > 0 {
+                await disconnectSequence()
+                await lidCloseSequence()
+                guard !Task.isCancelled else { return }
+                guard await wait(for: 0.35) else { return }
+            }
+
+            await lidOpenSequence()
+            guard !Task.isCancelled else { return }
+
+            await connectSequence()
+            guard !Task.isCancelled else { return }
+            guard await wait(for: 2.4) else { return }
+
+            await disconnectSequence()
+            guard !Task.isCancelled else { return }
+
+            await lidCloseSequence()
+            guard !Task.isCancelled else { return }
+            startAnimationLoop()
+        }
+    }
+
+    // MARK: Lid open — controlled hinge motion without bouncing past the stop
+    @MainActor
+    private func lidOpenSequence() async {
+        phase = .lidOpening
+        withAnimation(.easeInOut(duration: 0.78)) {
+            lidOpenFraction = 1
+        }
+        guard await wait(for: 0.86) else { return }
+        phase = .disconnected
+    }
+
+    // MARK: Lid close
+    @MainActor
+    private func lidCloseSequence() async {
+        phase = .lidClosing
+        withAnimation(.easeInOut(duration: 0.68)) {
+            lidOpenFraction = 0
+        }
+        guard await wait(for: 0.74) else { return }
+        phase = .lidClosed
+    }
+
+    @MainActor
+    private func connectSequence() async {
+        withAnimation(.spring(response: 0.46, dampingFraction: 0.8)) {
+            phase = .connecting
+        }
+
+        guard await wait(for: 0.22) else { return }
+        pulseProgress = 0
+        pulseIsActive = true
+        withAnimation(.easeInOut(duration: 0.72)) {
+            pulseProgress = 1
+        }
+
+        guard await wait(for: 0.72) else { return }
+        withAnimation(.easeOut(duration: 0.56)) {
+            pulseIsActive = false
+            phase = .displayWaking
+        }
+
+        guard await wait(for: 0.4) else { return }
+        withAnimation(.spring(response: 0.74, dampingFraction: 0.84)) {
+            phase = .restoringWindows
+        }
+
+        guard await wait(for: 0.76) else { return }
+        withAnimation(.easeInOut(duration: 0.28)) {
+            phase = .restored
+        }
+
+        guard await wait(for: 0.45) else { return }
+        withAnimation(.easeOut(duration: 0.32)) {
+            phase = .settled
+        }
+    }
+
+    @MainActor
+    private func disconnectSequence() async {
+        withAnimation(.spring(response: 0.72, dampingFraction: 0.86)) {
+            phase = .returningWindows
+        }
+
+        guard await wait(for: 0.72) else { return }
+        withAnimation(.easeInOut(duration: 0.58)) {
+            phase = .displaySleeping
+        }
+
+        guard await wait(for: 0.58) else { return }
+        withAnimation(.spring(response: 0.46, dampingFraction: 0.82)) {
+            phase = .disconnected
+            pulseIsActive = false
+        }
+    }
+
+    private func wait(for seconds: Double) async -> Bool {
+        do {
+            let milliseconds = Int64(seconds * 1_000)
+            try await Task.sleep(for: .milliseconds(milliseconds))
+            return !Task.isCancelled
+        } catch {
+            return false
         }
     }
 }
 
-struct OBIllustrationCustomize: View {
-    @State private var sel = 0
-    @State private var ticker: Timer?
-    let swatches: [Color] = [.accentColor, .purple, .blue, .green, .orange, .pink]
-
-    var body: some View {
-        VStack(spacing: 18) {
-            HStack(spacing: 10) {
-                ForEach(swatches.indices, id: \.self) { i in
-                    Circle()
-                        .fill(swatches[i])
-                        .frame(width: sel == i ? 30 : 20, height: sel == i ? 30 : 20)
-                        .shadow(color: swatches[i].opacity(0.55), radius: sel == i ? 8 : 0)
-                        .animation(.spring(response: 0.3, dampingFraction: 0.65), value: sel)
-                }
-            }
-
-            HStack(spacing: 8) {
-                ForEach([("EN", true), ("עב", false)], id: \.0) { (label, active) in
-                    Text(label)
-                        .font(.system(size: 11, weight: .bold))
-                        .frame(width: 36, height: 24)
-                        .background(active ? Color.accentColor : Color.primary.opacity(0.1))
-                        .foregroundStyle(active ? .white : .secondary)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-            }
-        }
-        .onAppear {
-            ticker = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { _ in
-                withAnimation { sel = (sel + 1) % swatches.count }
-            }
-        }
-        .onDisappear { ticker?.invalidate() }
-    }
-}
-
-// MARK: - Menu Bar Illustration
+// MARK: - Slide 3: Menu Bar Two Powers Illustration
 
 struct OBIllustrationMenuBar: View {
     @State private var phase: Int = 0
@@ -904,8 +3225,12 @@ struct OBIllustrationMenuBar: View {
         ZStack(alignment: .top) {
             // Mock menu bar strip
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.black.opacity(0.60))
-                .frame(width: 260, height: 26)
+                .fill(Color.black.opacity(0.65))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 0.75)
+                )
+                .frame(width: 356, height: 26)
                 .overlay(alignment: .trailing) {
                     HStack(spacing: 8) {
                         Text("9:41")
@@ -921,12 +3246,10 @@ struct OBIllustrationMenuBar: View {
                     .padding(.trailing, 10)
                 }
                 .overlay(alignment: .leading) {
-                    HStack(spacing: 6) {
-                        Circle().fill(.red).frame(width: 6, height: 6)
-                        Circle().fill(.yellow).frame(width: 6, height: 6)
-                        Circle().fill(.green).frame(width: 6, height: 6)
-                    }
-                    .padding(.leading, 10)
+                    Image(systemName: "applelogo")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.leading, 12)
                 }
                 .overlay {
                     ZStack {
@@ -1022,7 +3345,7 @@ struct OBIllustrationMenuBar: View {
             mouseDiagram
                 .offset(y: 65)
         }
-        .frame(width: 260, height: 180)
+        .frame(width: 356, height: 180)
         .onAppear { startAnimation() }
         .onDisappear { ticker?.invalidate() }
     }
@@ -1107,135 +3430,87 @@ struct OBIllustrationMenuBar: View {
     }
 }
 
-// MARK: - Desktop Toggle Illustration — Enhanced High-Detail Desktop
+// MARK: - Slide 4: Desktop Toggle Illustration (⌘D Automatic Hide & Restore)
 
 struct OBIllustrationDesktopToggle: View {
     @State private var showWindows = true
     @State private var keysLit = false
     @State private var timer: Timer?
+    @State private var isMounted = false
 
     var body: some View {
-        VStack(spacing: 8) {
-            // High-detail macOS Monitor Screen — fits cleanly inside 300x180 card
-            ZStack(alignment: .bottom) {
-                // macOS Wallpaper Gradient Background
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: [Color(nsColor: .systemIndigo).opacity(0.7), Color(nsColor: .systemPurple).opacity(0.5), Color(nsColor: .systemBlue).opacity(0.6)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    ))
-                    .frame(width: 220, height: 112)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 0.75)
-                    )
+        ZStack {
+            MacDesktopPlainSurface()
 
-                // Wallpaper Desktop Label
-                VStack(spacing: 1) {
-                    Image(systemName: "macwindow")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.white.opacity(0.35))
-                    Text("macOS Desktop")
-                        .font(.system(size: 8, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.35))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // A quiet, authentic menu bar anchors the desktop and makes the scene
+            // immediately read as macOS instead of a generic dark canvas.
+            MacDesktopMenuBar(showsSystemStatus: false)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-                // Windows layer — smooth scale and offset transitions
-                ZStack {
-                    // Window 1: Safari / Browser (Top Left)
-                    macOSWindowView(title: "Safari", color: .accentColor, icon: "compass.drawing")
-                        .frame(width: 98, height: 60)
-                        .offset(x: -40, y: -22)
-
-                    // Window 2: Notes / App (Top Right)
-                    macOSWindowView(title: "Notes", color: .orange, icon: "note.text")
-                        .frame(width: 84, height: 52)
-                        .offset(x: 44, y: -18)
-
-                    // Window 3: Editor (Bottom Center)
-                    macOSWindowView(title: "Editor", color: .purple, icon: "chevron.left.forwardslash.chevron.right")
-                        .frame(width: 110, height: 44)
-                        .offset(x: 0, y: 18)
-                }
-                .scaleEffect(showWindows ? 1.0 : 0.45)
-                .offset(y: showWindows ? 0 : 60)
-                .opacity(showWindows ? 1.0 : 0.0)
-                .animation(.spring(response: 0.48, dampingFraction: 0.76), value: showWindows)
-
-                // macOS Dock Bar at the bottom
-                HStack(spacing: 5) {
-                    Circle().fill(Color.blue).frame(width: 6, height: 6)
-                    Circle().fill(Color.orange).frame(width: 6, height: 6)
-                    Circle().fill(Color.purple).frame(width: 6, height: 6)
-                    Circle().fill(Color.green).frame(width: 6, height: 6)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2.5)
-                .background(.ultraThinMaterial, in: Capsule())
-                .padding(.bottom, 4)
+            // Desktop files sit in the trailing column, as they do on a real Mac.
+            VStack(alignment: .center, spacing: 6) {
+                MacDesktopFileIcon(
+                    title: "Client Project",
+                    kind: .presentation
+                )
+                MacDesktopFileIcon(
+                    title: "Pitch Deck",
+                    kind: .pdf
+                )
+                MacDesktopFileIcon(
+                    title: "Screenshots",
+                    kind: .screenshotsFolder
+                )
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(.top, 30)
+            .padding(.trailing, 9)
 
-            // Key Caps: ⌘ + D
-            HStack(spacing: 5) {
-                keyCap("⌘", lit: keysLit)
-                Text("+")
-                    .font(.system(size: 10, weight: .light))
-                    .foregroundStyle(.secondary)
-                keyCap("D", lit: keysLit)
-            }
-        }
-        .frame(width: 280, height: 160)
-        .onAppear { startAnimationLoop() }
-        .onDisappear { timer?.invalidate() }
-    }
-
-    @ViewBuilder
-    private func macOSWindowView(title: String, color: Color, icon: String) -> some View {
-        VStack(spacing: 0) {
-            // Window Titlebar with Traffic Lights (🔴 🟡 🟢)
-            HStack(spacing: 3) {
-                Circle().fill(Color.red.opacity(0.85)).frame(width: 4.5, height: 4.5)
-                Circle().fill(Color.yellow.opacity(0.85)).frame(width: 4.5, height: 4.5)
-                Circle().fill(Color.green.opacity(0.85)).frame(width: 4.5, height: 4.5)
-
-                Text(title)
-                    .font(.system(size: 6.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .padding(.leading, 1)
-
-                Spacer()
-
-                Image(systemName: icon)
-                    .font(.system(size: 5.5))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-            .padding(.horizontal, 5)
-            .padding(.vertical, 3)
-            .background(Color.black.opacity(0.4))
-
-            // Window Content Body
+            // Real windows remain square to the desktop and use a clear front-to-back
+            // stack, which is how macOS communicates focus and depth.
             ZStack {
-                color.opacity(0.35)
-                VStack(spacing: 2.5) {
-                    RoundedRectangle(cornerRadius: 1.5).fill(Color.white.opacity(0.3)).frame(height: 2.5)
-                    RoundedRectangle(cornerRadius: 1.5).fill(Color.white.opacity(0.2)).frame(height: 2.5)
-                    RoundedRectangle(cornerRadius: 1.5).fill(Color.white.opacity(0.15)).frame(height: 2.5)
-                }
-                .padding(4)
+                RealisticSafariWindow(
+                    width: 162,
+                    height: 84,
+                    urlText: "apple.com",
+                    tabTitle: "Apple"
+                )
+                .offset(x: -42, y: -24)
+
+                RealisticXcodeWindow(width: 150, height: 74, fileName: "App.swift")
+                    .offset(x: 24, y: 30)
             }
+            .scaleEffect(showWindows ? 1.0 : 0.96)
+            .offset(y: showWindows ? 0 : 9)
+            .opacity(showWindows ? 1.0 : 0.0)
+            .animation(.easeInOut(duration: 0.34), value: showWindows)
+
+            MacDesktopDock()
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, 7)
+
+            // The shortcut is an instructional overlay, not a fake desktop widget.
+            MacShortcutBadge(isActive: keysLit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.top, 28)
+                .padding(.leading, 10)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(color.opacity(0.6), lineWidth: 0.5)
-        )
-        .shadow(color: color.opacity(0.2), radius: 5, x: 0, y: 2)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Desktop toggle demonstration")
+        .onAppear {
+            isMounted = true
+            startLoop()
+        }
+        .onDisappear {
+            isMounted = false
+            timer?.invalidate()
+            timer = nil
+        }
     }
 
-    private func startAnimationLoop() {
+    private func startLoop() {
         runCycle()
         timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
             runCycle()
@@ -1243,729 +3518,1072 @@ struct OBIllustrationDesktopToggle: View {
     }
 
     private func runCycle() {
-        // Step 1: press the toggle shortcut -> hide windows
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            withAnimation(.easeInOut(duration: 0.15)) { keysLit = true }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-            withAnimation(.easeInOut(duration: 0.15)) { keysLit = false }
-            withAnimation(.spring(response: 0.48, dampingFraction: 0.76)) { showWindows = false }
-        }
+        guard isMounted else { return }
 
-        // Step 2: press it again -> restore windows
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
-            withAnimation(.easeInOut(duration: 0.15)) { keysLit = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            guard isMounted else { return }
+            triggerToggle()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.1) {
-            withAnimation(.easeInOut(duration: 0.15)) { keysLit = false }
-            withAnimation(.spring(response: 0.48, dampingFraction: 0.76)) { showWindows = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
+            guard isMounted else { return }
+            triggerToggle()
         }
     }
 
-    @ViewBuilder
-    private func keyCap(_ label: String, lit: Bool) -> some View {
-        Text(label)
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(lit ? .white : .primary)
-            .frame(width: 30, height: 24)
-            .background(lit ? Color.accentColor : Color.primary.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .shadow(color: lit ? Color.accentColor.opacity(0.55) : .clear, radius: 5, x: 0, y: 2)
-            .scaleEffect(lit ? 1.05 : 1.0)
-            .animation(.easeInOut(duration: 0.15), value: lit)
+    private func triggerToggle() {
+        guard isMounted else { return }
+
+        withAnimation(.easeInOut(duration: 0.15)) { keysLit = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            guard isMounted else { return }
+            withAnimation(.easeInOut(duration: 0.15)) { keysLit = false }
+            withAnimation(.spring(response: 0.52, dampingFraction: 0.74)) { showWindows.toggle() }
+        }
     }
 }
 
-// MARK: - Cmd+Shift+R Illustration — Sequential Feature Scene Animations
-
-struct OBIllustrationCmdShiftR: View {
-    @State private var activeScene: Int = 0 // 0: Safari Reader Mode, 1: Chrome Hard Reload, 2: Video PiP
-    @State private var keysLit = false
-    @State private var isActionTriggered = false
-    @State private var reloadSpin: Double = 0
-    @State private var loadProgress: CGFloat = 0
-    @State private var timer: Timer?
-    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
-
-    private let scenes: [(id: Int, title: String, shortTitle: String, icon: String, color: Color)] = [
-        (0, "Reading Mode", "Reader", "book.pages.fill", .blue),
-        (1, "Hard Reload", "Reload", "arrow.clockwise",  .orange),
-        (2, "Picture-in-Picture", "PiP", "pip", .purple),
-    ]
+private struct CmdShiftRBrowserWindow: View {
+    let activeScene: Int
+    let phase: Int
+    let reloadSpin: Double
+    let sceneColor: Color
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Keys top bar: ⌘ + ⇧ + R
-            HStack(spacing: 5) {
-                keyCap("⌘", lit: keysLit)
-                Text("+").font(.system(size: 10, weight: .light)).foregroundStyle(.secondary)
-                keyCap("⇧", lit: keysLit)
-                Text("+").font(.system(size: 10, weight: .light)).foregroundStyle(.secondary)
-                keyCap("R", lit: keysLit)
-            }
+        VStack(spacing: 0) {
+            browserToolbar
+            browserTabBar
 
-            // Main scene container — tall and wide
+            Rectangle()
+                .fill(sceneColor.opacity(phase == 2 ? 0.95 : 0.45))
+                .frame(height: 1.5)
+                .scaleEffect(x: phase == 0 ? 0.28 : (phase == 1 ? 0.68 : 1.0), y: 1, anchor: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(.easeOut(duration: 0.45), value: phase)
+
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(.sRGB, red: 0.08, green: 0.08, blue: 0.10, opacity: 1))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(scenes[activeScene].color.opacity(0.35), lineWidth: 1.2)
-                    )
-
                 switch activeScene {
                 case 0:
-                    safariReaderModeScene
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .leading).combined(with: .opacity)
-                        ))
+                    readerBody
                 case 1:
-                    chromeHardReloadScene
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .leading).combined(with: .opacity)
-                        ))
+                    reloadBody
                 default:
-                    videoPipScene
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .leading).combined(with: .opacity)
-                        ))
-                }
-            }
-            .frame(width: 290, height: 150)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .shadow(color: scenes[activeScene].color.opacity(0.25), radius: 8, x: 0, y: 4)
-
-            // Scene Selector Pills
-            HStack(spacing: 6) {
-                ForEach(scenes, id: \.id) { sc in
-                    HStack(spacing: 4) {
-                        Image(systemName: sc.icon)
-                            .font(.system(size: 8, weight: .bold))
-                        Text(sc.shortTitle.localized(appLanguage))
-                            .font(.system(size: 9, weight: .semibold))
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(sc.id == activeScene ? sc.color : Color.primary.opacity(0.1))
-                    .foregroundStyle(sc.id == activeScene ? .white : .secondary)
-                    .clipShape(Capsule())
-                    .animation(.spring(response: 0.35, dampingFraction: 0.75), value: activeScene)
-                }
-            }
-        }
-        .frame(width: 320, height: 220)
-        .onAppear { startSceneLoop() }
-        .onDisappear { timer?.invalidate() }
-    }
-
-    // MARK: Scene 1: Safari Reader Mode Transformation
-
-    private var safariReaderModeScene: some View {
-        VStack(spacing: 0) {
-            // Safari Header Bar
-            HStack(spacing: 5) {
-                Circle().fill(Color.red.opacity(0.85)).frame(width: 6, height: 6)
-                Circle().fill(Color.yellow.opacity(0.85)).frame(width: 6, height: 6)
-                Circle().fill(Color.green.opacity(0.85)).frame(width: 6, height: 6)
-
-                HStack(spacing: 4) {
-                    Image(systemName: "book.fill")
-                        .font(.system(size: 8))
-                        .foregroundStyle(isActionTriggered ? Color.blue : .secondary)
-                        .animation(.easeInOut(duration: 0.2), value: isActionTriggered)
-                    Text("safari.com/article")
-                        .font(.system(size: 8))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Color.white.opacity(0.08), in: Capsule())
-
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Color.black.opacity(0.45))
-
-            // Body Area
-            ZStack {
-                if isActionTriggered {
-                    // Clean Reader Mode
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack {
-                            Image(systemName: "book.pages.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.blue)
-                            Text("Reader Mode")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.blue)
-                            Spacer()
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.blue)
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.75)).frame(height: 6)
-                            RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.55)).frame(height: 6)
-                            RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.55)).frame(width: 140, height: 6)
-                            RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.4)).frame(height: 6)
-                        }
-                    }
-                    .padding(14)
-                    .transition(.scale(scale: 0.95).combined(with: .opacity))
-                } else {
-                    // Cluttered web page with sidebar ads
-                    HStack(alignment: .top, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            RoundedRectangle(cornerRadius: 2).fill(Color.blue.opacity(0.5)).frame(height: 12)
-                            RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.3)).frame(height: 5)
-                            RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.3)).frame(height: 5)
-                            RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.2)).frame(height: 5)
-                            RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.2)).frame(height: 5)
-                        }
-                        VStack(spacing: 4) {
-                            RoundedRectangle(cornerRadius: 3).fill(Color.orange.opacity(0.35)).frame(width: 52, height: 20)
-                            RoundedRectangle(cornerRadius: 3).fill(Color.pink.opacity(0.3)).frame(width: 52, height: 14)
-                            RoundedRectangle(cornerRadius: 3).fill(Color.green.opacity(0.25)).frame(width: 52, height: 14)
-                        }
-                    }
-                    .padding(14)
-                    .transition(.opacity)
+                    videoBody
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .id(activeScene)
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.28), value: activeScene)
         }
-    }
-
-    // MARK: Scene 2: Chrome Hard Reload
-
-    private var chromeHardReloadScene: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                HStack(spacing: 5) {
-                    Circle().fill(Color.red.opacity(0.85)).frame(width: 6, height: 6)
-                    Circle().fill(Color.yellow.opacity(0.85)).frame(width: 6, height: 6)
-                    Circle().fill(Color.green.opacity(0.85)).frame(width: 6, height: 6)
-
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(isActionTriggered ? Color.orange : .secondary)
-                        .rotationEffect(.degrees(reloadSpin))
-                        .animation(.easeInOut(duration: 0.4), value: reloadSpin)
-
-                    HStack(spacing: 0) {
-                        Text("chrome://")
-                            .font(.system(size: 8, design: .monospaced))
-                            .foregroundStyle(.secondary.opacity(0.7))
-                        Text(isActionTriggered ? "done" : "loading...")
-                            .font(.system(size: 8, design: .monospaced))
-                            .foregroundStyle(isActionTriggered ? .orange : .secondary)
-                            .animation(.easeInOut(duration: 0.2), value: isActionTriggered)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.08), in: Capsule())
-
-                    Spacer()
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color.black.opacity(0.45))
-
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Rectangle().fill(Color.white.opacity(0.05)).frame(height: 3)
-                        Rectangle()
-                            .fill(LinearGradient(colors: [.orange, .yellow], startPoint: .leading, endPoint: .trailing))
-                            .frame(width: isActionTriggered ? geo.size.width : 0, height: 3)
-                            .animation(.easeInOut(duration: 0.65), value: isActionTriggered)
-                    }
-                }
-                .frame(height: 3)
-            }
-
-            VStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    ZStack {
-                        Circle()
-                            .fill(isActionTriggered ? Color.orange.opacity(0.2) : Color.clear)
-                            .frame(width: 28, height: 28)
-                        Image(systemName: isActionTriggered ? "bolt.fill" : "arrow.clockwise.circle")
-                            .font(.system(size: 14))
-                            .foregroundStyle(isActionTriggered ? .orange : .secondary)
-                    }
-                    .animation(.spring(response: 0.3), value: isActionTriggered)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(isActionTriggered ? "Cache Cleared!" : "Hard Reload…")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(isActionTriggered ? .orange : .primary)
-                            .animation(.easeInOut(duration: 0.2), value: isActionTriggered)
-                        Text(isActionTriggered ? "Fresh assets loaded from server" : "Bypassing browser cache")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-
-                VStack(spacing: 4) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(isActionTriggered ? Color.white.opacity(0.6) : Color.white.opacity(0.2))
-                        .frame(height: 6)
-                        .animation(.easeInOut(duration: 0.4).delay(0.1), value: isActionTriggered)
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(isActionTriggered ? Color.white.opacity(0.45) : Color.white.opacity(0.15))
-                        .frame(height: 6)
-                        .animation(.easeInOut(duration: 0.4).delay(0.2), value: isActionTriggered)
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(isActionTriggered ? Color.white.opacity(0.3) : Color.white.opacity(0.1))
-                        .frame(width: 160, height: 6)
-                        .animation(.easeInOut(duration: 0.4).delay(0.3), value: isActionTriggered)
-                }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    // MARK: Scene 3: Video Picture-in-Picture
-
-    private var videoPipScene: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                HStack(spacing: 5) {
-                    Circle().fill(Color.red.opacity(0.85)).frame(width: 6, height: 6)
-                    Circle().fill(Color.yellow.opacity(0.85)).frame(width: 6, height: 6)
-                    Circle().fill(Color.green.opacity(0.85)).frame(width: 6, height: 6)
-                    Spacer()
-                    Text("Video Player")
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
-                    Spacer()
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color.black.opacity(0.45))
-
-                ZStack {
-                    LinearGradient(
-                        colors: [Color.purple.opacity(0.45), Color.indigo.opacity(0.3), Color.blue.opacity(0.2)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
-                    VStack(spacing: 6) {
-                        Image(systemName: isActionTriggered ? "pip.fill" : "play.circle.fill")
-                            .font(.system(size: 26))
-                            .foregroundStyle(.white.opacity(isActionTriggered ? 0.35 : 0.7))
-                            .animation(.easeInOut(duration: 0.3), value: isActionTriggered)
-                        if isActionTriggered {
-                            Text("Moved to PiP")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.4))
-                                .transition(.opacity)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-
-            if isActionTriggered {
-                VStack(spacing: 3) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "pip.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.white)
-                        Spacer()
-                        Text("PiP")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-                    ZStack {
-                        LinearGradient(
-                            colors: [Color.purple, Color.indigo],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-                .padding(6)
-                .frame(width: 88, height: 58)
-                .background(Color(.sRGB, red: 0.12, green: 0.05, blue: 0.18, opacity: 0.96))
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color.purple.opacity(0.7), lineWidth: 1.2)
+        .frame(width: 300, height: 140)
+        .background(Color(red: 0.09, green: 0.10, blue: 0.13))
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(
+                    phase == 2 ? sceneColor.opacity(0.72) : Color.white.opacity(0.16),
+                    lineWidth: phase == 2 ? 1.1 : 0.7
                 )
-                .shadow(color: Color.purple.opacity(0.6), radius: 10, x: 0, y: 4)
-                .offset(x: 80, y: 38)
-                .transition(.scale(scale: 0.5, anchor: .bottomTrailing).combined(with: .opacity))
+        }
+        .shadow(color: .black.opacity(0.42), radius: 13, x: 0, y: 7)
+        .shadow(color: phase == 2 ? sceneColor.opacity(0.26) : .clear, radius: 12, x: 0, y: 0)
+    }
+
+    private var browserToolbar: some View {
+        HStack(spacing: 5) {
+            RealisticTrafficLights(size: 5)
+
+            Image(systemName: "chevron.left")
+                .font(.system(size: 6, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.40))
+            Image(systemName: "chevron.right")
+                .font(.system(size: 6, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.22))
+
+            HStack(spacing: 4) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 5.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.54))
+
+                Text(activeScene == 1 ? "dashboard.example.com" : "apple.com/news")
+                    .font(.system(size: 6.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 6, weight: .semibold))
+                    .foregroundStyle(activeScene == 1 && phase > 0 ? sceneColor : .white.opacity(0.48))
+                    .rotationEffect(.degrees(activeScene == 1 ? reloadSpin : 0))
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3.5)
+            .background(Color.white.opacity(0.10), in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(Color.white.opacity(0.12), lineWidth: 0.55)
+            }
+
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 6.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.55))
+            Image(systemName: "plus")
+                .font(.system(size: 6.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color(red: 0.15, green: 0.16, blue: 0.19))
+    }
+
+    private var browserTabBar: some View {
+        HStack(spacing: 5) {
+            HStack(spacing: 3) {
+                Image(systemName: "safari.fill")
+                    .font(.system(size: 5.5))
+                    .foregroundStyle(.blue)
+
+                Text(activeScene == 2 ? "Weekend video" : (activeScene == 1 ? "Project dashboard" : "Apple News"))
+                    .font(.system(size: 6, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.86))
+                    .lineLimit(1)
+
+                Image(systemName: "xmark")
+                    .font(.system(size: 4.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "plus")
+                .font(.system(size: 6, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.42))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color(red: 0.11, green: 0.12, blue: 0.15))
+    }
+
+    private var readerBody: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("APPLE NEWS")
+                .font(.system(size: 6, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(Color.blue)
+
+            Text(phase == 2 ? "The future of focused work" : "Preparing Reader Mode…")
+                .font(.system(size: 13, weight: .bold, design: .serif))
+                .foregroundStyle(Color(red: 0.10, green: 0.11, blue: 0.14))
+                .lineLimit(2)
+
+            if phase == 2 {
+                Text("A calmer way to keep every window exactly where you need it.")
+                    .font(.system(size: 6.5, weight: .regular, design: .serif))
+                    .foregroundStyle(Color.black.opacity(0.62))
+                    .lineLimit(2)
+            } else {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.black.opacity(0.12))
+                    .frame(width: 126, height: 3)
+            }
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 4, height: 4)
+                Text(phase == 2 ? "Reader Mode" : "⌘⇧R is working")
+                    .font(.system(size: 5.5, weight: .semibold))
+                    .foregroundStyle(Color.black.opacity(0.52))
             }
         }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(red: 0.96, green: 0.95, blue: 0.92))
     }
 
-    // MARK: Animation Loop Controller
+    private var reloadBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(
+                        LinearGradient(
+                            colors: [.orange, .yellow.opacity(0.80)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 26, height: 26)
+                    .overlay {
+                        Image(systemName: phase == 2 ? "bolt.fill" : "arrow.clockwise")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .rotationEffect(.degrees(phase == 2 ? 0 : reloadSpin))
+                    }
 
-    private func startSceneLoop() {
-        runCycle()
-        timer = Timer.scheduledTimer(withTimeInterval: 4.5, repeats: true) { _ in
-            runCycle()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Project dashboard")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.90))
+                    Text(phase == 2 ? "Hard reload complete" : "Refreshing the latest data…")
+                        .font(.system(size: 6))
+                        .foregroundStyle(.white.opacity(0.54))
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 5) {
+                dashboardMetric(title: "WINDOWS", value: "3")
+                dashboardMetric(title: "RESTORED", value: phase == 2 ? "100%" : "—")
+                dashboardMetric(title: "SYNC", value: phase == 2 ? "LIVE" : "…")
+            }
+
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.white.opacity(phase == 2 ? 0.36 : 0.16))
+                .frame(height: 3)
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.orange.opacity(0.90))
+                        .frame(width: phase == 2 ? 206 : 92, height: 3)
+                }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(red: 0.10, green: 0.12, blue: 0.16))
+    }
+
+    private func dashboardMetric(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 4.5, weight: .bold))
+                .foregroundStyle(.white.opacity(0.40))
+            Text(value)
+                .font(.system(size: 8, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.86))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+
+    private var videoBody: some View {
+        ZStack {
+            alpineVideoArtwork
+
+            LinearGradient(
+                colors: [.black.opacity(0.14), .clear, .black.opacity(0.36)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("FIELD NOTES")
+                    .font(.system(size: 5.5, weight: .bold))
+                    .tracking(0.8)
+                    .foregroundStyle(.white.opacity(0.62))
+                Text("A weekend in the Alps")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Spacer()
+                HStack(spacing: 4) {
+                    Image(systemName: phase == 2 ? "pip.fill" : "play.fill")
+                        .font(.system(size: 7, weight: .bold))
+                    Text(phase == 2 ? "Picture-in-Picture" : "Ready to play")
+                        .font(.system(size: 5.5, weight: .medium))
+                }
+                .foregroundStyle(.white.opacity(0.74))
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            pictureInPictureWindow
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .padding(.trailing, 9)
+                .padding(.bottom, 7)
+                .scaleEffect(phase == 2 ? 1.0 : 0.72, anchor: .bottomTrailing)
+                .opacity(phase == 2 ? 1.0 : 0.0)
+                .animation(.spring(response: 0.42, dampingFraction: 0.82), value: phase)
         }
     }
 
-    private func runCycle() {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            isActionTriggered = false
-            loadProgress = 0
+    private var pictureInPictureWindow: some View {
+        ZStack {
+            alpineVideoArtwork
+
+            LinearGradient(
+                colors: [.black.opacity(0.08), .clear, .black.opacity(0.76)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            Image(systemName: phase == 2 ? "pause.fill" : "play.fill")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .background(.black.opacity(0.42), in: Circle())
+                .overlay {
+                    Circle().stroke(.white.opacity(0.34), lineWidth: 0.6)
+                }
+
+            VStack(spacing: 0) {
+                HStack(spacing: 3) {
+                    Text("FIELD NOTES")
+                        .font(.system(size: 4.5, weight: .bold, design: .rounded))
+                        .tracking(0.45)
+                        .foregroundStyle(.white.opacity(0.96))
+
+                    Spacer(minLength: 0)
+
+                    Image(systemName: "pip.exit")
+                        .font(.system(size: 6, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 14, height: 14)
+                        .background(.black.opacity(0.38), in: Circle())
+                }
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 3) {
+                    Text("1:24")
+                        .font(.system(size: 4.7, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.94))
+
+                    GeometryReader { geometry in
+                        Capsule()
+                            .fill(.white.opacity(0.40))
+                            .overlay(alignment: .leading) {
+                                Capsule()
+                                    .fill(.white)
+                                    .frame(width: geometry.size.width * 0.38)
+                            }
+                    }
+                    .frame(height: 2)
+
+                    Text("4:32")
+                        .font(.system(size: 4.7, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.78))
+
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.system(size: 5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                }
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 5)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            withAnimation(.easeInOut(duration: 0.15)) { keysLit = true }
+        .frame(width: 128, height: 72)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(Color.white.opacity(0.44), lineWidth: 0.7)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-            withAnimation(.easeInOut(duration: 0.15)) { keysLit = false }
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.72)) {
-                isActionTriggered = true
+        .shadow(color: .black.opacity(0.48), radius: 8, x: 0, y: 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Picture-in-Picture video preview: A weekend in the Alps")
+        .accessibilityHidden(phase != 2)
+    }
+
+    private var alpineVideoArtwork: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let height = geometry.size.height
+
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.34, green: 0.61, blue: 0.77),
+                        Color(red: 0.82, green: 0.76, blue: 0.68)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                Circle()
+                    .fill(Color(red: 1.0, green: 0.88, blue: 0.67).opacity(0.86))
+                    .frame(width: height * 0.34, height: height * 0.34)
+                    .position(x: width * 0.76, y: height * 0.26)
+
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: height * 0.73))
+                    path.addLine(to: CGPoint(x: width * 0.18, y: height * 0.43))
+                    path.addLine(to: CGPoint(x: width * 0.31, y: height * 0.59))
+                    path.addLine(to: CGPoint(x: width * 0.49, y: height * 0.18))
+                    path.addLine(to: CGPoint(x: width * 0.67, y: height * 0.58))
+                    path.addLine(to: CGPoint(x: width * 0.82, y: height * 0.38))
+                    path.addLine(to: CGPoint(x: width, y: height * 0.65))
+                    path.addLine(to: CGPoint(x: width, y: height))
+                    path.addLine(to: CGPoint(x: 0, y: height))
+                    path.closeSubpath()
+                }
+                .fill(Color(red: 0.38, green: 0.52, blue: 0.62))
+
+                Path { path in
+                    path.move(to: CGPoint(x: width * 0.49, y: height * 0.18))
+                    path.addLine(to: CGPoint(x: width * 0.42, y: height * 0.34))
+                    path.addLine(to: CGPoint(x: width * 0.48, y: height * 0.31))
+                    path.addLine(to: CGPoint(x: width * 0.52, y: height * 0.38))
+                    path.addLine(to: CGPoint(x: width * 0.55, y: height * 0.32))
+                    path.closeSubpath()
+
+                    path.move(to: CGPoint(x: width * 0.82, y: height * 0.38))
+                    path.addLine(to: CGPoint(x: width * 0.77, y: height * 0.48))
+                    path.addLine(to: CGPoint(x: width * 0.82, y: height * 0.45))
+                    path.addLine(to: CGPoint(x: width * 0.87, y: height * 0.50))
+                    path.closeSubpath()
+                }
+                .fill(Color.white.opacity(0.88))
+
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: height * 0.88))
+                    path.addLine(to: CGPoint(x: width * 0.23, y: height * 0.63))
+                    path.addLine(to: CGPoint(x: width * 0.40, y: height * 0.75))
+                    path.addLine(to: CGPoint(x: width * 0.61, y: height * 0.45))
+                    path.addLine(to: CGPoint(x: width * 0.80, y: height * 0.69))
+                    path.addLine(to: CGPoint(x: width, y: height * 0.55))
+                    path.addLine(to: CGPoint(x: width, y: height))
+                    path.addLine(to: CGPoint(x: 0, y: height))
+                    path.closeSubpath()
+                }
+                .fill(LinearGradient(
+                    colors: [Color(red: 0.27, green: 0.45, blue: 0.47), Color(red: 0.16, green: 0.34, blue: 0.35)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ))
+
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: height * 0.88))
+                    path.addCurve(
+                        to: CGPoint(x: width, y: height * 0.79),
+                        control1: CGPoint(x: width * 0.30, y: height * 0.74),
+                        control2: CGPoint(x: width * 0.69, y: height * 0.93)
+                    )
+                    path.addLine(to: CGPoint(x: width, y: height))
+                    path.addLine(to: CGPoint(x: 0, y: height))
+                    path.closeSubpath()
+                }
+                .fill(LinearGradient(
+                    colors: [Color(red: 0.12, green: 0.30, blue: 0.29), Color(red: 0.06, green: 0.21, blue: 0.22)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ))
+
+                ForEach(0..<5, id: \.self) { index in
+                    let treePositions: [CGFloat] = [0.04, 0.13, 0.24, 0.87, 0.96]
+                    let treeHeight = height * (index == 2 ? 0.38 : 0.31)
+
+                    AlpineTreeSilhouette()
+                        .fill(Color(red: 0.05, green: 0.18, blue: 0.19).opacity(0.92))
+                        .frame(width: treeHeight * 0.48, height: treeHeight)
+                        .position(x: width * treePositions[index], y: height * 0.88)
+                }
+            }
+            .frame(width: width, height: height)
+            .clipped()
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct AlpineTreeSilhouette: Shape {
+    func path(in rect: CGRect) -> Path {
+        let centerX = rect.midX
+        let top = rect.minY
+        let height = rect.height
+        let halfWidth = rect.width * 0.5
+
+        return Path { path in
+            path.move(to: CGPoint(x: centerX, y: top))
+            path.addLine(to: CGPoint(x: centerX - rect.width * 0.28, y: top + height * 0.38))
+            path.addLine(to: CGPoint(x: centerX - rect.width * 0.13, y: top + height * 0.38))
+            path.addLine(to: CGPoint(x: centerX - halfWidth, y: top + height * 0.72))
+            path.addLine(to: CGPoint(x: centerX - rect.width * 0.21, y: top + height * 0.70))
+            path.addLine(to: CGPoint(x: rect.minX, y: top + height * 0.98))
+            path.addLine(to: CGPoint(x: rect.maxX, y: top + height * 0.98))
+            path.addLine(to: CGPoint(x: centerX + rect.width * 0.21, y: top + height * 0.70))
+            path.addLine(to: CGPoint(x: centerX + halfWidth, y: top + height * 0.72))
+            path.addLine(to: CGPoint(x: centerX + rect.width * 0.13, y: top + height * 0.38))
+            path.addLine(to: CGPoint(x: centerX + rect.width * 0.28, y: top + height * 0.38))
+            path.closeSubpath()
+        }
+    }
+}
+
+// MARK: - Slide 5: ⌘⇧R Post-Restore Action — Automatic Hands-Free Showcase
+
+struct OBIllustrationCmdShiftR: View {
+    @State private var phase: Int = 0
+    @State private var activeScene: Int = 0
+    @State private var keysLit = false
+    @State private var reloadSpin: Double = 0
+    @State private var timer: Timer?
+    @State private var isMounted = false
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+
+    private let scenes: [(id: Int, title: String, icon: String, color: Color)] = [
+        (0, "Reader Mode", "book.pages.fill", .blue),
+        (1, "Hard Reload", "arrow.clockwise", .orange),
+        (2, "Picture-in-Picture", "pip.fill", .purple)
+    ]
+
+    private var sceneColor: Color { scenes[activeScene].color }
+
+    var body: some View {
+        ZStack {
+            MacDesktopPlainSurface()
+
+            VStack(spacing: 5) {
+                // Keycaps — light up during the automatic restore sequence.
+                HStack(spacing: 4) {
+                    TourKeyCap(label: "⌘", lit: keysLit, width: 26, height: 22, activeColor: sceneColor)
+                    Text("+").font(.system(size: 8, weight: .light)).foregroundStyle(.white.opacity(0.5))
+                    TourKeyCap(label: "⇧", lit: keysLit, width: 26, height: 22, activeColor: sceneColor)
+                    Text("+").font(.system(size: 8, weight: .light)).foregroundStyle(.white.opacity(0.5))
+                    TourKeyCap(label: "R", lit: keysLit, width: 26, height: 22, activeColor: sceneColor)
+                    Text("fires automatically".localized(appLanguage))
+                        .font(.system(size: 7.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.58))
+                        .padding(.leading, 4)
+                }
+
+                CmdShiftRBrowserWindow(
+                    activeScene: activeScene,
+                    phase: phase,
+                    reloadSpin: reloadSpin,
+                    sceneColor: sceneColor
+                )
+
+                // Interactive scene tabs
+                HStack(spacing: 7) {
+                    ForEach(scenes, id: \.id) { sc in
+                        Button {
+                            withAnimation(.spring(response: 0.35)) { activeScene = sc.id }
+                            runAutoSequence()
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: sc.icon)
+                                    .font(.system(size: 7.5, weight: .bold))
+                                Text(sc.title.localized(appLanguage))
+                                    .font(.system(size: 8, weight: .semibold))
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3.5)
+                            .background(activeScene == sc.id ? sc.color : Color.white.opacity(0.1), in: Capsule())
+                            .foregroundStyle(activeScene == sc.id ? .white : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Text(sc.title.localized(appLanguage)))
+                    }
+                }
+            }
+            .padding(.bottom, 3)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture { if isMounted { runAutoSequence() } }
+        .onAppear { isMounted = true; startLoop() }
+        .onDisappear {
+            isMounted = false
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+
+    private func startLoop() {
+        runAutoSequence()
+        timer = Timer.scheduledTimer(withTimeInterval: 5.5, repeats: true) { _ in
+            activeScene = (activeScene + 1) % 3
+            runAutoSequence()
+        }
+    }
+
+    private func runAutoSequence() {
+        guard isMounted else { return }
+        withAnimation(.easeInOut(duration: 0.2)) { phase = 0 }
+        keysLit = false
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            guard isMounted else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { phase = 0 }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            guard isMounted else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                phase = 1
+                keysLit = true
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            guard isMounted else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                phase = 2
+                keysLit = false
                 if activeScene == 1 { reloadSpin += 360 }
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.6) {
-            withAnimation(.easeInOut(duration: 0.45)) {
-                isActionTriggered = false
-                activeScene = (activeScene + 1) % 3
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func keyCap(_ label: String, lit: Bool) -> some View {
-        Text(label)
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
-            .foregroundStyle(lit ? .white : .primary)
-            .frame(width: 32, height: 28)
-            .background(lit ? scenes[activeScene].color : Color.primary.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .shadow(color: lit ? scenes[activeScene].color.opacity(0.5) : .clear, radius: 6)
-            .animation(.easeInOut(duration: 0.15), value: lit)
     }
 }
 
-// MARK: - Quick Key Restore Illustration (Fn Long-Press & Double-Tap Caps Lock)
-
-// MARK: - Quick Key Restore Illustration (Fn Long-Press & Double-Tap Caps Lock)
+// MARK: - Slide 6: Quick Key Restore (Fn Long-Press & Caps Lock Double-Tap)
 
 struct OBIllustrationQuickKey: View {
-    @State private var mode: Int = 0 // 0: Fn Hold, 1: Caps Lock Double-Tap
+    @State private var mode: Int = 0 // 0: Fn Hold, 1: Caps Lock
     @State private var isHolding = false
     @State private var holdProgress: CGFloat = 0.0
     @State private var isDoubleTapping = false
     @State private var isRestored = false
-    @State private var showPill = false
+    @State private var showNotchPill = false
     @State private var timer: Timer?
+    @State private var isMounted = false
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
 
     var body: some View {
-        VStack(spacing: 10) {
-            // Monitor / Window Screen Display
-            ZStack(alignment: .center) {
-                // Background Desktop Canvas
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: [Color(nsColor: .systemTeal).opacity(0.6), Color(nsColor: .systemBlue).opacity(0.5), Color(nsColor: .systemIndigo).opacity(0.7)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    ))
-                    .frame(width: 220, height: 106)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 0.75)
-                    )
+        ZStack {
+            TourDesktopBackground()
 
-                // Background Outline of Target Window Slot
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    .foregroundStyle(Color.white.opacity(0.35))
-                    .frame(width: 120, height: 72)
+            VStack(spacing: 0) {
+                // Mini floating macOS screen (cause -> effect)
+                ZStack(alignment: .top) {
+                    ZStack(alignment: .top) {
+                        // Clean neutral dark display background (no wallpaper)
+                        Color(white: 0.11)
 
-                // Moving Window
-                macOSWindowView(title: "Safari", color: .accentColor, icon: "compass.drawing")
-                    .frame(width: 120, height: 72)
-                    .offset(x: isRestored ? 0 : -35, y: isRestored ? 0 : 25)
-                    .scaleEffect(isRestored ? 1.0 : 0.88)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.7), value: isRestored)
+                        HStack(spacing: 4) {
+                            Image(systemName: "applelogo").font(.system(size: 4.5))
+                            Spacer()
+                            Text("9:41").font(.system(size: 4.5, weight: .medium))
+                        }
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2.5)
+                        .background(Color.black.opacity(0.35))
 
-                // Notch Restore Notification Pill
-                if showPill {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.green)
-                        Text("Front App Restored".localized(appLanguage))
-                            .font(.system(size: 7.5, weight: .bold))
-                            .foregroundStyle(.white)
+                        ZStack {
+                            if isRestored {
+                                MiniXcodeWindow(width: 136, height: 76, isRestoredGlow: true)
+                                    .offset(x: -44, y: 12)
+                                    .transition(.asymmetric(
+                                        insertion: .scale(scale: 0.7, anchor: .bottomLeading).combined(with: .opacity),
+                                        removal: .opacity
+                                    ))
+                                MiniSafariWindow(width: 124, height: 70, isRestoredGlow: true)
+                                    .offset(x: 52, y: 18)
+                                    .transition(.asymmetric(
+                                        insertion: .scale(scale: 0.7, anchor: .bottomTrailing).combined(with: .opacity),
+                                        removal: .opacity
+                                    ))
+                            } else {
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .strokeBorder(style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+                                    .foregroundStyle(Color.white.opacity(0.20))
+                                    .frame(width: 136, height: 76)
+                                    .offset(x: -44, y: 12)
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .strokeBorder(style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+                                    .foregroundStyle(Color.white.opacity(0.14))
+                                    .frame(width: 124, height: 70)
+                                    .offset(x: 52, y: 18)
+                            }
+                        }
+                        .animation(.spring(response: 0.42, dampingFraction: 0.72), value: isRestored)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 8)
+
+                        if showNotchPill {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 7)).foregroundStyle(.green)
+                                Text("Layout Restored".localized(appLanguage))
+                                    .font(.system(size: 6.5, weight: .bold)).foregroundStyle(.white)
+                            }
+                            .padding(.horizontal, 7).padding(.vertical, 2.5)
+                            .background(Color.black.opacity(0.90), in: Capsule())
+                            .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 0.5))
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .offset(y: 2)
+                        }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.black.opacity(0.85), in: Capsule())
-                    .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .offset(y: -42)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .padding(2)
                 }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 4)
+                .frame(width: 320, height: 126)
+                .background(Color(white: 0.18), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.white.opacity(isRestored ? 0.35 : 0.18), lineWidth: 0.75)
+                )
+                .shadow(color: isRestored ? Color.accentColor.opacity(0.30) : .black.opacity(0.35), radius: isRestored ? 12 : 8, x: 0, y: 4)
+                .animation(.easeInOut(duration: 0.3), value: isRestored)
+                .padding(.top, 4)
 
-            // Realistic 3D Apple Keycap & Progress
-            VStack(spacing: 5) {
-                if mode == 0 {
-                    // Fn Keycap
-                    HStack(spacing: 4) {
-                        Image(systemName: "globe")
-                            .font(.system(size: 9, weight: .medium))
-                        Text("fn")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    }
-                    .foregroundStyle(isHolding ? Color.accentColor : Color.primary.opacity(0.85))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(LinearGradient(
-                                colors: [Color.primary.opacity(isHolding ? 0.18 : 0.10), Color.primary.opacity(isHolding ? 0.24 : 0.15)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(isHolding ? Color.accentColor.opacity(0.8) : Color.primary.opacity(0.2), lineWidth: 1)
-                    )
-                    .shadow(color: isHolding ? Color.accentColor.opacity(0.3) : Color.black.opacity(0.12), radius: isHolding ? 4 : 2, x: 0, y: isHolding ? 0.5 : 2)
-                    .offset(y: isHolding ? 1.5 : 0)
-                    .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHolding)
+                Spacer(minLength: 4)
 
-                    // Linear Hold Progress Bar
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.12))
-                            .frame(width: 58, height: 3.5)
-
-                        Capsule()
-                            .fill(Color.accentColor)
-                            .frame(width: max(0, 58 * holdProgress), height: 3.5)
-                            .animation(.linear(duration: 0.1), value: holdProgress)
-                    }
-                    .opacity(isHolding || holdProgress > 0 ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.15), value: isHolding)
-
-                    // Centered Status Text
-                    Text(isRestored ? "Restored ✓".localized(appLanguage) : (isHolding ? "Holding...".localized(appLanguage) : "Hold Fn to restore".localized(appLanguage)))
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundStyle(isRestored ? Color.green : .secondary)
-
-                } else {
-                    // Caps Lock Keycap
-                    HStack(spacing: 4) {
-                        Image(systemName: "capslock.fill")
-                            .font(.system(size: 9, weight: .medium))
-                        Text("caps lock")
-                            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                    }
-                    .foregroundStyle(isDoubleTapping ? Color.orange : Color.primary.opacity(0.85))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(LinearGradient(
-                                colors: [Color.primary.opacity(isDoubleTapping ? 0.2 : 0.10), Color.primary.opacity(isDoubleTapping ? 0.26 : 0.15)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(isDoubleTapping ? Color.orange.opacity(0.8) : Color.primary.opacity(0.2), lineWidth: 1)
-                    )
-                    .shadow(color: isDoubleTapping ? Color.orange.opacity(0.3) : Color.black.opacity(0.12), radius: isDoubleTapping ? 4 : 2, x: 0, y: isDoubleTapping ? 0.5 : 2)
-                    .offset(y: isDoubleTapping ? 1.5 : 0)
-                    .animation(.spring(response: 0.15, dampingFraction: 0.6), value: isDoubleTapping)
-
-                    // Spacer matching height of progress bar to keep layout vertically locked
-                    Rectangle()
-                        .fill(Color.clear)
-                        .frame(width: 58, height: 3.5)
-
-                    // Centered Status Text
-                    Text(isRestored ? "Restored ✓".localized(appLanguage) : (isDoubleTapping ? "Double Tap".localized(appLanguage) : "Double-tap ⇪ to restore".localized(appLanguage)))
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundStyle(isRestored ? Color.green : .secondary)
-                }
+                // Focused Apple Keyboard Corner Deck (Compact & proportional)
+                QuickKeyMacBookDeck(
+                    mode: mode,
+                    isHolding: isHolding,
+                    holdProgress: holdProgress,
+                    isDoubleTapping: isDoubleTapping,
+                    isRestored: isRestored
+                )
+                .padding(.bottom, 4)
             }
         }
-        .frame(width: 280, height: 175)
-        .onAppear { startAnimationLoop() }
-        .onDisappear { timer?.invalidate() }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture { if isMounted { triggerQuickKey() } }
+        .onAppear { isMounted = true; startLoop() }
+        .onDisappear { isMounted = false; timer?.invalidate() }
     }
 
-
-    @ViewBuilder
-    private func macOSWindowView(title: String, color: Color, icon: String) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 3) {
-                Circle().fill(Color.red.opacity(0.85)).frame(width: 4.5, height: 4.5)
-                Circle().fill(Color.yellow.opacity(0.85)).frame(width: 4.5, height: 4.5)
-                Circle().fill(Color.green.opacity(0.85)).frame(width: 4.5, height: 4.5)
-                Text(title)
-                    .font(.system(size: 7, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .padding(.leading, 1)
-                Spacer()
-                Image(systemName: icon)
-                    .font(.system(size: 6))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-            .padding(.horizontal, 5)
-            .padding(.vertical, 3)
-            .background(Color.black.opacity(0.4))
-
-            ZStack {
-                color.opacity(0.35)
-                VStack(spacing: 3) {
-                    RoundedRectangle(cornerRadius: 1.5).fill(Color.white.opacity(0.35)).frame(height: 3)
-                    RoundedRectangle(cornerRadius: 1.5).fill(Color.white.opacity(0.2)).frame(height: 3)
-                    RoundedRectangle(cornerRadius: 1.5).fill(Color.white.opacity(0.15)).frame(height: 3)
-                }
-                .padding(6)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(color.opacity(0.6), lineWidth: 0.75)
-        )
-        .shadow(color: color.opacity(0.25), radius: 6, x: 0, y: 3)
-    }
-
-    private func startAnimationLoop() {
+    private func startLoop() {
         runCycle()
-        timer = Timer.scheduledTimer(withTimeInterval: 4.5, repeats: true) { _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 4.8, repeats: true) { _ in
+            mode = (mode + 1) % 2
             runCycle()
         }
     }
 
     private func runCycle() {
-        // Reset
+        guard isMounted else { return }
         withAnimation {
             isRestored = false
-            showPill = false
-            holdProgress = 0.0
+            showNotchPill = false
+            holdProgress = 0
             isHolding = false
             isDoubleTapping = false
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            guard isMounted else { return }
+            triggerQuickKey()
+        }
+    }
 
+    private func triggerQuickKey() {
+        guard isMounted else { return }
         if mode == 0 {
-            // Fn Hold Sequence
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                withAnimation(.easeInOut(duration: 0.15)) { isHolding = true }
-                withAnimation(.linear(duration: 1.0)) { holdProgress = 1.0 }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.65)) {
+            withAnimation(.easeInOut(duration: 0.15)) { isHolding = true }
+            withAnimation(.linear(duration: 0.9)) { holdProgress = 1.0 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
+                guard isMounted else { return }
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
                     isRestored = true
-                    showPill = true
+                    showNotchPill = true
+                    isHolding = false
                 }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
-                withAnimation(.easeInOut(duration: 0.2)) { isHolding = false }
             }
         } else {
-            // Caps Lock Double-Tap Sequence
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                withAnimation(.easeInOut(duration: 0.1)) { isDoubleTapping = true }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) {
+            withAnimation(.easeInOut(duration: 0.1)) { isDoubleTapping = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                guard isMounted else { return }
                 withAnimation(.easeInOut(duration: 0.1)) { isDoubleTapping = false }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                guard isMounted else { return }
                 withAnimation(.easeInOut(duration: 0.1)) { isDoubleTapping = true }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
-                withAnimation(.easeInOut(duration: 0.1)) { isDoubleTapping = false }
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.65)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                guard isMounted else { return }
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                    isDoubleTapping = false
                     isRestored = true
-                    showPill = true
+                    showNotchPill = true
                 }
             }
-        }
-
-        // Toggle mode for next iteration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.2) {
-            mode = (mode + 1) % 2
         }
     }
 }
 
-// MARK: - Settings Guide Illustration
+// Focused Apple Keyboard Corner Deck (Bottom-Left Corner Spotlight - Authentic Square Chiclet Keys)
+private struct QuickKeyMacBookDeck: View {
+    let mode: Int
+    let isHolding: Bool
+    let holdProgress: CGFloat
+    let isDoubleTapping: Bool
+    let isRestored: Bool
 
-struct OBIllustrationSettingsGuide: View {
-
-    var activeIndex: Int = 0
-    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    private var fnLit: Bool { mode == 0 && (isHolding || isRestored) }
+    private var capsLit: Bool { mode == 1 && (isDoubleTapping || isRestored) }
 
     var body: some View {
-        VStack(spacing: 5) {
-            obSettingRow(
-                icon: "bolt.fill",
-                color: .orange,
-                title: "Auto-Restore".localized(appLanguage),
-                subtitle: "Triggers on display connect or app open".localized(appLanguage),
-                isActive: activeIndex == 0
-            )
+        ZStack {
+            // Anodized Aluminum Keyboard Unibody Chassis
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(white: 0.36), Color(white: 0.22)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.24), lineWidth: 0.75)
+                )
+                .shadow(color: .black.opacity(0.38), radius: 6, x: 0, y: 3)
 
-            obSettingRow(
-                icon: "keyboard",
-                color: .purple,
-                title: "Desktop Toggle".localized(appLanguage),
-                subtitle: String(format: "%@ to hide or show all windows".localized(appLanguage), HotkeyFormatter.desktopToggleGlyphs),
-                isActive: activeIndex == 1
-            )
+            // Recessed Matte Black Key Well
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(white: 0.08))
+                .padding(3.5)
 
-            obSettingRow(
-                icon: "laptopcomputer",
-                color: .pink,
-                title: "Notch Alerts".localized(appLanguage),
-                subtitle: "Pill notifications for layout events".localized(appLanguage),
-                isActive: activeIndex == 2
-            )
+            // 4 Compact Focused Corner Rows
+            VStack(alignment: .leading, spacing: 2.8) {
+                // Row 1: Tab row (Letter keys Q, W, E are 20x20 squares)
+                HStack(spacing: 2.8) {
+                    FocusedAppleKeycap(label: "tab", width: 44, height: 20)
+                    FocusedAppleKeycap(label: "Q", width: 20, height: 20)
+                    FocusedAppleKeycap(label: "W", width: 20, height: 20)
+                    FocusedAppleKeycap(label: "E", width: 20, height: 20)
+                }
 
-            obSettingRow(
-                icon: "list.bullet.rectangle.portrait",
-                color: .blue,
-                title: "Activity Log Level".localized(appLanguage),
-                subtitle: "Filter which events appear in the log".localized(appLanguage),
-                isActive: activeIndex == 3
-            )
+                // Row 2: Caps Lock Home Row (Spotlight Trigger Key! Letter keys A, S, D are 20x20 squares)
+                HStack(spacing: 2.8) {
+                    FocusedAppleKeycap(
+                        label: "caps lock",
+                        isTrigger: true,
+                        isLit: capsLit,
+                        activeColor: .orange,
+                        isPressed: isDoubleTapping,
+                        width: 48,
+                        height: 20,
+                        showCapsLed: true,
+                        isCapsLedOn: capsLit
+                    )
+                    FocusedAppleKeycap(label: "A", width: 20, height: 20)
+                    FocusedAppleKeycap(label: "S", width: 20, height: 20)
+                    FocusedAppleKeycap(label: "D", width: 20, height: 20)
+                }
+
+                // Row 3: Shift Row (Letter keys Z, X, C are 20x20 squares)
+                HStack(spacing: 2.8) {
+                    FocusedAppleKeycap(label: "shift", width: 54, height: 20)
+                    FocusedAppleKeycap(label: "Z", width: 20, height: 20)
+                    FocusedAppleKeycap(label: "X", width: 20, height: 20)
+                    FocusedAppleKeycap(label: "C", width: 20, height: 20)
+                }
+
+                // Row 4: Modifier Row (Fn / Globe Spotlight Trigger Key!)
+                HStack(spacing: 2.8) {
+                    FocusedAppleKeycap(
+                        label: "fn",
+                        icon: "globe",
+                        isTrigger: true,
+                        isLit: fnLit,
+                        activeColor: .accentColor,
+                        isPressed: isHolding,
+                        width: 27,
+                        height: 20,
+                        holdProgress: fnLit ? holdProgress : 0
+                    )
+                    FocusedAppleKeycap(label: "control", width: 27, height: 20)
+                    FocusedAppleKeycap(label: "option", width: 27, height: 20)
+                    FocusedAppleKeycap(label: "command", icon: "command", width: 36, height: 20)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .frame(width: 144, height: 98)
+    }
+}
+
+// Focused Apple Keycap for Keyboard Corner Spotlight
+private struct FocusedAppleKeycap: View {
+    let label: String
+    var sublabel: String? = nil
+    var icon: String? = nil
+    var isTrigger: Bool = false
+    var isLit: Bool = false
+    var activeColor: Color = .accentColor
+    var isPressed: Bool = false
+    var width: CGFloat = 20
+    var height: CGFloat = 20
+    var showCapsLed: Bool = false
+    var isCapsLedOn: Bool = false
+    var holdProgress: CGFloat = 0.0
+
+    private var keyOpacity: Double {
+        if isTrigger {
+            return isLit ? 1.0 : 0.70
+        }
+        return 0.45
     }
 
-    @ViewBuilder
-    func obSettingRow(icon: String, color: Color, title: String, subtitle: String, isActive: Bool) -> some View {
+    var body: some View {
+        ZStack {
+            // Keycap body
+            RoundedRectangle(cornerRadius: 3.0, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: isLit
+                            ? [activeColor.opacity(0.90), activeColor.opacity(0.65)]
+                            : [Color(white: 0.24), Color(white: 0.14)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3.0, style: .continuous)
+                        .stroke(
+                            isLit ? activeColor.opacity(0.85) : Color.white.opacity(isTrigger ? 0.24 : 0.12),
+                            lineWidth: isLit ? 0.9 : 0.45
+                        )
+                )
+                .shadow(
+                    color: isLit ? activeColor.opacity(0.45) : Color.black.opacity(0.40),
+                    radius: isLit ? 5 : 1.0,
+                    x: 0,
+                    y: isLit ? 0 : 1.0
+                )
+
+            // Content inside keycap
+            ZStack {
+                if showCapsLed {
+                    // Caps Lock key with authentic green LED dot + label
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(isCapsLedOn ? Color(red: 0.25, green: 0.95, blue: 0.35) : Color.white.opacity(0.20))
+                            .frame(width: 2.8, height: 2.8)
+                            .shadow(color: isCapsLedOn ? Color.green : .clear, radius: 3)
+                            .padding(.leading, 3.5)
+
+                        Text("caps lock")
+                            .font(.system(size: 5.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(isLit ? .white : .white.opacity(0.80))
+
+                        Spacer(minLength: 0)
+                    }
+                } else if isTrigger && label == "fn" {
+                    // Fn / Globe key with progress ring
+                    HStack(spacing: 2) {
+                        Image(systemName: icon ?? "globe")
+                            .font(.system(size: 6.5, weight: .medium))
+                            .foregroundStyle(isLit ? .white : .white.opacity(0.80))
+                        Text("fn")
+                            .font(.system(size: 6.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(isLit ? .white : .white.opacity(0.80))
+                    }
+                } else if let icon {
+                    HStack(spacing: 2) {
+                        Image(systemName: icon)
+                            .font(.system(size: 6.5, weight: .semibold))
+                        if width > 30 {
+                            Text("cmd")
+                                .font(.system(size: 5.0, weight: .medium, design: .rounded))
+                        }
+                    }
+                    .foregroundStyle(.white.opacity(0.68))
+                } else if !label.isEmpty {
+                    VStack(spacing: 0.5) {
+                        if let sublabel {
+                            Text(sublabel)
+                                .font(.system(size: 4.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.45))
+                        }
+                        Text(label)
+                            .font(.system(size: label.count > 2 ? 6.0 : 8.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
+                }
+            }
+
+            // Fn circular progress ring
+            if holdProgress > 0 && holdProgress <= 1.0 {
+                Circle()
+                    .trim(from: 0, to: holdProgress)
+                    .stroke(
+                        Color.accentColor,
+                        style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
+                    )
+                    .frame(width: 20, height: 20)
+                    .rotationEffect(.degrees(-90))
+                    .shadow(color: Color.accentColor.opacity(0.8), radius: 3)
+            }
+        }
+        .frame(width: width, height: height)
+        .opacity(keyOpacity)
+        .offset(y: isPressed ? 1.0 : 0)
+        .animation(.spring(response: 0.16, dampingFraction: 0.72), value: isPressed)
+        .animation(.easeInOut(duration: 0.25), value: isLit)
+    }
+}
+
+
+
+
+
+// MARK: - Slide 7: Settings Guide Illustration (Authentic macOS Settings Panel)
+
+struct OBIllustrationSettingsGuide: View {
+    var activeIndex: Int = 0
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            TourDesktopBackground()
+
+            // Mini Notch Alert Preview when Row 2 (Notch Alerts) is selected
+            if activeIndex == 2 {
+                HStack(spacing: 5) {
+                    Image(systemName: "sparkles").font(.system(size: 8)).foregroundStyle(.pink)
+                    Text("Layout Restored · Notch Alert Preview".localized(appLanguage)).font(.system(size: 7.5, weight: .bold)).foregroundStyle(.white)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 3.5)
+                .background(Color.black.opacity(0.88), in: Capsule())
+                .overlay(Capsule().stroke(Color.pink.opacity(0.5), lineWidth: 0.75))
+                .shadow(color: Color.pink.opacity(0.4), radius: 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .frame(maxHeight: .infinity, alignment: .top)
+                .padding(.top, 6)
+            }
+
+            VStack(spacing: 6) {
+                settingRow(icon: "bolt.fill", color: .orange, title: "Auto-Restore".localized(appLanguage), subtitle: "Triggers on display connect or app launch".localized(appLanguage), isActive: activeIndex == 0)
+                settingRow(icon: "keyboard", color: .purple, title: "Desktop Toggle".localized(appLanguage), subtitle: String(format: "%@ to hide or show all windows".localized(appLanguage), HotkeyFormatter.desktopToggleGlyphs), isActive: activeIndex == 1)
+                settingRow(icon: "laptopcomputer", color: .pink, title: "Notch Alerts".localized(appLanguage), subtitle: "Pill notifications for layout events".localized(appLanguage), isActive: activeIndex == 2)
+                settingRow(icon: "list.bullet.rectangle.portrait", color: .blue, title: "Activity Log Level".localized(appLanguage), subtitle: "Filter which events appear in the log".localized(appLanguage), isActive: activeIndex == 3)
+            }
+            .padding(12)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(
+                        colorScheme == .dark ? Color.white.opacity(0.2) : Color.black.opacity(0.12),
+                        lineWidth: 0.8
+                    )
+            }
+            .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 6)
+            .padding(.horizontal, 16)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func settingRow(icon: String, color: Color, title: String, subtitle: String, isActive: Bool) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .foregroundStyle(.white)
                 .font(.system(size: 10, weight: .semibold))
-                .frame(width: 20, height: 20)
+                .frame(width: 22, height: 22)
                 .background(color)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 1.5) {
                 Text(title)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 10.5, weight: .bold))
                     .foregroundStyle(.primary)
                 Text(subtitle)
                     .font(.system(size: 8))
@@ -1978,36 +4596,436 @@ struct OBIllustrationSettingsGuide: View {
             if icon == "list.bullet.rectangle.portrait" {
                 Text(isActive ? "Verbose".localized(appLanguage) : "Necessary".localized(appLanguage))
                     .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.primary.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .foregroundStyle(isActive ? .white : .secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(isActive ? Color.blue : Color.primary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
             } else {
                 Capsule()
-                    .fill(isActive ? Color.accentColor : Color.secondary.opacity(0.3))
-                    .frame(width: 22, height: 12)
+                    .fill(isActive ? color : Color.secondary.opacity(0.3))
+                    .frame(width: 24, height: 13)
                     .overlay(alignment: isActive ? .trailing : .leading) {
                         Circle()
                             .fill(Color.white)
-                            .frame(width: 10, height: 10)
+                            .frame(width: 11, height: 11)
                             .padding(1)
                             .shadow(radius: 0.5)
                     }
+                    .animation(.spring(response: 0.28), value: isActive)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isActive ? Color.accentColor.opacity(0.08) : Color.clear)
-        }
-        .overlay {
-            if isActive {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
-            }
-        }
+        .padding(.horizontal, 10).padding(.vertical, 5.5)
+        .background(isActive ? color.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(isActive ? color.opacity(0.3) : Color.clear, lineWidth: 1))
         .scaleEffect(isActive ? 1.02 : 1.0)
+        .animation(.spring(response: 0.35), value: isActive)
+    }
+}
+
+// MARK: - Slide 8: Interactive Theme & Language Workshop
+
+struct OBIllustrationCustomize: View {
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var activeAccent: Color {
+        themeColor.color(seed: 0)
+    }
+
+    private var accentTextColor: Color {
+        // Galaxy's preview accent is a bright celestial blue in Light Mode,
+        // even though the full app uses a dark cosmic background there.
+        if themeColor.isGalaxy {
+            return .black
+        }
+        return themeColor.onAccentColor(for: colorScheme)
+    }
+
+    private var activeThemeBadgeBackground: Color {
+        themeColor.isGalaxy ? activeAccent : activeAccent.opacity(0.22)
+    }
+
+    var body: some View {
+        ZStack {
+            TourDesktopBackground()
+
+            VStack(spacing: 8) {
+                // Frosted glass Theme Studio card
+                VStack(spacing: 16) {
+                    // 1. Header
+                    HStack(spacing: 8) {
+                        ZStack {
+                            Circle()
+                                .fill(activeAccent.opacity(0.18))
+                                .frame(width: 24, height: 24)
+                            Image(systemName: "paintpalette.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(activeAccent)
+                        }
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Theme & Language".localized(appLanguage))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(.primary)
+                            Text("Affects the entire app live".localized(appLanguage))
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        // Active Theme Indicator Badge
+                        HStack(spacing: 4.5) {
+                            if themeColor.isGalaxy {
+                                Image(systemName: "sparkle")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(accentTextColor)
+                            } else if themeColor == .default {
+                                Image(systemName: "circle.slash")
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(accentTextColor.opacity(0.8))
+                            } else {
+                                Circle()
+                                    .fill(activeAccent)
+                                    .frame(width: 6, height: 6)
+                            }
+
+                            Text(themeColor.rawValue.localized(appLanguage))
+                                .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                                .foregroundStyle(accentTextColor)
+                        }
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3.5)
+                        .background(activeThemeBadgeBackground, in: Capsule())
+                        .overlay(Capsule().stroke(activeAccent.opacity(0.6), lineWidth: 0.8))
+                        .shadow(color: activeAccent.opacity(0.3), radius: 5)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: themeColor)
+                    }
+
+                    // 2. All 11 Color Swatches — larger, with breathing room
+                    HStack(spacing: 5) {
+                        ForEach(ThemeColor.allCases) { theme in
+                            let isSelected = themeColor == theme
+                            let swatchColor = theme.color ?? Color.accentColor
+                            let isDefault = theme == .default
+
+                            Button {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) {
+                                    themeColor = theme
+                                }
+                            } label: {
+                                ZStack {
+                                    if theme.isGalaxy {
+                                        ZStack {
+                                            Circle()
+                                                .fill(
+                                                    LinearGradient(
+                                                        colors: [
+                                                            Color(red: 0.03, green: 0.07, blue: 0.20),
+                                                            Color(red: 0.10, green: 0.24, blue: 0.58),
+                                                            Color(red: 0.82, green: 0.92, blue: 1.00)
+                                                        ],
+                                                        startPoint: .topLeading,
+                                                        endPoint: .bottomTrailing
+                                                    )
+                                                )
+                                                .frame(width: 24, height: 24)
+
+                                            Image(systemName: "sparkle")
+                                                .font(.system(size: 9, weight: .bold))
+                                                .foregroundColor(.white)
+                                                .shadow(color: Color(red: 0.2, green: 0.5, blue: 1.0).opacity(0.8), radius: 2)
+                                        }
+                                    } else if isDefault {
+                                        ZStack {
+                                            Circle()
+                                                .fill(Color.primary.opacity(0.10))
+                                                .frame(width: 24, height: 24)
+                                            Image(systemName: "circle.slash")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                                        }
+                                    } else {
+                                        Circle()
+                                            .fill(swatchColor)
+                                            .frame(width: 24, height: 24)
+                                    }
+
+                                    if isSelected && !isDefault && !theme.isGalaxy {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 9, weight: .black))
+                                            .foregroundStyle(theme.onAccentColor(for: colorScheme))
+                                            .shadow(color: .black.opacity(0.5), radius: 1)
+                                    }
+                                }
+                                .overlay(
+                                    Circle()
+                                        .stroke(
+                                            isSelected
+                                                ? (theme.isGalaxy
+                                                    ? AnyShapeStyle(
+                                                        LinearGradient(
+                                                            colors: [Color.white, Color(red: 0.35, green: 0.65, blue: 1.0)],
+                                                            startPoint: .topLeading,
+                                                            endPoint: .bottomTrailing
+                                                        )
+                                                      )
+                                                : isDefault
+                                                        ? AnyShapeStyle(Color.primary.opacity(0.8))
+                                                        : AnyShapeStyle(swatchColor))
+                                                : AnyShapeStyle(Color.primary.opacity(0.15)),
+                                            lineWidth: isSelected ? 2.5 : 0.8
+                                        )
+                                        .padding(-3)
+                                        .opacity(isSelected ? 1 : 0.5)
+                                )
+                                .scaleEffect(isSelected ? 1.18 : 1.0)
+                                .animation(.spring(response: 0.28, dampingFraction: 0.7), value: isSelected)
+                            }
+                            .buttonStyle(.plain)
+                            .help(theme.rawValue)
+                        }
+                    }
+
+                    // 3. Thin divider
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.1))
+                        .frame(height: 0.5)
+                        .padding(.horizontal, 4)
+
+                    // 4. Language Selection Strip
+                    HStack(spacing: 8) {
+                        Image(systemName: "globe")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(activeAccent)
+
+                        Text("Language")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+
+                        Spacer()
+
+                        HStack(spacing: 5) {
+                            languageButton(title: "System", lang: .auto)
+                            languageButton(title: "English", lang: .english)
+                            languageButton(title: "עברית", lang: .hebrew)
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(activeAccent.opacity(0.4), lineWidth: 1)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: activeAccent)
+                )
+                .shadow(color: Color.black.opacity(0.3), radius: 12, x: 0, y: 4)
+            }
+            .padding(.horizontal, 12)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func languageButton(title: String, lang: AppLanguage) -> some View {
+        let isSelected = appLanguage == lang
+        return Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                appLanguage = lang
+            }
+        } label: {
+            Text(title)
+                .font(.system(size: 8.5, weight: isSelected ? .bold : .medium))
+                .foregroundStyle(isSelected ? accentTextColor : Color.secondary)
+                .padding(.horizontal, 6.5)
+                .padding(.vertical, 3)
+                .background {
+                    if isSelected {
+                        Capsule().fill(activeAccent)
+                    } else {
+                        Capsule().fill(Color.primary.opacity(0.08))
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Layout Mode Picker
+
+struct OBIllustrationModePicker: View {
+    @State private var selectedMode: Bool? = nil // nil = nothing chosen yet; true = autoSave; false = sessions
+    @State private var glowPulse = false
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+
+    private var manager: WindowManager { WindowManager.shared }
+
+    var body: some View {
+        ZStack {
+            TourDesktopBackground()
+
+            VStack(spacing: 12) {
+                HStack(spacing: 12) {
+                    modeCard(
+                        isAutoLayout: true,
+                        icon: "clock.arrow.circlepath",
+                        title: "Auto Layout",
+                        accentColor: Color(red: 0.18, green: 0.62, blue: 1.0),
+                        bullets: [
+                            ("wand.and.sparkles", "Records your layout automatically"),
+                            ("display.2", "Restores after sleep, quit or reboot"),
+                            ("chart.bar.fill", "Timeline of all your positions"),
+                        ]
+                    )
+
+                    modeCard(
+                        isAutoLayout: false,
+                        icon: "folder.badge.gearshape",
+                        title: "Saved Sessions",
+                        accentColor: Color(red: 0.55, green: 0.38, blue: 1.0),
+                        bullets: [
+                            ("camera.viewfinder", "You save snapshots when you want"),
+                            ("tag.fill", "Named layouts for different setups"),
+                            ("keyboard", "Restore with Fn or ⇪ shortcut"),
+                        ]
+                    )
+                }
+
+                if selectedMode == nil {
+                    Text("Tap a card to activate your preferred mode")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onAppear {
+            // Reflect current state
+            selectedMode = manager.store.autoSaveEnabled ? true : false
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                glowPulse = true
+            }
+        }
+    }
+
+    private func modeCard(
+        isAutoLayout: Bool,
+        icon: String,
+        title: String,
+        accentColor: Color,
+        bullets: [(String, String)]
+    ) -> some View {
+        let isSelected = selectedMode == isAutoLayout
+        return Button {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) {
+                selectedMode = isAutoLayout
+            }
+            manager.setAutoSaveEnabled(isAutoLayout)
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                // Icon + title row
+                HStack(spacing: 9) {
+                    ZStack {
+                        Circle()
+                            .fill(accentColor.opacity(isSelected ? 0.25 : 0.12))
+                            .frame(width: 32, height: 32)
+                        Image(systemName: icon)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(accentColor)
+                    }
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(title.localized(appLanguage))
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if isSelected {
+                            Text("Active")
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(accentColor)
+                                .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                        }
+                    }
+                    .layoutPriority(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Checkmark when selected
+                        ZStack {
+                            Circle()
+                                .fill(isSelected ? accentColor : Color.primary.opacity(0.08))
+                                .frame(width: 18, height: 18)
+                            if isSelected {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 9, weight: .black))
+                                .foregroundStyle(.black)
+                                .transition(.scale(scale: 0.5).combined(with: .opacity))
+                        }
+                    }
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+                }
+
+                // Bullet points
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(bullets, id: \.1) { bullet in
+                        HStack(spacing: 6) {
+                            Image(systemName: bullet.0)
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(isSelected ? accentColor : Color.secondary)
+                                .frame(width: 13)
+
+                            Text(bullet.1.localized(appLanguage))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(isSelected ? Color.primary.opacity(0.85) : Color.secondary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .layoutPriority(1)
+                        }
+                    }
+                }
+                .padding(.leading, 2)
+
+                // Select button at bottom
+                Text(isSelected ? "Selected ✓" : "Select")
+                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(isSelected ? accentColor : Color.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule().fill(isSelected ? accentColor.opacity(0.18) : Color.primary.opacity(0.06))
+                    )
+                    .overlay(
+                        Capsule().stroke(
+                            isSelected ? accentColor.opacity(0.7) : Color.primary.opacity(0.12),
+                            lineWidth: 0.8
+                        )
+                    )
+            }
+            .padding(12)
+            .background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(
+                        isSelected ? accentColor.opacity(glowPulse ? 0.85 : 0.5) : Color.primary.opacity(0.12),
+                        lineWidth: isSelected ? 1.5 : 0.75
+                    )
+            )
+            .shadow(
+                color: isSelected ? accentColor.opacity(0.35) : .black.opacity(0.15),
+                radius: isSelected ? 12 : 6,
+                x: 0, y: 3
+            )
+            .scaleEffect(isSelected ? 1.02 : 1.0)
+            .animation(.spring(response: 0.35, dampingFraction: 0.72), value: isSelected)
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
     }
 }

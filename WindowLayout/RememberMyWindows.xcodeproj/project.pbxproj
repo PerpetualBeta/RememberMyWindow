@@ -34,6 +34,7 @@
 		A1000022 /* Sounds in Resources */ = {isa = PBXBuildFile; fileRef = A2000022 /* Sounds */; };
 		A1000023 /* en.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A2000023 /* en.lproj */; };
 		A1000024 /* he.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A2000024 /* he.lproj */; };
+		A1000028 /* OnboardingMainWindow.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000028 /* OnboardingMainWindow.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -64,6 +65,7 @@
 		A2000022 /* Sounds */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sounds; sourceTree = "<group>"; };
 		A2000023 /* en.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = en.lproj; sourceTree = "<group>"; };
 		A2000024 /* he.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = he.lproj; sourceTree = "<group>"; };
+		A2000028 /* OnboardingMainWindow.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = OnboardingMainWindow.png; sourceTree = "<group>"; };
 		A3000001 /* RememberMyWindows.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RememberMyWindows.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -116,6 +118,7 @@
 				A2000022 /* Sounds */,
 				A2000023 /* en.lproj */,
 				A2000024 /* he.lproj */,
+				A2000028 /* OnboardingMainWindow.png */,
 			);
 			path = WindowLayout;
 			sourceTree = "<group>";

@@ -2,6 +2,39 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v14.8] — 2026-09-27
+
+### 🪄 "Snap, Sleek, Settled"
+
+#### 🖥️ Onboarding Glow-Up
+- **MacBook Pro 14″ M4 Mockup** — Completely redrawn as a native SwiftUI front-elevation vector: accurate `118×78 pt` Liquid Retina XDR lid, razor-thin Space Black bezels, edge-to-edge black glass, and a precise aluminium unibody base. No more generic grey rectangles.
+- **Lid Open & Close Animation** — A physics-spring open (rotates from closed → upright in 3D) and a smooth forward-fold close mirror how a real MacBook wakes and sleeps. Opacity fades sync with the lid angle for a natural sleep/wake glow.
+- **Wider Splash-Screen Menu Bars** — All three onboarding illustration menu bars (`Save`, `Live`, `MenuBar`) now span the full card width at `356 pt`, eliminating the stubby clipped look.
+
+#### 🎨 Interface & Theme Polish
+- **Smarter Badge Colors** — "Active", "Full", "Foreground", and session-type badges in the layouts list now use `.primary` foreground, adapting cleanly to any accent color and Dark/Light mode instead of hard-coded greens and indigos.
+- **App Name Never Truncated** — Window rows now give the app name `layoutPriority(1)` with `.lineLimit(1)` so long titles no longer crowd the action buttons.
+- **Row Controls on Demand** — The ⌘⇧R, Bring-to-Front, and Delete buttons in window rows are removed from layout entirely when inactive (not just hidden), giving the app name full width. They fade back with `.snappy` animation on hover.
+- **Theme-Aware Bring-to-Front** — The Bring-to-Front circle uses the current `ThemeColor` accent and picks a correct foreground via `onAccentColor(for:)` — Galaxy always uses white text; bright accents like yellow always use black.
+
+#### 🏗️ Architecture
+- **`minimalVisualAnimations` Preference** — New per-app motion preference (separate from system Reduce Motion) that strips non-essential animations globally. Onboarding and the Feature Tour opt back in via `.fullVisualAnimations()`.
+- **`MainWindowSymbolAnimation` Respects Motion Pref** — SF Symbol effects (wiggle, flip, breathe) are skipped when the minimal-animation preference is active.
+- **`LayoutPreviewView` Sequential Window Reveal** — Opt-in `animateWindowReveal` mode staggers windows into their saved positions one-by-one on appear; falls back to a static layout when minimal animations are on.
+- **`onAccentColor(for:)` on `ThemeColor`** — New helper that returns a legible foreground (`.black` or `.white`) for content rendered directly on the accent swatch for each theme.
+- **`AppThemeColorSchemeModifier`** — Forces `.dark` color scheme for Galaxy theme surfaces only, keeping other themes faithful to the system appearance.
+
+#### 🐛 Bug Fixes (from remote)
+- **Notch Panel Memory Leak** — `NotchNotificationWindow` now releases its `contentView` on close, preventing the `dotPulse` animation from keeping a strong reference cycle alive.
+- **Post-Unlock Restore (Once, Per-Display)** — Window restore after screen unlock now fires exactly once and only for displays whose frames have actually settled, using `displayChangeGeneration` to abandon stale restore attempts.
+
+#### ⚙️ Build & App Lifecycle
+- **Arrow Cursor Override on Launch** — App delegate suppresses the beach-ball cursor during the startup window-server scan with a balanced `NSCursor.arrow.push/pop`.
+- **Smarter "X ago" Formatting** — The relative-time formatter now uses `AutoLayoutHeroCard.dayDisplayThreshold` as the hour/day crossover boundary instead of a magic `86_400` constant.
+- **Settings Window Taller** — Settings sheet height bumped `620 → 650 pt` to accommodate the expanded Feature Tour section.
+
+---
+
 ## [v14.6] — 2026-09-14
 
 ### 🛠️ "Polish & Reliability"

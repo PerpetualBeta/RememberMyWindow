@@ -2,6 +2,7 @@
 import SwiftUI
 import AppKit
 import CoreGraphics
+import Combine
 import IOKit.hid
 
 @main
@@ -12,6 +13,10 @@ struct RememberMyWindowsApp: App {
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
 
     init() {
+        UserDefaults.standard.register(defaults: [
+            "minimalVisualAnimations": true
+        ])
+
         let langStr = UserDefaults.standard.string(forKey: "appLanguage") ?? "system"
         if langStr == "en" {
             UserDefaults.standard.set(["en"], forKey: "AppleLanguages")
@@ -302,6 +307,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
     private var lastFrontmostAppID: String?
+    private var windowServerCursorCancellable: AnyCancellable?
+    private var hasWindowServerCursorOverride = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Enforce single instance: If another copy of RememberMyWindows is already running, activate it and terminate this new instance
@@ -330,6 +337,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         setupStatusItem()
         setupWindowObservers()
+        setupWindowServerCursorOverride()
 
         // Capture/show the SwiftUI window immediately so the UI is responsive
         DispatchQueue.main.async {
@@ -427,7 +435,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        endWindowServerCursorOverride()
         WindowManager.shared.stopTracking()
+    }
+
+    // MARK: - WindowServer launch feedback
+
+    private func setupWindowServerCursorOverride() {
+        windowServerCursorCancellable = WindowManager.shared.$isWindowServerInitializing
+            .removeDuplicates()
+            .sink { [weak self] isInitializing in
+                Task { @MainActor [weak self] in
+                    if isInitializing {
+                        self?.beginWindowServerCursorOverride()
+                    } else {
+                        self?.endWindowServerCursorOverride()
+                    }
+                }
+            }
+    }
+
+    /// Keeps the app's pointer familiar while its own startup scan is running.
+    /// This is intentionally scoped and balanced; macOS may still show its
+    /// beach-ball cursor if the process is genuinely unresponsive.
+    private func beginWindowServerCursorOverride() {
+        guard !hasWindowServerCursorOverride else { return }
+        NSCursor.arrow.push()
+        hasWindowServerCursorOverride = true
+    }
+
+    private func endWindowServerCursorOverride() {
+        guard hasWindowServerCursorOverride else { return }
+        NSCursor.pop()
+        hasWindowServerCursorOverride = false
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -857,7 +897,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let f = DateComponentsFormatter()
         f.unitsStyle = .full
         f.maximumUnitCount = 1
-        f.allowedUnits = seconds < 3600 ? [.minute] : (seconds < 86_400 ? [.hour] : [.day])
+        f.allowedUnits = seconds < 3600
+            ? [.minute]
+            : (seconds <= AutoLayoutHeroCard.dayDisplayThreshold ? [.hour] : [.day])
         let spelled = f.string(from: seconds) ?? ""
         guard !spelled.isEmpty else { return lz("just now") }
         return String(format: lz("%@ ago"), spelled)

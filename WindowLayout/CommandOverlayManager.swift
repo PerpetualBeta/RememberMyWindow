@@ -142,6 +142,7 @@ struct CommandOverlayView: View {
     let appName: String
     
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     
     // Entrance state
     @State private var appeared = false
@@ -181,11 +182,16 @@ struct CommandOverlayView: View {
     private var accentColor: Color {
         themeColor.color(seed: 1)
     }
+
+    private var shouldReduceMotion: Bool {
+        accessibilityReduceMotion
+    }
     
     var body: some View {
         ZStack {
-            // ── Background effects: Radial glow + expanding shockwave rings with dissolve mask ──
-            ZStack {
+            if !shouldReduceMotion {
+                // ── Background effects: Radial glow + expanding shockwave rings with dissolve mask ──
+                ZStack {
                 // Radial glow: accent colour at centre, fully clear at edges
                 RadialGradient(
                     gradient: Gradient(stops: [
@@ -243,8 +249,8 @@ struct CommandOverlayView: View {
                             .blur(radius: 0.3)
                     }
                 }
-            }
-            .mask(
+                }
+                .mask(
                 // Smooth radial dissolve mask so rings & glow fade seamlessly towards square bounds
                 RadialGradient(
                     gradient: Gradient(stops: [
@@ -258,7 +264,8 @@ struct CommandOverlayView: View {
                     startRadius: 0,
                     endRadius: 225
                 )
-            )
+                )
+            }
             
             // ── Main content: keycaps + app label ──
             VStack(spacing: 12) {
@@ -266,23 +273,23 @@ struct CommandOverlayView: View {
                     FloatingKeyCapView(
                         symbol: "⌘",
                         accentColor: accentColor,
-                        shimmer: shimmer,
-                        yOffset: key1Y - bobOffset * 1.0,
-                        opacity: key1Opacity
+                        shimmer: shouldReduceMotion ? 0 : shimmer,
+                        yOffset: shouldReduceMotion ? 0 : key1Y - bobOffset * 1.0,
+                        opacity: shouldReduceMotion ? 1.0 : key1Opacity
                     )
                     FloatingKeyCapView(
                         symbol: "⇧",
                         accentColor: accentColor,
-                        shimmer: shimmer,
-                        yOffset: key2Y - bobOffset * 0.7,
-                        opacity: key2Opacity
+                        shimmer: shouldReduceMotion ? 0 : shimmer,
+                        yOffset: shouldReduceMotion ? 0 : key2Y - bobOffset * 0.7,
+                        opacity: shouldReduceMotion ? 1.0 : key2Opacity
                     )
                     FloatingKeyCapView(
                         symbol: "R",
                         accentColor: accentColor,
-                        shimmer: shimmer,
-                        yOffset: key3Y - bobOffset * 1.2,
-                        opacity: key3Opacity
+                        shimmer: shouldReduceMotion ? 0 : shimmer,
+                        yOffset: shouldReduceMotion ? 0 : key3Y - bobOffset * 1.2,
+                        opacity: shouldReduceMotion ? 1.0 : key3Opacity
                     )
                 }
                 
@@ -294,14 +301,35 @@ struct CommandOverlayView: View {
                     .shadow(color: Color.black.opacity(0.85), radius: 6, x: 0, y: 2)
                     .shadow(color: accentColor.opacity(0.8), radius: 8, x: 0, y: 0)
                     .shadow(color: .black.opacity(0.6), radius: 2, x: 0, y: 1)
-                    .scaleEffect(textScale)
-                    .opacity(textOpacity)
+                    .scaleEffect(shouldReduceMotion ? 1.0 : textScale)
+                    .opacity(shouldReduceMotion ? 1.0 : textOpacity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .scaleEffect(globalScale)
-        .opacity(globalOpacity)
+        .scaleEffect(shouldReduceMotion ? 1.0 : globalScale)
+        .opacity(shouldReduceMotion ? 1.0 : globalOpacity)
         .onAppear {
+            if shouldReduceMotion {
+                globalScale = 1.0
+                globalOpacity = 1.0
+                key1Y = 0
+                key2Y = 0
+                key3Y = 0
+                key1Opacity = 1.0
+                key2Opacity = 1.0
+                key3Opacity = 1.0
+                bobOffset = 0
+                shimmer = 0
+                glowScale = 1.0
+                glowOpacity = 0.0
+                wave1Opacity = 0.0
+                wave2Opacity = 0.0
+                wave3Opacity = 0.0
+                textScale = 1.0
+                textOpacity = 1.0
+                return
+            }
+
             // 1. Global fade + pop in
             withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
                 globalScale   = 1.0
@@ -364,6 +392,22 @@ struct CommandOverlayView: View {
                 }
             }
         }
+        .onChange(of: shouldReduceMotion) { _, reduced in
+            guard reduced else { return }
+            globalScale = 1.0
+            globalOpacity = 1.0
+            key1Y = 0
+            key2Y = 0
+            key3Y = 0
+            key1Opacity = 1.0
+            key2Opacity = 1.0
+            key3Opacity = 1.0
+            bobOffset = 0
+            shimmer = 0
+            textScale = 1.0
+            textOpacity = 1.0
+        }
+        .minimalVisualAnimations()
     }
 }
 

@@ -99,6 +99,9 @@ echo "  - Copying icon..."
 if [ -f "WindowLayout/AppIcon.icns" ]; then
     cp "WindowLayout/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 fi
+if [ -f "WindowLayout/AppIcon.png" ]; then
+    cp "WindowLayout/AppIcon.png" "${RESOURCES_DIR}/AppIcon.png"
+fi
 
 echo "  - Copying localizations..."
 if [ -d "WindowLayout/he.lproj" ]; then

@@ -34,6 +34,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
     @Published private(set) var currentFingerprint: ScreenFingerprint = .current()
     @Published private(set) var isTracking: Bool = false
+    /// True until the first complete WindowServer-backed window capture finishes.
+    /// The onboarding UI uses this to show a transient, app-owned loading state.
+    @Published private(set) var isWindowServerInitializing: Bool = true
     @Published private(set) var recentEvents: [TrackingEvent] = []
     
 
@@ -131,6 +134,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var isWaitingForLocationPermission: Bool = false
     private var didPerformLaunchRestore: Bool = false
     private var isLiveLayoutServerReady: Bool = false
+    private var initialWindowServerCaptureInFlight: Bool = false
     /// Backstop for the two points where a save parks waiting on CoreLocation.
     /// Without it a callback that never arrives loses the save outright: the
     /// pending state stays set, the status line reads "Waiting for location
@@ -426,6 +430,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         log("Monitoring started (\(store.usePollingMode ? "polling" : "event-driven") mode)", level: .necessary, type: .system)
+    }
+
+    /// Marks the first live layout capture as complete and publishes the state
+    /// used by the launch UI. A capture with zero windows still counts: the
+    /// WindowServer answered successfully and the desktop may simply be empty.
+    private func markWindowServerReady() {
+        guard !isLiveLayoutServerReady else { return }
+        isLiveLayoutServerReady = true
+        isWindowServerInitializing = false
     }
 
     func stopTracking() {
@@ -1391,6 +1404,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     func snapshot(from entry: AutoSaveEntry) -> LayoutSnapshot? {
         guard entry.screenKey == currentFingerprint.key else { return nil }
         return LayoutSnapshot(
+            id: entry.id,
             name: entry.readableScreenKey ?? currentFingerprint.readableName,
             screenKey: entry.screenKey,
             readableScreenKey: entry.readableScreenKey,
@@ -1535,6 +1549,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     private func flushPendingSaves() {
+        // The first capture runs off the main actor so the launch window can
+        // keep drawing its loading state instead of turning into a beach ball.
+        guard isLiveLayoutServerReady || !initialWindowServerCaptureInFlight else { return }
+
         // Do not record a desk that is still moving. Jonathan's call, and a
         // better one than pairing the leftover CG entry with the leftover
         // accessibility frame afterwards: that only ever worked when exactly
@@ -1584,7 +1602,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         let isInitialServerCapture = !isLiveLayoutServerReady
         if isInitialServerCapture {
-            isLiveLayoutServerReady = true
+            markWindowServerReady()
         }
 
         // AX can repeatedly notify us about an app that has not actually changed. Publishing
@@ -1839,8 +1857,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             // 3. Deliver deferred Notch Notification
             self.deliverNotification(
                 type: .fullRestore,
-                title: "Layout Restored",
-                subtitle: "\(pending.snapshot.name) · \(pending.restoredCount)/\(pending.totalCount) \(lz("windows"))"
+                title: lz("Layout Restored"),
+                subtitle: self.layoutRestoreNotificationSubtitle(
+                    snapshotName: pending.snapshot.name,
+                    restoredCount: pending.restoredCount,
+                    totalCount: pending.totalCount
+                )
             )
 
             // 4. Send Command+Shift+R shortcut if enabled
@@ -2271,6 +2293,32 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     private var notchWindow: NotchNotificationWindow?
 
+    private func layoutRestoreNotificationSubtitle(
+        snapshotName: String,
+        restoredCount: Int,
+        totalCount: Int,
+        deferredCount: Int = 0
+    ) -> String {
+        // Hebrew starts with a Hebrew phrase to establish RTL paragraph direction.
+        // Isolates keep the mixed-script monitor name and numeric counts in order.
+        let isolatedSnapshotName = "\u{2068}\(snapshotName)\u{2069}"
+        let isolatedRestoredCount = "\u{2066}\(restoredCount)\u{2069}"
+        let isolatedTotalCount = "\u{2066}\(totalCount)\u{2069}"
+        var subtitle = String(
+            format: lz("%@ · %@/%@ windows"),
+            isolatedSnapshotName,
+            isolatedRestoredCount,
+            isolatedTotalCount
+        )
+
+        if deferredCount > 0 {
+            let isolatedDeferredCount = "\u{2066}\(deferredCount)\u{2069}"
+            subtitle += " · \(isolatedDeferredCount) \(lz("waiting for their Space"))"
+        }
+
+        return subtitle
+    }
+
 
     func showNotchNotificationPublic(title: String, subtitle: String, isCompact: Bool = false, bundleID: String? = nil, appIcon: NSImage? = nil, triggerKey: String? = nil) {
         deliverNotification(type: .singleRestore, title: title, subtitle: subtitle, isCompact: isCompact, bundleID: bundleID, appIcon: appIcon, triggerKey: triggerKey)
@@ -2289,8 +2337,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 } else {
                     let snapName = self.store.snapshots.values.first?.name ?? lz("Home")
                     let count = self.store.snapshots.values.first?.records.count ?? 5
-                    let winWord = lz("Windows").lowercased()
-                    return (lz("Layout Restored"), "\(snapName) · \(count)/\(count) \(winWord)", false, nil)
+                    let subtitle = self.layoutRestoreNotificationSubtitle(
+                        snapshotName: snapName,
+                        restoredCount: count,
+                        totalCount: count
+                    )
+                    return (lz("Layout Restored"), subtitle, false, nil)
                 }
             case .singleRestore:
                 return ("Safari \(lz("Restored"))", "", true, "com.apple.Safari")
@@ -2587,7 +2639,40 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         return out
     }
 
+    private typealias WindowServerCaptureLogger = (String, LogLevel, EventType) -> Void
+
+    private struct WindowServerCaptureResult {
+        let records: [WindowRecord]
+        let cachedAXWindowsByPID: [Int32: [AXWindowInfo]]
+        let lastCGWindowsByPID: [Int32: [CGWindowBriefInfo]]
+    }
+
     private func captureAllWindows(for fp: ScreenFingerprint, silent: Bool = false) -> [WindowRecord] {
+        let result = Self.captureAllWindowsOffMain(
+            for: fp,
+            lastKnownWindows: lastKnownWindows,
+            cachedAXWindowsByPID: cachedAXWindowsByPID,
+            lastCGWindowsByPID: lastCGWindowsByPID,
+            silent: silent,
+            logger: { [weak self] message, level, type in
+                self?.log(message, level: level, type: type)
+            }
+        )
+        cachedAXWindowsByPID = result.cachedAXWindowsByPID
+        lastCGWindowsByPID = result.lastCGWindowsByPID
+        return result.records
+    }
+
+    private nonisolated static func captureAllWindowsOffMain(
+        for fp: ScreenFingerprint,
+        lastKnownWindows: [WindowID: (frame: CGRect, id: UUID)],
+        cachedAXWindowsByPID initialCachedAXWindowsByPID: [Int32: [AXWindowInfo]],
+        lastCGWindowsByPID initialLastCGWindowsByPID: [Int32: [CGWindowBriefInfo]],
+        silent: Bool = false,
+        logger: WindowServerCaptureLogger?
+    ) -> WindowServerCaptureResult {
+        var cachedAXWindowsByPID = initialCachedAXWindowsByPID
+        var lastCGWindowsByPID = initialLastCGWindowsByPID
         var records: [WindowRecord] = []
         let screens = NSScreen.screens
         let primaryScreenHeight = screens.first?.frame.height ?? 0
@@ -2597,7 +2682,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         guard let windowList = CGWindowListCopyWindowInfo(
             [.optionAll, .excludeDesktopElements], kCGNullWindowID
         ) as? [[String: Any]] else {
-            return []
+            return WindowServerCaptureResult(
+                records: [],
+                cachedAXWindowsByPID: cachedAXWindowsByPID,
+                lastCGWindowsByPID: lastCGWindowsByPID
+            )
         }
 
         // Map of PID to NSRunningApplication for quick lookup.
@@ -2640,7 +2729,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         // Retrieve true window frames and full-screen status directly from the accessibility tree.
         // This is used to filter out system ghost windows and accurately identify full-screen windows.
-        let axWindowsByPID = getValidAXWindows(runningApps: runningApps, screenCGRects: screenCGRects, cgWindowsByPID: cgWindowsByPID)
+        let axWindowsByPID = Self.getValidAXWindowsOffMain(
+            runningApps: runningApps,
+            screenCGRects: screenCGRects,
+            cgWindowsByPID: cgWindowsByPID,
+            cachedAXWindowsByPID: &cachedAXWindowsByPID,
+            lastCGWindowsByPID: &lastCGWindowsByPID,
+            logger: logger
+        )
 
         // ── Leftovers the window server has not reaped ─────────────────────────
         // Closing a window does not remove its CGWindow entry. The entry keeps
@@ -2677,10 +2773,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     pidsWithNoLiveWindow.insert(pid)
                 }
             }
-            log("Spaces: current=\(current.sorted()) candidates=\(candidates.count) "
+            logger?("Spaces: current=\(current.sorted()) candidates=\(candidates.count) "
                 + "onASpace=\(liveWindowIDs.count) parkedElsewhere=\(parkedWindowIDs.count) "
                 + "appsWithNoLiveWindow=\(pidsWithNoLiveWindow.count)",
-                level: .verbose, type: .system)
+                .verbose, .system)
         }
         var leftoversDropped = 0
         var closedDropped = 0
@@ -2789,10 +2885,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         if leftoversDropped > 0 {
-            log("Skipped \(leftoversDropped) window(s) that belong to no Space", level: .verbose, type: .system)
+            logger?("Skipped \(leftoversDropped) window(s) that belong to no Space", .verbose, .system)
         } else if !spaceFilterActive {
-            log("Space lookup unavailable — closed windows may persist in the layout",
-                level: .verbose, type: .system)
+            logger?("Space lookup unavailable — closed windows may persist in the layout",
+                .verbose, .system)
         }
 
         // Log any apps where we silently dropped ghost windows
@@ -2895,8 +2991,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         
         // Reported after the selection loop, which is where the count is made.
         if closedDropped > 0 {
-            log("Skipped \(closedDropped) closed window(s): off screen while claiming the current Space",
-                level: .verbose, type: .system)
+            logger?("Skipped \(closedDropped) closed window(s): off screen while claiming the current Space",
+                .verbose, .system)
         }
 
         // Sort selected entries back to original zOrder
@@ -2938,7 +3034,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 ?? (raw.entry[kCGWindowNumber as String] as? Int).map { CGWindowID($0) }
 
             let wid = WindowID(appBundleID: bundleID, appName: appName, windowTitle: title, appWindowIndex: index)
-            let recordID = self.lastKnownWindows[wid]?.id ?? UUID()
+            let recordID = lastKnownWindows[wid]?.id ?? UUID()
 
             var record = WindowRecord(
                 id: recordID,
@@ -2988,9 +3084,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         if !silent {
-            log("Scanned \(records.count) active windows via CGWindowList", level: .verbose)
+            logger?("Scanned \(records.count) active windows via CGWindowList", .verbose, .system)
         }
-        return records
+        return WindowServerCaptureResult(
+            records: records,
+            cachedAXWindowsByPID: cachedAXWindowsByPID,
+            lastCGWindowsByPID: lastCGWindowsByPID
+        )
     }
 
     struct AXWindowInfo {
@@ -3014,10 +3114,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// Retrieves all valid window frames and their full-screen status directly from the Accessibility API.
     /// Results are cached per-PID. When AX returns empty or virtual-space coordinates (app not frontmost),
     /// the last known good cache is used instead to guarantee frame matching still works.
-    private func getValidAXWindows(
+    private nonisolated static func getValidAXWindowsOffMain(
         runningApps: [Int32: NSRunningApplication],
         screenCGRects: [CGRect],
-        cgWindowsByPID: [Int32: [CGWindowBriefInfo]]
+        cgWindowsByPID: [Int32: [CGWindowBriefInfo]],
+        cachedAXWindowsByPID: inout [Int32: [AXWindowInfo]],
+        lastCGWindowsByPID: inout [Int32: [CGWindowBriefInfo]],
+        logger: WindowServerCaptureLogger?
     ) -> [Int32: [AXWindowInfo]] {
         var result: [Int32: [AXWindowInfo]] = [:]
         
@@ -3052,7 +3155,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 continue
             }
 
-            let axApp = WindowManager.createAXElement(for: pid)
+            let axApp = createAXElement(for: pid)
             var windowsRef: CFTypeRef?
             var wins: [AXUIElement] = []
             
@@ -3140,7 +3243,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 let minCount = axWins.filter { $0.isMinimized }.count
                 let minSuffix = minCount > 0 ? " [\(minCount) minimised]" : ""
                 if wasStale {
-                    log("💾 AX cache POPULATED for \(appLabel): \(axWins.count) frame(s)\(fsSuffix)\(minSuffix)", level: .verbose, type: .system)
+                    logger?("💾 AX cache POPULATED for \(appLabel): \(axWins.count) frame(s)\(fsSuffix)\(minSuffix)", .verbose, .system)
                 }
                 cachedAXWindowsByPID[pid] = axWins
                 lastCGWindowsByPID[pid] = currentCGWindows
@@ -4079,13 +4182,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         // Saying "23/23 windows" while ten of them were skipped is
                         // the part of this that was actually misleading. What is
                         // waiting, and what it is waiting for, both belong here.
-                        var subtitle = "\(snapshot.name) · \(restoredCount)/\(snapshot.records.count) \(lz("windows"))"
-                        if deferredCount > 0 {
-                            subtitle += " · \(deferredCount) \(lz("waiting for their Space"))"
-                        }
+                        let subtitle = self.layoutRestoreNotificationSubtitle(
+                            snapshotName: snapshot.name,
+                            restoredCount: restoredCount,
+                            totalCount: snapshot.records.count,
+                            deferredCount: deferredCount
+                        )
                         self.deliverNotification(
                             type: .fullRestore,
-                            title: "Layout Restored",
+                            title: lz("Layout Restored"),
                             subtitle: subtitle,
                             triggerKey: triggerSubtitle
                         )
@@ -5090,8 +5195,83 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             for app in apps {
                 self.attachAXObserver(to: app)
             }
-            // One initial capture to populate liveRecords once observers are configured
-            self.scheduleAXEventFlush(delay: 100_000_000)
+            // One initial capture to populate liveRecords once observers are configured.
+            // It runs on a worker queue because AX IPC can take several seconds
+            // while macOS is bringing WindowServer and login apps online.
+            self.startInitialWindowServerCapture()
+        }
+    }
+
+    /// Captures the first live layout away from the main actor. The initial
+    /// capture is the expensive one: it may query many applications through
+    /// Accessibility, and blocking the main actor makes macOS show its beach
+    /// ball even though the SwiftUI window has already been displayed.
+    private func startInitialWindowServerCapture() {
+        guard !isLiveLayoutServerReady, !initialWindowServerCaptureInFlight else { return }
+
+        initialWindowServerCaptureInFlight = true
+        let fingerprint = ScreenFingerprint.current()
+        let lastKnownWindows = self.lastKnownWindows
+        let cachedAXWindowsByPID = self.cachedAXWindowsByPID
+        let lastCGWindowsByPID = self.lastCGWindowsByPID
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self = self, self.isTracking else {
+                self?.initialWindowServerCaptureInFlight = false
+                return
+            }
+
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = WindowManager.captureAllWindowsOffMain(
+                    for: fingerprint,
+                    lastKnownWindows: lastKnownWindows,
+                    cachedAXWindowsByPID: cachedAXWindowsByPID,
+                    lastCGWindowsByPID: lastCGWindowsByPID,
+                    silent: true,
+                    logger: nil
+                )
+
+                DispatchQueue.main.async { [self] in
+                    self.initialWindowServerCaptureInFlight = false
+
+                    guard self.isTracking, !self.isLiveLayoutServerReady else { return }
+
+                    // If the display configuration changed while the worker was
+                    // scanning, discard the stale result and scan the new setup.
+                    guard ScreenFingerprint.current().key == fingerprint.key else {
+                        self.startInitialWindowServerCapture()
+                        return
+                    }
+
+                    self.cachedAXWindowsByPID = result.cachedAXWindowsByPID
+                    self.lastCGWindowsByPID = result.lastCGWindowsByPID
+                    let layoutChanged = self.liveLayoutChanged(from: self.liveRecords, to: result.records)
+                    if layoutChanged {
+                        self.liveRecords = result.records
+                    }
+                    self.lastWindowCount = result.records.count
+                    for record in result.records {
+                        self.lastKnownWindows[record.windowID] = (record.globalFrame, record.id)
+                    }
+
+                    self.markWindowServerReady()
+                    if layoutChanged {
+                        self.log("Live layout updated (\(result.records.count) windows)", level: .verbose, type: .autoSave)
+                    }
+                    self.triggerLaunchRestoreIfNeeded()
+
+                    if layoutChanged && self.store.autoSaveEnabled
+                        && !self.isHandlingDisplayChange
+                        && !self.isSettlingContestedWindows
+                        && !self.isRestoreInFlight {
+                        self.autoSaveStore?.record(
+                            records: self.holdingHeldWindows(result.records, screenKey: fingerprint.key),
+                            screenKey: fingerprint.key,
+                            readableScreenKey: fingerprint.readableName
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -5156,6 +5336,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// A few apps emit these notifications while idle, so cancellation-based debouncing alone
     /// would repeatedly allocate tasks and keep the process awake.
     func scheduleAXEventFlush(delay: UInt64 = 500_000_000) { // 500 ms default
+        guard isLiveLayoutServerReady || !initialWindowServerCaptureInFlight else { return }
+        guard isLiveLayoutServerReady else {
+            startInitialWindowServerCapture()
+            return
+        }
         guard !isAXFlushScheduled else { return }
         isAXFlushScheduled = true
 
@@ -5186,18 +5371,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         trackingTask?.cancel()
         trackingTask = Task { [weak self] in
-            // Initial snapshot to avoid logging everything on start
-            if let self = self {
-                let fp = ScreenFingerprint.current()
-                let records = self.captureAllWindows(for: fp, silent: true)
-                for r in records {
-                    self.lastKnownWindows[r.windowID] = (r.globalFrame, r.id)
-                }
-                self.liveRecords = records
-                self.lastWindowCount = records.count
-                if !self.isLiveLayoutServerReady {
-                    self.isLiveLayoutServerReady = true
-                    self.triggerLaunchRestoreIfNeeded()
+            // Initial capture is shared with event-driven mode and runs off the
+            // main actor. Wait for it before beginning the compatibility poller.
+            if let self = self, !self.isLiveLayoutServerReady {
+                self.startInitialWindowServerCapture()
+                while self.initialWindowServerCaptureInFlight && !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
                 }
             }
 

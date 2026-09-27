@@ -76,8 +76,10 @@ enum NotificationChannel: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @EnvironmentObject var manager: WindowManager
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var desktopToggleManager = DesktopToggleManager.shared
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @AppStorage("minimalVisualAnimations") private var minimalVisualAnimations: Bool = true
     @AppStorage("showNotchNotification") private var showNotchNotification: Bool = true
     @AppStorage("playNotificationSound") private var playNotificationSound: Bool = true
     @AppStorage("masterNotificationsEnabled") private var masterNotificationsEnabled: Bool = true
@@ -92,6 +94,25 @@ struct SettingsView: View {
     @State private var hasFinderPerm = false
     @State private var showingOnboarding = false
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+
+    private var notificationsToggleBinding: Binding<Bool> {
+        Binding(
+            get: { masterNotificationsEnabled },
+            set: { isEnabled in
+                masterNotificationsEnabled = isEnabled
+            }
+        )
+    }
+
+    private var soundToggleBinding: Binding<Bool> {
+        Binding(
+            get: { masterNotificationsEnabled && masterSoundEnabled },
+            set: { isEnabled in
+                guard masterNotificationsEnabled else { return }
+                masterSoundEnabled = isEnabled
+            }
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -111,7 +132,7 @@ struct SettingsView: View {
                     ))
             }
         }
-        .frame(width: 480, height: 620)
+        .frame(width: 480, height: 650)
         .background {
             VisualEffectView(material: .fullScreenUI, blendingMode: .behindWindow)
                 .ignoresSafeArea()
@@ -142,68 +163,80 @@ struct SettingsView: View {
         } message: {
             Text("Your location is used to tag your saved window layouts so you can easily identify where they were saved. To turn the coordinates into a street address, they are sent to Apple once per saved layout. Nothing is sent to the developer.".localized(appLanguage))
         }
+        .minimalVisualAnimations()
+        .environment(\.minimalVisualAnimationsEnabled, minimalVisualAnimations)
+        .appThemeColorScheme(themeColor)
+        .sheet(isPresented: $showingOnboarding) {
+            OnboardingView {
+                showingOnboarding = false
+                hasCompletedOnboarding = true
+            }
+            .fullVisualAnimations()
+        }
     }
 
     // MARK: - Root Categories List View
 
     private var categoriesListView: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                // iOS-Style Category Cards Group
-                VStack(spacing: 8) {
-                    ForEach(SettingsCategory.allCases) { category in
-                        SettingsCategoryRow(category: category) {
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                                selectedCategory = category
-                            }
+        VStack(spacing: 16) {
+            // iOS-Style Category Cards Group
+            VStack(spacing: 8) {
+                ForEach(SettingsCategory.allCases) { category in
+                    SettingsCategoryRow(category: category) {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                            selectedCategory = category
                         }
                     }
                 }
-
-                // Feature Tour Animated Section
-                SettingsFeatureTourSection()
-                    .padding(.top, 4)
-
-                // App Version & GitHub Link Footer
-                HStack(spacing: 8) {
-                    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "13.2"
-                    let displayVersion = version.hasPrefix("v") ? version : "v\(version)"
-                    
-                    Text("\("Version".localized(appLanguage)) \(displayVersion)")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(.secondary.opacity(0.8))
-
-                    Text("•")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary.opacity(0.4))
-
-                    Button {
-                        if let url = URL(string: "https://github.com/netanel3000fine/RememberMyWindow") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "link")
-                                .font(.system(size: 9.5, weight: .semibold))
-                            Text("GitHub".localized(appLanguage))
-                                .font(.system(size: 10.5, weight: .medium))
-                        }
-                        .foregroundStyle(Color.accentColor)
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { inside in
-                        if inside {
-                            NSCursor.pointingHand.push()
-                        } else {
-                            NSCursor.pop()
-                        }
-                    }
-                    .help("Open RememberMyWindows on GitHub".localized(appLanguage))
-                }
-                .padding(.top, 8)
             }
-            .padding(20)
+
+            // Feature Tour Animated Section
+            SettingsFeatureTourSection(showingOnboarding: $showingOnboarding)
+                .padding(.top, 2)
+                .fullVisualAnimations()
+
+            // App Version & GitHub Link Footer
+            HStack(spacing: 8) {
+                let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "13.2"
+                let displayVersion = version.hasPrefix("v") ? version : "v\(version)"
+                
+                Text("\("Version".localized(appLanguage)) \(displayVersion)")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.secondary.opacity(0.8))
+
+                Text("•")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary.opacity(0.4))
+
+                Button {
+                    if let url = URL(string: "https://github.com/netanel3000fine/RememberMyWindow") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "link")
+                            .font(.system(size: 9.5, weight: .semibold))
+                        Text("GitHub".localized(appLanguage))
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+                .onHover { inside in
+                    if inside {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+                .help("Open RememberMyWindows on GitHub".localized(appLanguage))
+            }
+            .padding(.top, -6)
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Category Detail Sub-Window View
@@ -241,7 +274,7 @@ struct SettingsView: View {
                             Text("Settings".localized(appLanguage))
                                 .font(.system(size: 13, weight: .semibold))
                         }
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .liquidGlass(cornerRadius: 16, style: .card)
@@ -426,44 +459,6 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
 
-                Divider().padding(.horizontal, 12)
-
-                // Replay onboarding tour
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(Color.purple.opacity(0.15))
-                        Image(systemName: "star.fill")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.purple)
-                    }
-                    .frame(width: 32, height: 32)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Welcome Tour & Onboarding".localized(appLanguage))
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("Replay the onboarding walkthrough and setup guide".localized(appLanguage))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    Button("Replay Tour".localized(appLanguage)) {
-                        showingOnboarding = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.purple)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .sheet(isPresented: $showingOnboarding) {
-                    OnboardingView {
-                        showingOnboarding = false
-                        hasCompletedOnboarding = true
-                    }
-                }
             }
         }
     }
@@ -505,9 +500,13 @@ struct SettingsView: View {
                     HStack(spacing: 10) {
                         Image(systemName: "square.3.layers.3d.top.filled")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(
+                                themeColor.isGalaxy
+                                    ? Color.black
+                                    : themeColor.onAccentColor(for: colorScheme)
+                            )
                             .frame(width: 26, height: 26)
-                            .background(Color.accentColor, in: Circle())
+                            .background(themeColor.color(seed: 0), in: Circle())
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Front App".localized(appLanguage))
                                 .font(.system(size: 10, weight: .semibold))
@@ -801,7 +800,7 @@ struct SettingsView: View {
                             ZStack(alignment: .topTrailing) {
                                 Text("⌘⇧R")
                                     .font(.system(size: 9, weight: .bold, design: .rounded))
-                                    .foregroundStyle(Color.green.opacity(0.85))
+                                    .foregroundStyle(.primary)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 3)
                                 Image(systemName: "checkmark")
@@ -816,7 +815,7 @@ struct SettingsView: View {
                             .background(Color.green.opacity(0.1), in: Capsule())
                             Text("Enabled".localized(appLanguage))
                                 .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(.green.opacity(0.75))
+                                .foregroundStyle(.primary)
                         }
 
                         Spacer()
@@ -959,27 +958,34 @@ struct SettingsView: View {
         SettingsSection(title: "Notifications".localized(appLanguage), icon: "bell.fill") {
             VStack(spacing: 0) {
 
-                // Master Notifications toggle
-                SettingsToggle(
-                    title: "Notifications",
-                    subtitle: "Enable all app alerts and sounds",
-                    icon: "bell.fill",
-                    isOn: $masterNotificationsEnabled
-                )
+                // Keep the two master controls together so their dependency is
+                // visible. Sounds stay off and disabled while notifications are off.
+                VStack(spacing: 0) {
+                    SettingsToggle(
+                        title: "Notifications",
+                        subtitle: "Enable all app alerts and sounds",
+                        icon: "bell.fill",
+                        isOn: notificationsToggleBinding
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                if masterNotificationsEnabled {
-                    Divider().padding(.horizontal, 12)
+                    Divider()
+                        .padding(.horizontal, 12)
 
-                    // Master Sound toggle
                     SettingsToggle(
                         title: "Notification Sounds",
                         subtitle: "Play sounds for alerts",
                         icon: "speaker.wave.2.fill",
-                        isOn: $masterSoundEnabled
+                        isOn: soundToggleBinding
                     )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .disabled(!masterNotificationsEnabled)
+                    .opacity(masterNotificationsEnabled ? 1 : 0.55)
+                }
 
-                        Divider().padding(.horizontal, 12)
+                Divider().padding(.horizontal, 12)
 
+                if masterNotificationsEnabled {
                     // ── Notch Notification Nav Row ──────────────────────────────
                     let notchActiveCount = (manager.store.notchNotifyOnFullRestore ? 1 : 0) +
                                           (manager.store.notchNotifyOnSingleRestore ? 1 : 0) +
@@ -1093,7 +1099,7 @@ struct SettingsView: View {
                                     if isSelected && !isDefault {
                                         Image(systemName: "checkmark")
                                             .font(.system(size: 10, weight: .bold))
-                                            .foregroundColor(.white)
+                                            .foregroundStyle(theme.onAccentColor(for: colorScheme))
                                             .shadow(color: .black.opacity(0.4), radius: 1)
                                     }
                                 }
@@ -1128,6 +1134,14 @@ struct SettingsView: View {
                     .padding(.leading, 28) // align under the label text
                 }
                 .padding(12)
+
+                Divider().padding(.horizontal, 12)
+
+                SettingsCheckbox(
+                    title: "Minimal Visual Animations",
+                    subtitle: "Use simple transitions for controls and layout previews",
+                    isOn: $minimalVisualAnimations
+                )
 
             }
         }
@@ -1461,6 +1475,7 @@ struct SettingsSection<Content: View>: View {
                 .padding(.leading, 4)
 
             content
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .liquidGlass(style: .card)
         }
     }
@@ -1496,8 +1511,8 @@ struct SettingsToggle: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-
-            Spacer()
+            .layoutPriority(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if isLoading {
                 ProgressView()
@@ -1507,8 +1522,46 @@ struct SettingsToggle: View {
                 Toggle("", isOn: $isOn)
                     .toggleStyle(.switch)
                     .controlSize(.small)
+                    .accessibilityLabel(Text(title.localized(appLanguage)))
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .background {
+            if isHovered {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.primary.opacity(0.05))
+                    .padding(4)
+            }
+        }
+    }
+}
+
+struct SettingsCheckbox: View {
+    let title: String
+    let subtitle: String
+    @Binding var isOn: Bool
+
+    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @State private var isHovered = false
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title.localized(appLanguage))
+                    .font(.system(size: 13, weight: .medium))
+                Text(subtitle.localized(appLanguage))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .toggleStyle(.checkbox)
+        .accessibilityLabel(Text(title.localized(appLanguage)))
+        .accessibilityHint(Text(subtitle.localized(appLanguage)))
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
@@ -1716,31 +1769,25 @@ struct SettingsStepper: View {
 // MARK: - Feature Tour Animated Carousel Component
 
 struct SettingsFeatureTourSection: View {
+    @Binding var showingOnboarding: Bool
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @State private var activeSlideIndex: Int = 0
     @State private var timer: Timer? = nil
-    @State private var isPaused: Bool = false
     @State private var isHovering: Bool = false
 
-    private var slides: [OBSlide] { OBSlide.all(for: appLanguage) }
+    private var slides: [OBSlide] {
+        OBSlide.all(for: appLanguage).filter { $0.id != 7 && $0.id != 8 }
+    }
 
     private func startTimer() {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: true) { _ in
-            if !isPaused && !isHovering {
+            if !isHovering {
                 withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
                     activeSlideIndex = (activeSlideIndex + 1) % slides.count
                 }
             }
         }
-    }
-
-    private func advanceSlide(by delta: Int) {
-        withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
-            let count = slides.count
-            activeSlideIndex = (activeSlideIndex + delta + count) % count
-        }
-        startTimer()
     }
 
     var body: some View {
@@ -1757,44 +1804,23 @@ struct SettingsFeatureTourSection: View {
 
                 Spacer()
 
-                // Slider Control Buttons (Prev / Pause / Next)
-                HStack(spacing: 6) {
-                    Button {
-                        advanceSlide(by: -1)
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20, height: 20)
-                            .background(Color.primary.opacity(0.08), in: Circle())
+                // Replay Tour Button (styled like control buttons)
+                Button {
+                    showingOnboarding = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 9.5, weight: .bold))
+                        Text("Replay Tour".localized(appLanguage))
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
                     }
-                    .buttonStyle(.plain)
-                    .help(lz("Previous Feature"))
-
-                    Button {
-                        isPaused.toggle()
-                    } label: {
-                        Image(systemName: isPaused ? "play.fill" : "pause.fill")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(isPaused ? Color.accentColor : .secondary)
-                            .frame(width: 20, height: 20)
-                            .background(Color.primary.opacity(0.08), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(isPaused ? lz("Play Carousel") : lz("Pause Carousel"))
-
-                    Button {
-                        advanceSlide(by: 1)
-                    } label: {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20, height: 20)
-                            .background(Color.primary.opacity(0.08), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(lz("Next Feature"))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3.5)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
                 }
+                .buttonStyle(.plain)
+                .help("Replay the onboarding walkthrough and setup guide".localized(appLanguage))
 
                 // Dot indicators
                 HStack(spacing: 4) {
@@ -1816,50 +1842,50 @@ struct SettingsFeatureTourSection: View {
             }
             .padding(.horizontal, 4)
 
-            // Keep the compact settings card within its 480-point window.
-            // The animation remains the focal point, with concise supporting copy alongside it.
-            let slide = slides[activeSlideIndex]
-            HStack(spacing: 12) {
-                // Illustration Container
-                ZStack(alignment: .center) {
-                    Group {
-                        if slide.id == 7 {
-                            OBIllustrationSettingsGuide(activeIndex: 0)
-                        } else {
-                            slide.illustration
-                        }
+            // Vertical mini-card: illustration on top, text centered below
+            ZStack {
+                let slide = slides[activeSlideIndex]
+                VStack(spacing: 0) {
+                    // Illustration canvas
+                    ZStack {
+                        slide.illustration
                     }
-                    .scaleEffect(0.70, anchor: .center)
-                }
-                .frame(width: 230, height: 150)
-                .clipped()
+                    .padding(.top, 6)
+                    .scaleEffect(slide.id == 6 ? 0.86 : 0.94)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 194)
+                    .clipped()
 
-                // Supporting text stays smaller than the animation and sits beside it.
-                VStack(alignment: appLanguage == .hebrew ? .trailing : .leading, spacing: 6) {
-                    Text(slide.headline)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .multilineTextAlignment(appLanguage == .hebrew ? .trailing : .leading)
-                    Text(slide.body)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(appLanguage == .hebrew ? .trailing : .leading)
-                        .lineSpacing(1)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Keep the caption distinct when animated content moves near it.
+                    VStack(spacing: 0) {
+                        Text(slide.headline)
+                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 3)
+                            .frame(maxWidth: .infinity)
+                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
+                    .padding(.bottom, 10)
                 }
-                .frame(width: 130, alignment: appLanguage == .hebrew ? .trailing : .leading)
+                .frame(maxWidth: .infinity)
+                .liquidGlass(cornerRadius: 14, style: .card)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .onHover { hovering in
+                    isHovering = hovering
+                }
+                .id(activeSlideIndex)
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .move(edge: .trailing)),
+                    removal: .opacity.combined(with: .move(edge: .leading))
+                ))
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .padding(.horizontal, 12)
-            .liquidGlass(cornerRadius: 14, style: .card)
-            .onHover { hovering in
-                isHovering = hovering
-            }
-            .id(activeSlideIndex)
-            .transition(.asymmetric(
-                insertion: .opacity.combined(with: .move(edge: .trailing)),
-                removal: .opacity.combined(with: .move(edge: .leading))
-            ))
+            .clipped()
         }
         .onAppear {
             startTimer()
@@ -2189,7 +2215,7 @@ struct MenuBarIconSettingsSection: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.primary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -2695,7 +2721,7 @@ struct NotificationChannelDetailView: View {
                         Text("Appearance & Notifications".localized(appLanguage))
                             .font(.system(size: 13, weight: .semibold))
                     }
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .liquidGlass(cornerRadius: 16, style: .card)
@@ -2999,7 +3025,7 @@ struct NotificationChannelDetailView: View {
                                             RoundedRectangle(cornerRadius: 6)
                                                 .fill(channel.color.opacity(0.12))
                                         )
-                                        .foregroundStyle(channel.color)
+                                        .foregroundStyle(.primary)
                                     }
                                     .buttonStyle(.plain)
                                     .help("Preview volume with current sound".localized(appLanguage))
@@ -3055,7 +3081,7 @@ struct NotificationChannelDetailView: View {
                                             RoundedRectangle(cornerRadius: 6)
                                                 .fill(channel.color.opacity(0.12))
                                         )
-                                        .foregroundStyle(channel.color)
+                                        .foregroundStyle(.primary)
                                     }
                                     .buttonStyle(.plain)
                                     .help("Preview volume with current sound".localized(appLanguage))
@@ -3427,7 +3453,7 @@ struct InlineSoundLibraryView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
                 .help("Play a random sound (🎲)".localized(appLanguage))

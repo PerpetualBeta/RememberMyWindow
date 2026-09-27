@@ -8,6 +8,7 @@ struct ContentView: View {
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+    @AppStorage("minimalVisualAnimations") private var minimalVisualAnimations: Bool = true
     @ObservedObject private var desktopToggleManager = DesktopToggleManager.shared
     @State private var hidePermissionBanner = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
@@ -92,6 +93,13 @@ struct ContentView: View {
                 permissionBanner
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if manager.isWindowServerInitializing {
+                WindowServerLoadingStatus(language: appLanguage)
+                    .padding(.top, 8)
+                    .padding(.trailing, 16)
+            }
+        }
         .sheet(isPresented: Binding(
             get: { !hasCompletedOnboarding },
             set: { _ in }
@@ -102,6 +110,8 @@ struct ContentView: View {
                     UpdateManager.shared.checkIfNeeded()
                 }
             }
+            .environmentObject(manager)
+            .fullVisualAnimations()
         }
         // Shown only on the first launch after upgrading from a build with a
         // hardcoded shortcut, and only once onboarding is out of the way so the
@@ -113,6 +123,8 @@ struct ContentView: View {
             ShortcutMigrationView(language: appLanguage, manager: desktopToggleManager) {
                 withAnimation { desktopToggleManager.acknowledgeShortcutChange() }
             }
+            .minimalVisualAnimations()
+            .environment(\.minimalVisualAnimationsEnabled, minimalVisualAnimations)
         }
         .frame(minWidth: 1000, idealWidth: 1150, minHeight: 600, idealHeight: 750)
         .onOpenURL { url in
@@ -127,6 +139,9 @@ struct ContentView: View {
         }
         .background(WindowTransparencyAccessor())
         .background(MainToolbarOrderFix())
+        .minimalVisualAnimations()
+        .environment(\.minimalVisualAnimationsEnabled, minimalVisualAnimations)
+        .appThemeColorScheme(themeColor)
     }
 
     // MARK: - Inspector Column
@@ -164,7 +179,9 @@ struct ContentView: View {
                             snapshot: snapshot,
                             selectedRecordID: manager.selectedRecordID,
                             tint: themeColor.color(seed: 2),
-                            enable3DHover: true
+                            enable3DHover: true,
+                            animateWindowReveal: true,
+                            isMainWindow: true
                         )
                             .frame(height: 160)
                             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snapshot.previewRecords.count)
@@ -234,6 +251,7 @@ struct ContentView: View {
                         Image(systemName: "arrow.uturn.backward.circle")
                             .mainWindowSymbolAnimation(.flip, capturesClicks: false)
                         Text("Restore".localized(appLanguage))
+                            .padding(.trailing, 4)
                     }
                 }
                 .help("Restore saved layout for current screens")

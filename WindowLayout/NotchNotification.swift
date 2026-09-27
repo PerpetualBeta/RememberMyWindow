@@ -214,6 +214,7 @@ struct NotchNotificationView: View {
     let onDismiss: () -> Void
 
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var appeared  = false
     @State private var isHovered = false
     @State private var dotPulse  = false
@@ -224,6 +225,10 @@ struct NotchNotificationView: View {
             return Color(white: 0.88)
         }
         return themeColor.color ?? Color(red: 0.2, green: 0.9, blue: 0.5)
+    }
+
+    private var shouldReduceMotion: Bool {
+        false
     }
 
     // MARK: - Layout metrics
@@ -450,26 +455,40 @@ struct NotchNotificationView: View {
         .scaleEffect(x: appeared ? 1.0 : 0.88, y: appeared ? 1.0 : 0.01, anchor: .top)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: appeared)
         .onAppear {
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+            if shouldReduceMotion {
                 appeared = true
-            }
-            withAnimation(.easeOut(duration: 0.85).repeatForever(autoreverses: false)) {
-                dotPulse = true
-            }
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.65).delay(0.04)) {
                 iconDrop = true
+                dotPulse = false
+            } else {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+                    appeared = true
+                }
+                withAnimation(.easeOut(duration: 0.85).repeatForever(autoreverses: false)) {
+                    dotPulse = true
+                }
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.65).delay(0.04)) {
+                    iconDrop = true
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NotchDismiss"))) { _ in
-            withAnimation(.easeOut(duration: 0.3)) {
+            if shouldReduceMotion {
                 appeared = false
                 iconDrop = false
+            } else {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    appeared = false
+                    iconDrop = false
+                }
             }
         }
         .onHover { hovering in
             if !isCompact {
                 withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
             }
+        }
+        .transaction { transaction in
+            transaction.disablesAnimations = false
         }
     }
 }
@@ -566,12 +585,17 @@ struct NotchPositionHUDView: View {
 
     @AppStorage("themeColor")  private var themeColor:  ThemeColor  = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var appeared    = false
     @State private var iconDrop    = false
     @State private var hoverDone   = false
     @State private var hoverCancel = false
 
     private var accentColor: Color { themeColor.color ?? Color(red: 0.18, green: 0.85, blue: 0.5) }
+
+    private var shouldReduceMotion: Bool {
+        false
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -652,7 +676,13 @@ struct NotchPositionHUDView: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .onHover { h in withAnimation(.easeInOut(duration: 0.12)) { hoverCancel = h } }
+                    .onHover { h in
+                        if shouldReduceMotion {
+                            hoverCancel = h
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.12)) { hoverCancel = h }
+                        }
+                    }
 
                     // Done button (Vivid Neon Green Fill with Black Text - GUARANTEED 100% VISIBLE)
                     Button(action: onDone) {
@@ -670,7 +700,13 @@ struct NotchPositionHUDView: View {
                         .shadow(color: Color(red: 0.2, green: 0.9, blue: 0.5).opacity(0.4), radius: 4)
                     }
                     .buttonStyle(.plain)
-                    .onHover { h in withAnimation(.easeInOut(duration: 0.12)) { hoverDone = h } }
+                    .onHover { h in
+                        if shouldReduceMotion {
+                            hoverDone = h
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.12)) { hoverDone = h }
+                        }
+                    }
                 }
                 .fixedSize()
                 .layoutPriority(1)
@@ -687,13 +723,26 @@ struct NotchPositionHUDView: View {
         .scaleEffect(x: appeared ? 1.0 : 0.88, y: appeared ? 1.0 : 0.01, anchor: .top)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: appeared)
         .onAppear {
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) { appeared = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                withAnimation(.spring(response: 0.42, dampingFraction: 0.65)) { iconDrop = true }
+            if shouldReduceMotion {
+                appeared = true
+                iconDrop = true
+            } else {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) { appeared = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.65)) { iconDrop = true }
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NotchPositionHUDDismiss"))) { _ in
-            withAnimation(.easeOut(duration: 0.3)) { appeared = false; iconDrop = false }
+            if shouldReduceMotion {
+                appeared = false
+                iconDrop = false
+            } else {
+                withAnimation(.easeOut(duration: 0.3)) { appeared = false; iconDrop = false }
+            }
+        }
+        .transaction { transaction in
+            transaction.disablesAnimations = false
         }
     }
 }

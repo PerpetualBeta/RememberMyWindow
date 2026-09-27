@@ -276,7 +276,7 @@ struct SnapshotListView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(themeColor.color(seed: 3).opacity(0.15))
-                            .foregroundStyle(themeColor.color(seed: 3))
+                            .foregroundStyle(.primary)
                             .clipShape(Capsule())
                     }
                 }
@@ -284,7 +284,7 @@ struct SnapshotListView: View {
                 if isLive {
                     Text(ScreenFingerprint.from(key: snapshot.screenKey).readableName)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(themeColor.color(seed: 4))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
 
@@ -561,13 +561,16 @@ struct WindowRowContainer: View {
                         .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
                     Text(record.windowID.appName ?? record.windowID.appBundleID)
                         .font(.system(.headline, design: .rounded).weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
                     if isCurrentApp {
                         Text("Active".localized(appLanguage))
                             .font(.system(size: 10, weight: .bold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.green.opacity(0.15))
-                            .foregroundStyle(Color.green)
+                            .foregroundStyle(.primary)
                             .clipShape(Capsule())
                     }
                     if isFull {
@@ -581,7 +584,7 @@ struct WindowRowContainer: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.indigo.opacity(0.15))
-                        .foregroundStyle(Color.indigo)
+                        .foregroundStyle(.primary)
                         .clipShape(Capsule())
                     }
                     if isForeground {
@@ -600,7 +603,7 @@ struct WindowRowContainer: View {
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
                             .background(rowTint.opacity(0.1))
-                            .foregroundStyle(rowTint)
+                            .foregroundStyle(.primary)
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
 
@@ -615,28 +618,35 @@ struct WindowRowContainer: View {
             Spacer()
             
             if !snapshot.isAutoSave {
-                HStack(spacing: 8) {
-                    let appID = record.windowID.appBundleID
-                    let isIncluded = snapshot.commandExcludedBundleIDs.contains(appID)
-                    
-                    // ⌘⇧R button: always visible, showing green checkmark when enabled, dim when disabled.
-                    ExcludeCommandButton(appLanguage: appLanguage, isIncluded: isIncluded) {
-                        manager.toggleCommandExclusion(key: key, bundleID: appID)
-                    }
-                    
-                    // Bring-to-front: always visible when active (filled), only on hover otherwise
-                    if isForeground || isRowHovered {
-                        BringToFrontButton(appLanguage: appLanguage, isActive: isForeground) {
-                            manager.setForegroundApp(key: key, bundleID: appID)
-                            manager.bringAppToFront(bundleID: appID)
+                let appID = record.windowID.appBundleID
+                let isCommandTriggerActive = snapshot.commandExcludedBundleIDs.contains(appID)
+                let showsCommandTrigger = isRowHovered || isCommandTriggerActive
+                let showsBringToFront = isRowHovered || isForeground
+
+                // Keep active state visible, but remove inactive controls from
+                // the layout entirely so the app name gets the available width.
+                if showsCommandTrigger || showsBringToFront || isRowHovered {
+                    HStack(spacing: 8) {
+                        if showsCommandTrigger {
+                            ExcludeCommandButton(appLanguage: appLanguage, isIncluded: isCommandTriggerActive) {
+                                manager.toggleCommandExclusion(key: key, bundleID: appID)
+                            }
                         }
-                    } else {
-                        Spacer().frame(width: 26, height: 26)
+
+                        if showsBringToFront {
+                            BringToFrontButton(appLanguage: appLanguage, isActive: isForeground) {
+                                manager.setForegroundApp(key: key, bundleID: appID)
+                                manager.bringAppToFront(bundleID: appID)
+                            }
+                        }
+
+                        if isRowHovered {
+                            DeleteSessionAppButton(appLanguage: appLanguage) {
+                                manager.removeAppFromSnapshot(key: key, windowID: record.windowID)
+                            }
+                        }
                     }
-                    
-                    DeleteSessionAppButton(appLanguage: appLanguage) {
-                        manager.removeAppFromSnapshot(key: key, windowID: record.windowID)
-                    }
+                    .transition(.opacity)
                 }
             }
             
@@ -657,7 +667,7 @@ struct WindowRowContainer: View {
         }
         .mainWindowSymbolHoverRegion()
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.15)) {
+            withAnimation(.snappy(duration: 0.15)) {
                 isRowHovered = hovering
             }
         }
@@ -813,7 +823,7 @@ struct ExcludeCommandButton: View {
                 Text("⌘⇧R")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(isIncluded 
-                                     ? Color.green.opacity(0.85) 
+                                     ? Color.primary
                                      : (isHovered ? Color.primary.opacity(0.65) : Color.secondary.opacity(0.35)))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -846,19 +856,29 @@ struct BringToFrontButton: View {
     let appLanguage: AppLanguage
     let isActive: Bool
     let action: () -> Void
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered = false
+
+    private var activeAccent: Color { themeColor.color(seed: 0) }
+    private var activeAccentText: Color {
+        if themeColor.isGalaxy {
+            return .black
+        }
+        return themeColor.onAccentColor(for: colorScheme)
+    }
     
     var body: some View {
         ZStack {
             Circle()
                 .fill(isActive
-                      ? Color.accentColor
-                      : (isHovered ? Color.accentColor.opacity(0.15) : Color.clear))
+                      ? activeAccent
+                      : (isHovered ? activeAccent.opacity(0.15) : Color.clear))
                 .frame(width: 26, height: 26)
             Image(systemName: "square.3.layers.3d.top.filled")
                 .mainWindowSymbolAnimation(.wiggleByLayer, capturesClicks: false)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(isActive ? Color.white : (isHovered ? Color.accentColor : Color.secondary))
+                .foregroundStyle(isActive ? activeAccentText : (isHovered ? Color.primary : Color.secondary))
         }
         .frame(width: 26, height: 26)
         .contentShape(Circle())
@@ -916,6 +936,7 @@ struct AutoLayoutCenterView: View {
     private var activeSnapshot: LayoutSnapshot? {
         if let entry = activeEntry {
             return LayoutSnapshot(
+                id: entry.id,
                 name: entry.readableScreenKey ?? manager.currentFingerprint.readableName,
                 screenKey: entry.screenKey,
                 readableScreenKey: entry.readableScreenKey,
@@ -1018,7 +1039,9 @@ struct AutoLayoutCenterView: View {
                             snapshot: snap,
                             selectedRecordID: manager.selectedRecordID,
                             tint: themeColor.color(seed: 0),
-                            enable3DHover: true
+                            enable3DHover: true,
+                            animateWindowReveal: true,
+                            isMainWindow: true
                         )
                         .frame(maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
                         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snap.previewRecords.count)
@@ -1107,7 +1130,7 @@ struct AutoLayoutSidebarWindowListView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
-    @State private var isOtherDisplaysExpanded: Bool = false
+    @State private var isOtherDisplaysExpanded: Bool = true
 
     private var entries: [AutoSaveEntry] {
         // Restorable here, not merely recorded somewhere. See
@@ -1183,7 +1206,7 @@ struct AutoLayoutSidebarWindowListView: View {
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
                                         .background(themeColor.color(seed: 0).opacity(0.15))
-                                        .foregroundStyle(themeColor.color(seed: 0))
+                                        .foregroundStyle(.primary)
                                         .clipShape(Capsule())
 
                                     Spacer()
@@ -1267,7 +1290,7 @@ struct AutoLayoutSidebarWindowListView: View {
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
                                     .background(themeColor.color(seed: 0).opacity(0.15))
-                                    .foregroundStyle(themeColor.color(seed: 0))
+                                    .foregroundStyle(.primary)
                                     .clipShape(Capsule())
                             }
                         }
@@ -1375,7 +1398,7 @@ struct AutoLayoutRememberedDisplayRow: View {
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1.5)
                             .background(themeColor.color(seed: 3).opacity(0.15))
-                            .foregroundStyle(themeColor.color(seed: 3))
+                            .foregroundStyle(.primary)
                             .clipShape(Capsule())
                     }
                 }
@@ -1461,7 +1484,7 @@ struct AutoLayoutSidebarWindowRow: View {
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
                             .background(themeColor.color(seed: 0).opacity(0.1))
-                            .foregroundStyle(themeColor.color(seed: 0))
+                            .foregroundStyle(.primary)
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
 

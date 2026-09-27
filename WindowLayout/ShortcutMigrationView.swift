@@ -12,24 +12,33 @@ struct ShortcutMigrationView: View {
     @ObservedObject var manager: DesktopToggleManager
     var onDismiss: () -> Void
 
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @Environment(\.colorScheme) private var colorScheme
     @State private var hoverDone = false
 
     private var isKeepingLegacy: Bool { manager.hotkey == .legacyDesktopToggle }
+    private var accentColor: Color { themeColor.color(seed: 0) }
+    private var accentTextColor: Color {
+        if themeColor.isGalaxy {
+            return .black
+        }
+        return themeColor.onAccentColor(for: colorScheme)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
                 Circle()
                     .fill(LinearGradient(
-                        colors: [Color.accentColor.opacity(0.30), Color.accentColor.opacity(0.06)],
+                        colors: [accentColor.opacity(0.30), accentColor.opacity(0.06)],
                         startPoint: .topLeading, endPoint: .bottomTrailing))
                     .frame(width: 88, height: 88)
-                    .overlay { Circle().stroke(Color.accentColor.opacity(0.25), lineWidth: 1) }
-                    .shadow(color: Color.accentColor.opacity(0.22), radius: 20, x: 0, y: 8)
+                    .overlay { Circle().stroke(accentColor.opacity(0.25), lineWidth: 1) }
+                    .shadow(color: accentColor.opacity(0.22), radius: 20, x: 0, y: 8)
 
                 Image(systemName: "command")
                     .font(.system(size: 38, weight: .light))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(accentColor)
             }
             .padding(.top, 32)
             .padding(.bottom, 18)
@@ -120,11 +129,11 @@ struct ShortcutMigrationView: View {
             Button { onDismiss() } label: {
                 Text("Done".localized(language))
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(accentTextColor)
                     .frame(width: 200, height: 42)
-                    .background(Color.accentColor)
+                    .background(accentColor)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .shadow(color: Color.accentColor.opacity(0.35), radius: 12, x: 0, y: 4)
+                    .shadow(color: accentColor.opacity(0.35), radius: 12, x: 0, y: 4)
                     .scaleEffect(hoverDone ? 1.03 : 1.0)
                     .animation(.spring(response: 0.25, dampingFraction: 0.75), value: hoverDone)
             }
@@ -139,6 +148,7 @@ struct ShortcutMigrationView: View {
                 .ignoresSafeArea()
         }
         .environment(\.layoutDirection, language == .hebrew ? .rightToLeft : .leftToRight)
+        .appThemeColorScheme(themeColor)
     }
 
     @ViewBuilder
@@ -147,7 +157,7 @@ struct ShortcutMigrationView: View {
         Button { manager.hotkey = config } label: {
             HStack(spacing: 10) {
                 Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isSelected ? accentColor : Color.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title.localized(language))
                         .font(.system(size: 13, weight: .medium))
@@ -161,7 +171,7 @@ struct ShortcutMigrationView: View {
             .contentShape(Rectangle())
             .background {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.04))
+                    .fill(isSelected ? accentColor.opacity(0.10) : Color.primary.opacity(0.04))
             }
         }
         .buttonStyle(.plain)

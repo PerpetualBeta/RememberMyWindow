@@ -188,9 +188,9 @@ struct LayoutSnapshot: Codable, Identifiable {
 // MARK: - Notification Sound Options
 
 enum SystemSoundCategory: String, CaseIterable, Identifiable {
+    case meme    = "Meme & Fun"
     case encore  = "Encore Tones"
     case melodic = "Melodic & Ambient"
-    case meme    = "Meme & Fun"
     case classic = "Classic Alert Sounds"
 
     var id: String { rawValue }
@@ -198,24 +198,7 @@ enum SystemSoundCategory: String, CaseIterable, Identifiable {
 
 /// Available macOS native notification alert sounds including longer Apple tones and meme sounds.
 enum SystemSound: String, Codable, CaseIterable, Identifiable {
-    // 1. Encore Tones (1.5s – 3.8s)
-    case welcome   = "Welcome"
-    case droplet   = "Droplet"
-    case milestone = "Milestone"
-    case cheers    = "Cheers"
-    case passage   = "Passage"
-    case portal    = "Portal"
-    case handoff   = "Handoff"
-    case rebound   = "Rebound"
-    case slide     = "Slide"
-
-    // 2. Melodic & Ambient (1.7s – 2.7s trimmed)
-    case stargaze   = "Stargaze"
-    case illuminate = "Illuminate"
-    case crystals   = "Crystals"
-    case cosmic     = "Cosmic"
-
-    // 3. Meme & Fun (0.5s – 2.0s)
+    // 1. Meme & Fun (0.5s – 2.0s)
     case emotionalDamage = "EmotionalDamage"
     case faah            = "Faah"
     case vineBoom        = "VineBoom"
@@ -237,6 +220,23 @@ enum SystemSound: String, Codable, CaseIterable, Identifiable {
     case yeet            = "Yeet"
     case animeWow        = "AnimeWow"
     case tada            = "Tada"
+
+    // 2. Encore Tones (1.5s – 3.8s)
+    case welcome   = "Welcome"
+    case droplet   = "Droplet"
+    case milestone = "Milestone"
+    case cheers    = "Cheers"
+    case passage   = "Passage"
+    case portal    = "Portal"
+    case handoff   = "Handoff"
+    case rebound   = "Rebound"
+    case slide     = "Slide"
+
+    // 3. Melodic & Ambient (1.7s – 2.7s trimmed)
+    case stargaze   = "Stargaze"
+    case illuminate = "Illuminate"
+    case crystals   = "Crystals"
+    case cosmic     = "Cosmic"
 
     // 4. Classic Alerts (0.5s – 1.8s)
     case glass     = "Glass"
@@ -680,4 +680,3 @@ extension Array where Element == WindowRecord {
         }
     }
 }
-

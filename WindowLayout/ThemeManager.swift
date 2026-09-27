@@ -74,6 +74,21 @@ enum ThemeColor: String, CaseIterable, Identifiable, Codable {
         }
         return color ?? .accentColor
     }
+
+    /// Chooses a readable foreground for content rendered directly on a theme
+    /// swatch or accent-colored control. The solid system accent colors used by
+    /// this app are bright enough for a dark foreground; the black theme needs
+    /// the inverse. Galaxy keeps its starlight treatment in both appearances.
+    func onAccentColor(for colorScheme: ColorScheme) -> Color {
+        switch self {
+        case .black, .galaxy:
+            return .white
+        case .default:
+            return colorScheme == .dark ? .white : .black
+        case .purple, .yellow, .red, .blue, .lightBlue, .green, .orange, .mint:
+            return .black
+        }
+    }
 }
 
 // MARK: - Galaxy Color Manager
@@ -112,6 +127,89 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         case .english: return "English"
         case .hebrew:  return "עברית"
         }
+    }
+}
+
+// MARK: - Visual Motion Preferences
+
+/// A user preference for quieter, more predictable visual feedback. This is
+/// separate from the system Reduce Motion setting so people can choose a
+/// calmer presentation even when the rest of macOS still uses motion.
+private struct MinimalVisualAnimationsKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+private struct OriginalAnimationTransactionKey: TransactionKey {
+    static let defaultValue: Animation? = nil
+}
+
+extension EnvironmentValues {
+    var minimalVisualAnimationsEnabled: Bool {
+        get { self[MinimalVisualAnimationsKey.self] }
+        set { self[MinimalVisualAnimationsKey.self] = newValue }
+    }
+}
+
+struct MinimalVisualAnimationsModifier: ViewModifier {
+    @Environment(\.minimalVisualAnimationsEnabled) private var minimalVisualAnimationsEnabled
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
+    private var shouldReduceMotion: Bool {
+        minimalVisualAnimationsEnabled || accessibilityReduceMotion
+    }
+
+    func body(content: Content) -> some View {
+        content.transaction { transaction in
+            guard shouldReduceMotion else { return }
+            transaction[OriginalAnimationTransactionKey.self] =
+                transaction[OriginalAnimationTransactionKey.self] ?? transaction.animation
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
+    }
+}
+
+/// Keeps a showcase or onboarding experience animated even when the app's
+/// optional minimal-animation preference or macOS Reduce Motion is enabled.
+struct FullVisualAnimationsModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.transaction { transaction in
+            if let originalAnimation = transaction[OriginalAnimationTransactionKey.self] {
+                transaction.animation = originalAnimation
+            }
+            transaction.disablesAnimations = false
+        }
+    }
+}
+
+/// Galaxy is an intentionally dark app surface, even when macOS itself is in
+/// Light Mode. Keep SwiftUI's semantic foregrounds (such as `.primary` and
+/// `.secondary`) aligned with that surface without changing the system-wide
+/// appearance or the appearance of other themes.
+private struct AppThemeColorSchemeModifier: ViewModifier {
+    let theme: ThemeColor
+    @Environment(\.colorScheme) private var systemColorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.colorScheme, theme.isGalaxy ? .dark : systemColorScheme)
+    }
+}
+
+extension View {
+    /// Applies the app preference and macOS Reduce Motion to the entire view tree.
+    func minimalVisualAnimations() -> some View {
+        modifier(MinimalVisualAnimationsModifier())
+    }
+
+    /// Preserves app-authored animations inside this subtree.
+    func fullVisualAnimations() -> some View {
+        modifier(FullVisualAnimationsModifier())
+    }
+
+    /// Makes semantic text and materials match the selected app theme.
+    func appThemeColorScheme(_ theme: ThemeColor) -> some View {
+        modifier(AppThemeColorSchemeModifier(theme: theme))
     }
 }
 
@@ -590,4 +688,3 @@ enum GlassStyle {
     case row
     case card
 }
-

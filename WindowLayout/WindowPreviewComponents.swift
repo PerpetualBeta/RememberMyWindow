@@ -372,9 +372,14 @@ struct MainWindowSymbolAnimation: ViewModifier {
     let capturesClicks: Bool
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.mainWindowIconHoverRegion) private var hoverRegion
+    @Environment(\.minimalVisualAnimationsEnabled) private var minimalVisualAnimationsEnabled
     @State private var isHovered = false
     @State private var animationTrigger = 0
     @State private var isFlipping = false
+
+    private var shouldReduceMotion: Bool {
+        minimalVisualAnimationsEnabled
+    }
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -419,7 +424,9 @@ struct MainWindowSymbolAnimation: ViewModifier {
 
     @ViewBuilder
     private func animatedContent(_ content: Content) -> some View {
-        if #available(macOS 15.0, *) {
+        if shouldReduceMotion {
+            content
+        } else if #available(macOS 15.0, *) {
             switch effect {
             case .wiggle:
                 content.symbolEffect(.wiggle, options: .speed(0.85), value: animationTrigger)
@@ -471,6 +478,8 @@ struct MainWindowSymbolAnimation: ViewModifier {
     }
 
     private func triggerAnimation() {
+        guard !shouldReduceMotion else { return }
+
         switch effect {
         case .flip:
             isFlipping = true
@@ -550,8 +559,15 @@ struct LayoutPreviewView: View {
     let selectedRecordID: UUID?
     let tint: Color
     var enable3DHover: Bool = false
+    /// Reveals the classic preview's windows into their saved positions once
+    /// when the containing preview appears. Kept opt-in so the main window's
+    /// existing preview behavior remains unchanged.
+    var animateWindowReveal: Bool = false
+    var isMainWindow: Bool = false
+    var isMenubarThumbnail: Bool = false
     
     @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.minimalVisualAnimationsEnabled) private var minimalVisualAnimationsEnabled
     
     @State private var isHovered: Bool = false
     @State private var hoveredRecordID: UUID? = nil
@@ -560,15 +576,110 @@ struct LayoutPreviewView: View {
     @State private var centerEnteredFromLeft: Bool = true
     @State private var isPlayingIntro: Bool = false
     @State private var introTask: Task<Void, Never>? = nil
-    
+    @State private var revealedWindowCount: Int = 0
+    @State private var currentlyPoppingIndex: Int? = nil
+    @State private var windowRevealTask: Task<Void, Never>? = nil
+
+    private var windowRevealCount: Int {
+        max(snapshot.previewRecords.count, 1)
+    }
+
+    private var usesFlatPreview: Bool {
+        minimalVisualAnimationsEnabled
+    }
+
+    /// Sequential reveal duration per window (extended to match pacing).
+    private var denseRevealWindowDuration: Double {
+        0.30
+    }
+
     var body: some View {
-        if !enable3DHover {
-            classic2DBody
-        } else {
-            interactive3DBody
+        Group {
+            if !enable3DHover || usesFlatPreview {
+                classic2DBody
+            } else {
+                interactive3DBody
+            }
+        }
+        .onAppear {
+            startWindowReveal()
+        }
+        .onDisappear {
+            windowRevealTask?.cancel()
+            windowRevealTask = nil
+            revealedWindowCount = 0
+            currentlyPoppingIndex = nil
+        }
+        .onChange(of: snapshot.id) { _, _ in
+            if animateWindowReveal {
+                startWindowReveal()
+            }
+        }
+        .onChange(of: usesFlatPreview) { _, _ in
+            if animateWindowReveal {
+                startWindowReveal()
+            }
+        }
+        .onHover { isCardHovered in
+            if isCardHovered && animateWindowReveal {
+                startWindowReveal()
+            }
+        }
+        .transaction { transaction in
+            if animateWindowReveal {
+                transaction.disablesAnimations = false
+            }
         }
     }
-    
+
+    private func startWindowReveal() {
+        windowRevealTask?.cancel()
+        windowRevealTask = nil
+        revealedWindowCount = 0
+        currentlyPoppingIndex = nil
+
+        guard animateWindowReveal else {
+            revealedWindowCount = windowRevealCount
+            currentlyPoppingIndex = nil
+            return
+        }
+
+        // Both Menubar thumbnail and Window Arrangement use 350ms pacing for a consistent rhythm.
+        let useMinimalPop = isMenubarThumbnail
+        let count = windowRevealCount
+        let stepNanoseconds: UInt64 = 350_000_000
+
+        windowRevealTask = Task { @MainActor in
+            await Task.yield()
+
+            for index in 0..<count {
+                if index > 0 {
+                    do {
+                        try await Task.sleep(nanoseconds: stepNanoseconds)
+                    } catch {
+                        return
+                    }
+                }
+
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: useMinimalPop ? 0.25 : denseRevealWindowDuration)) {
+                    currentlyPoppingIndex = index
+                    revealedWindowCount = index + 1
+                }
+            }
+
+            do {
+                try await Task.sleep(nanoseconds: stepNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: useMinimalPop ? 0.35 : denseRevealWindowDuration)) {
+                currentlyPoppingIndex = nil
+            }
+        }
+    }
+
     // MARK: - Classic 2D Preview (Exact restoration from last week for Saved Sessions & Inspector Mini-Map)
     
     private var classic2DBody: some View {
@@ -579,6 +690,8 @@ struct LayoutPreviewView: View {
             let layoutHeight = boundingBox.height * scale
             let offsetX = max(0, (geo.size.width - layoutWidth) / 2)
             let offsetY = max(0, (geo.size.height - layoutHeight) / 2)
+            let revealEnabled = animateWindowReveal
+            let backgroundFirstRecords = backgroundFirstPreviewRecords
             
             ZStack {
                 // Screens
@@ -593,13 +706,17 @@ struct LayoutPreviewView: View {
                 }
                 
                 // Windows
-                ForEach(snapshot.previewRecords) { record in
+                ForEach(Array(backgroundFirstRecords.enumerated()), id: \.element.id) { revealIndex, record in
                     classicWindowView(
                         record: record,
                         boundingBox: boundingBox,
                         scale: scale,
                         offsetX: offsetX,
-                        offsetY: offsetY
+                        offsetY: offsetY,
+                        revealEnabled: revealEnabled,
+                        revealProgress: revealedWindowCount,
+                        revealIndex: revealIndex,
+                        isCurrentlyPopping: revealIndex == currentlyPoppingIndex
                     )
                 }
             }
@@ -607,6 +724,24 @@ struct LayoutPreviewView: View {
         }
         .padding(10)
         .liquidGlass(cornerRadius: 14, style: .card)
+    }
+
+    /// `zIndex` is captured with 0 as the front-most window. Reveal the
+    /// background first so foreground windows do not hide the rest of the
+    /// arrangement before the user has had a chance to see it.
+    private var backgroundFirstPreviewRecords: [WindowRecord] {
+        let records = snapshot.previewRecords
+        return records.enumerated().sorted { lhs, rhs in
+            let lhsZIndex = lhs.element.zIndex ?? Int.max
+            let rhsZIndex = rhs.element.zIndex ?? Int.max
+            if lhsZIndex != rhsZIndex {
+                return lhsZIndex > rhsZIndex
+            }
+            // Older snapshots can have no zIndex values. Their records keep
+            // capture order (front-to-back), so reverse that order for the
+            // background-first reveal as well.
+            return lhs.offset > rhs.offset
+        }.map(\.element)
     }
     
     private func classicScreenView(
@@ -648,11 +783,16 @@ struct LayoutPreviewView: View {
         boundingBox: CGRect,
         scale: CGFloat,
         offsetX: CGFloat,
-        offsetY: CGFloat
+        offsetY: CGFloat,
+        revealEnabled: Bool,
+        revealProgress: Int,
+        revealIndex: Int,
+        isCurrentlyPopping: Bool = false
     ) -> some View {
         let isSelected = record.id == selectedRecordID
         let isHovered = record.id == hoveredRecordID
         let isHighlighted = isSelected || isHovered
+        let isMinimal = isMenubarThumbnail
         let x = offsetX + (record.globalFrame.origin.x - boundingBox.origin.x) * scale
         let y = offsetY + (boundingBox.height - (record.globalFrame.origin.y - boundingBox.origin.y + record.globalFrame.height)) * scale
         let w = record.globalFrame.width * scale
@@ -664,15 +804,49 @@ struct LayoutPreviewView: View {
         let baseSize: CGFloat = min(max(w * 0.24, 20.0), 30.0)
         let iconSize: CGFloat = min(baseSize, max(8.0, min(w - 3, h - 3)))
         let titleBarHeight: CGFloat = max(iconSize + 3, 14 * scale)
+        let isWaitingToReveal = revealEnabled && (revealIndex >= revealProgress)
+        let revealScale: CGFloat = !isMinimal && isWaitingToReveal ? 0.97 : 1.0
+        let revealOffsetY: CGFloat = !isMinimal && isWaitingToReveal ? 6.0 : 0.0
+        let foregroundProgress: Double = {
+            guard windowRevealCount > 1 else { return 1.0 }
+            return Double(revealIndex) / Double(windowRevealCount - 1)
+        }()
+        let foregroundBorderOpacity = isHighlighted
+            ? 1.0
+            : (revealEnabled ? 0.65 + foregroundProgress * 0.35 : 0.65)
+        let revealOpacity: Double = isWaitingToReveal ? 0.0 : 1.0
+        let foregroundFadeDuration = denseRevealWindowDuration
+        let revealAnimation: Animation? = {
+            guard revealEnabled else { return nil }
+            if isMinimal {
+                return .easeInOut(duration: 0.35)
+            }
+            return .easeInOut(duration: foregroundFadeDuration)
+        }()
 
-        return ZStack(alignment: .topLeading) {
+        let isPoppingNow = isCurrentlyPopping && !isWaitingToReveal
+        let bodyFillOpacity: Double = {
+            if isHighlighted {
+                return isMinimal ? 0.65 : 0.45
+            }
+            if isMinimal || minimalVisualAnimationsEnabled {
+                return isPoppingNow ? 0.60 : (0.18 + foregroundProgress * 0.32)
+            }
+            return 0.22
+        }()
+
+        let windowVisual = ZStack(alignment: .topLeading) {
             // Window body with theme-colored glass
             RoundedRectangle(cornerRadius: winCorner, style: .continuous)
-                .fill(baseTint.opacity(isHighlighted ? 0.45 : 0.22))
+                .fill(isPoppingNow ? Color(nsColor: .windowBackgroundColor) : Color.clear)
+                .overlay {
+                    RoundedRectangle(cornerRadius: winCorner, style: .continuous)
+                        .fill(baseTint.opacity(bodyFillOpacity))
+                }
                 .overlay {
                     // Vibrant theme-colored border
                     RoundedRectangle(cornerRadius: winCorner, style: .continuous)
-                        .stroke(baseTint.opacity(isHighlighted ? 1.0 : 0.65), lineWidth: isHighlighted ? 1.5 : 0.8)
+                        .stroke(baseTint.opacity(foregroundBorderOpacity), lineWidth: isHighlighted ? 1.5 : 0.8)
                 }
                 .shadow(color: isHighlighted ? baseTint.opacity(0.5) : Color.black.opacity(0.35), radius: isHighlighted ? 6 : 2.5, x: 0, y: 1)
             
@@ -715,16 +889,42 @@ struct LayoutPreviewView: View {
                 .padding(.top, 1.5)
             }
         }
+
+        return ZStack {
+            windowVisual
+                .animation(.easeInOut(duration: 0.25), value: isPoppingNow)
+                .frame(width: max(8, w), height: max(8, h))
+                .opacity(revealOpacity)
+                .animation(isMinimal ? .easeInOut(duration: 0.25) : revealAnimation, value: revealProgress)
+        }
         .frame(width: max(8, w), height: max(8, h))
         .position(x: x + w/2, y: y + h/2)
-        .scaleEffect(isHighlighted ? 1.04 : 1.0)
+        .scaleEffect(revealScale * (isHighlighted ? 1.04 : 1.0))
+        .offset(y: revealOffsetY)
         .onHover { hovering in
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
+            guard !isMinimal else { return }
+            if usesFlatPreview {
                 hoveredRecordID = hovering ? record.id : nil
+            } else {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
+                    hoveredRecordID = hovering ? record.id : nil
+                }
             }
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: record.globalFrame)
-        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isHighlighted)
+        .animation(
+            usesFlatPreview ? nil : .spring(response: 0.4, dampingFraction: 0.7),
+            value: record.globalFrame
+        )
+        .animation(
+            usesFlatPreview ? nil : .spring(response: 0.3, dampingFraction: 0.6),
+            value: isHighlighted
+        )
+        .animation(
+            revealEnabled && !isMinimal
+                ? .easeInOut(duration: denseRevealWindowDuration)
+                : nil,
+            value: revealProgress
+        )
     }
     
     // MARK: - Interactive 3D Preview (For Auto Layout Mode)
@@ -1455,6 +1655,7 @@ struct ScreenLayoutThumbnail: View {
     let tint: Color
     let isLive: Bool
     var isHighlighted: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Fixed canvas size for the thumbnail area
     private let canvasW: CGFloat = 34
@@ -1493,6 +1694,7 @@ struct ScreenLayoutThumbnail: View {
         let offsetY = (canvasH - layoutH) / 2
 
         let active = isLive || isHighlighted
+        let neutralColor: Color = colorScheme == .dark ? .white : .black
 
         return AnyView(
             ZStack(alignment: .topLeading) {
@@ -1506,11 +1708,11 @@ struct ScreenLayoutThumbnail: View {
                     let h = max(4, CGFloat(d.height) * scale)
 
                     let screenFill = active
-                        ? (tint == .black ? Color.white.opacity(0.35) : tint.opacity(0.45))
-                        : Color.white.opacity(0.22)
+                        ? (tint == .black ? neutralColor.opacity(0.35) : tint.opacity(0.45))
+                        : neutralColor.opacity(0.14)
                     let screenStroke = active
-                        ? (tint == .black ? Color.white : tint)
-                        : Color.white.opacity(0.88)
+                        ? (tint == .black ? neutralColor : tint)
+                        : neutralColor.opacity(0.68)
 
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
                         .fill(screenFill)
@@ -1518,7 +1720,7 @@ struct ScreenLayoutThumbnail: View {
                             RoundedRectangle(cornerRadius: 2, style: .continuous)
                                 .stroke(screenStroke, lineWidth: active ? 1.5 : 1.0)
                         }
-                        .shadow(color: active ? screenStroke.opacity(0.70) : Color.black.opacity(0.45), radius: active ? 3.0 : 1.5, x: 0, y: 1)
+                        .shadow(color: active ? screenStroke.opacity(0.70) : neutralColor.opacity(0.35), radius: active ? 3.0 : 1.5, x: 0, y: 1)
                         .frame(width: w, height: h)
                         .offset(x: x, y: y)
                 }
@@ -1526,10 +1728,10 @@ struct ScreenLayoutThumbnail: View {
                 // Small active layout indicator dot in top-right corner
                 if active {
                     Circle()
-                        .fill(tint == .black ? Color.white : tint)
+                        .fill(tint == .black ? neutralColor : tint)
                         .frame(width: 5, height: 5)
-                        .shadow(color: Color.white.opacity(0.85), radius: 2)
-                        .shadow(color: Color.black.opacity(0.5), radius: 1, x: 0, y: 1)
+                        .shadow(color: neutralColor.opacity(0.85), radius: 2)
+                        .shadow(color: neutralColor.opacity(0.5), radius: 1, x: 0, y: 1)
                         .position(x: canvasW, y: 0)
                 }
             }
@@ -1542,7 +1744,9 @@ struct ScreenLayoutThumbnail: View {
     /// Renders the layout thumbnail as a compact, crisp NSImage properly dimensioned for native NSMenuItems (20x14 pt).
     @MainActor
     static func renderImage(screenKey: String, tint: Color, isLive: Bool = false) -> NSImage? {
-        let cacheKey = "\(screenKey)_\(isLive)"
+        let appearanceName = NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
+        let appearanceKey = appearanceName == .darkAqua ? "dark" : "light"
+        let cacheKey = "\(screenKey)_\(isLive)_\(appearanceKey)"
         if let cached = thumbnailCache[cacheKey] {
             return cached
         }
@@ -1566,6 +1770,7 @@ struct ScreenLayoutThumbnail: View {
 
         let image = NSImage(size: NSSize(width: canvasW, height: canvasH), flipped: false) { _ in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            let neutralColor = NSColor.labelColor
             for d in displays {
                 let x = CGFloat(d.originX - Int(boundingBox.minX)) * scale + offsetX
                 let y = CGFloat(d.originY - Int(boundingBox.minY)) * scale + offsetY
@@ -1575,11 +1780,11 @@ struct ScreenLayoutThumbnail: View {
                 let path = CGPath(roundedRect: r, cornerWidth: 1.5, cornerHeight: 1.5, transform: nil)
 
                 let fillColor = isLive
-                    ? NSColor.white.withAlphaComponent(0.40)
-                    : NSColor.white.withAlphaComponent(0.20)
+                    ? neutralColor.withAlphaComponent(0.40)
+                    : neutralColor.withAlphaComponent(0.14)
                 let strokeColor = isLive
-                    ? NSColor.white
-                    : NSColor.white.withAlphaComponent(0.88)
+                    ? neutralColor
+                    : neutralColor.withAlphaComponent(0.68)
 
                 ctx.addPath(path)
                 ctx.setFillColor(fillColor.cgColor)
@@ -1594,7 +1799,7 @@ struct ScreenLayoutThumbnail: View {
             if isLive {
                 let dotRect = CGRect(x: canvasW - 4.5, y: canvasH - 4.5, width: 3.5, height: 3.5)
                 ctx.addEllipse(in: dotRect)
-                ctx.setFillColor(NSColor.white.cgColor)
+                ctx.setFillColor(neutralColor.cgColor)
                 ctx.fillPath()
             }
 
@@ -1622,7 +1827,7 @@ struct CommandBadgeView: View {
         if isActive {
             Text("⌘⇧R")
                 .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(isHovered ? Color.white : themeColor)
+                .foregroundStyle(isHovered ? Color.white : Color.primary)
                 .padding(.horizontal, 5)
                 .padding(.vertical, 2)
                 .background(
@@ -1674,6 +1879,7 @@ struct MenuWindowListView: View {
     @EnvironmentObject var manager: WindowManager
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @AppStorage("minimalVisualAnimations") private var minimalVisualAnimations: Bool = true
     @Environment(\.colorScheme) private var colorScheme
     @State private var hoveredRecordID: UUID? = nil
     @State private var isAppeared = false
@@ -1720,10 +1926,16 @@ struct MenuWindowListView: View {
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
         .onAppear {
-            withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
+            if minimalVisualAnimations {
                 isAppeared = true
+            } else {
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
+                    isAppeared = true
+                }
             }
         }
+        .minimalVisualAnimations()
+        .environment(\.minimalVisualAnimationsEnabled, minimalVisualAnimations)
     }
 
     private func appRow(_ record: WindowRecord, isFirstOfApp: Bool = true) -> some View {
@@ -1756,7 +1968,7 @@ struct MenuWindowListView: View {
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
                             .background(isHovered ? Color.white.opacity(0.25) : Color.green.opacity(activeBadgeBgOpacity))
-                            .foregroundStyle(isHovered ? Color.white : Color.green)
+                            .foregroundStyle(isHovered ? Color.white : Color.primary)
                             .clipShape(Capsule())
                             .scaleEffect(isAppeared ? 1.0 : 0.8)
                     }
@@ -1788,7 +2000,7 @@ struct MenuWindowListView: View {
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
                             .background(isHovered ? Color.white.opacity(0.2) : rowTint.opacity(badgeBgOpacity))
-                            .foregroundStyle(isHovered ? Color.white : rowTint)
+                            .foregroundStyle(isHovered ? Color.white : Color.primary)
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
                     
@@ -1866,6 +2078,7 @@ struct AutoSavePreviewCardView: View {
     let tint: Color
     let language: AppLanguage
     let onRestore: () -> Void
+    @AppStorage("minimalVisualAnimations") private var minimalVisualAnimations: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1876,8 +2089,10 @@ struct AutoSavePreviewCardView: View {
                     Image(systemName: "clock.arrow.circlepath")
                         .mainWindowSymbolAnimation(.wiggleByLayer, capturesClicks: false)
                         .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(tint)
                     Text("Restore this layout".localized(language))
                         .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.primary)
                     Spacer(minLength: 8)
                     Text(snapshot.previewRecords.count == 1 ? "1 window".localized(language) : "\(snapshot.previewRecords.count) \("windows".localized(language))")
                         .font(.system(size: 11))
@@ -1888,15 +2103,21 @@ struct AutoSavePreviewCardView: View {
             }
             .buttonStyle(.plain)
             .mainWindowSymbolHoverRegion()
-            .foregroundStyle(tint)
             .accessibilityLabel(Text("Restore this layout".localized(language)))
 
             // Visual monitor & window layout
-            LayoutPreviewView(snapshot: snapshot, selectedRecordID: nil, tint: tint)
+            LayoutPreviewView(
+                snapshot: snapshot,
+                selectedRecordID: nil,
+                tint: tint,
+                animateWindowReveal: true,
+                isMenubarThumbnail: true
+            )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
         }
         .padding(8)
         .frame(width: 320, height: 210)
+        .environment(\.minimalVisualAnimationsEnabled, minimalVisualAnimations)
     }
 }
