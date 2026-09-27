@@ -7,6 +7,11 @@ import CoreLocation
 import ServiceManagement
 import UserNotifications
 
+/// Private HIServices call: the CGWindowID behind an accessibility window.
+/// See `WindowManager.windowNumber(of:)`.
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 /// The `AXValue` an accessibility query returned, or nil if it returned
 /// something else.
 ///
@@ -302,6 +307,19 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let element = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(element, timeoutSeconds)
         return element
+    }
+
+    /// The CGWindowID of an accessibility window, the same number a record
+    /// captures from `kCGWindowNumber`, or nil when it cannot be read.
+    ///
+    /// Accessibility has no public attribute for it. `_AXUIElementGetWindow` is
+    /// private, and window managers such as Rectangle, AltTab and Hammerspoon
+    /// rely on it. A failure only means Pass 0 finds no match and the older
+    /// passes decide, exactly as before.
+    nonisolated static func windowNumber(of element: AXUIElement) -> CGWindowID? {
+        var number: CGWindowID = 0
+        guard _AXUIElementGetWindow(element, &number) == .success, number != 0 else { return nil }
+        return number
     }
 
     // MARK: - Public API
@@ -3788,9 +3806,55 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     }
                     return ""
                 }
-                
+
+                /// How badly a window's size fits a record's: 0 is a perfect fit.
+                /// Pass 0 uses it as a guard and Pass 3 matches on it.
+                func matchScore(_ rec: WindowRecord, _ el: AXUIElement) -> CGFloat? {
+                    guard let frame = self.getCurrentFrame(of: el) else { return nil }
+                    let targetSize = rec.globalFrame.size
+                    let targetAspect = targetSize.width / max(targetSize.height, 1)
+                    let elAspect = frame.width / max(frame.height, 1)
+                    let aspectDiff = abs(elAspect - targetAspect)
+                    let targetArea = targetSize.width * targetSize.height
+                    let elArea = frame.width * frame.height
+                    let areaDiff = abs(elArea - targetArea) / max(targetArea, 1)
+                    return aspectDiff * 2.0 + areaDiff
+                }
+
+                // Pass 0: the window's own CGWindowID, which every record captures.
+                //
+                // Without it, windows with no title fall to size (Pass 3) and then to
+                // list order (Pass 4), and windows of one app are often the same size.
+                // Measured with three untitled 1239x689 TextEdit windows, two of them
+                // minimised: every size score was equal, the first record paired with
+                // the first window in the list, and the visible window was moved to
+                // the first window's saved frame.
+                //
+                // A CGWindowID is unique while the window server runs and starts again
+                // after it restarts, so a record saved before a restart can carry the
+                // ID of an unrelated window. An ID match is taken only when that window
+                // fits the record at least as well as any other window of the app. A
+                // reused ID on a window of another size is refused and matching carries
+                // on as before; one on a window of the same size picks a window the
+                // size pass could equally have picked.
+                for rec in appRecords {
+                    guard let cgid = rec.cgWindowID,
+                          let idx = unclaimed.firstIndex(where: { WindowManager.windowNumber(of: $0) == cgid })
+                    else { continue }
+                    let element = unclaimed[idx]
+                    if let own = matchScore(rec, element),
+                       let best = unclaimed.compactMap({ matchScore(rec, $0) }).min(),
+                       own > best {
+                        continue
+                    }
+                    unclaimed.remove(at: idx)
+                    let target = self.calculateTargetFrame(for: rec)
+                    matchedTargetsForApp.append(ResolvedTarget(record: rec, element: element, targetFrame: target))
+                }
+
                 // Pass 1: Exact title match
                 for rec in appRecords {
+                    if matchedTargetsForApp.contains(where: { $0.record.id == rec.id }) { continue }
                     guard !rec.windowID.windowTitle.isEmpty else { continue }
                     if let idx = unclaimed.firstIndex(where: { getTitle(of: $0) == rec.windowID.windowTitle }) {
                         let element = unclaimed.remove(at: idx)
@@ -3831,18 +3895,6 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // already in place.
                 let unmatchedRecords = appRecords.filter { rec in
                     !matchedTargetsForApp.contains(where: { $0.record.id == rec.id })
-                }
-
-                func matchScore(_ rec: WindowRecord, _ el: AXUIElement) -> CGFloat? {
-                    guard let frame = self.getCurrentFrame(of: el) else { return nil }
-                    let targetSize = rec.globalFrame.size
-                    let targetAspect = targetSize.width / max(targetSize.height, 1)
-                    let elAspect = frame.width / max(frame.height, 1)
-                    let aspectDiff = abs(elAspect - targetAspect)
-                    let targetArea = targetSize.width * targetSize.height
-                    let elArea = frame.width * frame.height
-                    let areaDiff = abs(elArea - targetArea) / max(targetArea, 1)
-                    return aspectDiff * 2.0 + areaDiff
                 }
 
                 var scoredPairs: [(recordIndex: Int, element: AXUIElement, score: CGFloat)] = []
