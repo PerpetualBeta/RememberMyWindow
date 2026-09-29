@@ -191,6 +191,74 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// lock-spanning ones logged seven and eleven. See `restoreHeldForUnlock()`.
     private var displayRestoreHeldForUnlock = false
 
+    /// What a restore held back for one app because it was not displayed.
+    struct HeldUntilShown {
+        /// The minimised windows this restore held. One that is no longer
+        /// minimised has been brought back.
+        ///
+        /// The windows themselves, not a count of them. A count taken over
+        /// the held windows and compared against every minimised window in
+        /// the app never falls when an extra minimised window, one with no
+        /// saved record, stays down: two minimised, one held, and restoring
+        /// the held one leaves `1 < 1`.
+        let minimisedWindows: [AXUIElement]
+        let appWasHidden: Bool
+    }
+    /// Windows the last restore held because they were minimised or their
+    /// app was hidden, restored when they are shown. See `restoreShownHeldApps`.
+    private var heldUntilShown: (snapshot: LayoutSnapshot, apps: [String: HeldUntilShown])?
+
+    /// Whether accessibility reports this window as minimised.
+    static func isMinimised(_ window: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &value) == .success else { return false }
+        return (value as? Bool) ?? false
+    }
+
+    /// Restores each held app that now shows a window it did not before: the
+    /// app is no longer hidden, or it has fewer minimised windows than when
+    /// the restore held them. Silent, like the Space-held restore, because it
+    /// finishes a restore the user has already been told about.
+    private func restoreShownHeldApps(reason: String) {
+        guard let held = heldUntilShown, !held.apps.isEmpty else { return }
+        guard held.snapshot.screenKey == currentFingerprint.key else {
+            log("Dropping windows held until shown — the display setup changed", level: .moderate, type: .restore)
+            heldUntilShown = nil
+            return
+        }
+        guard !isScreenLocked else { return }
+        let running = NSWorkspace.shared.runningApplications
+        var shown: [String] = []
+        for (bundleID, entry) in held.apps {
+            guard let app = running.first(where: { $0.bundleIdentifier == bundleID || $0.localizedName == bundleID }) else { continue }
+            if entry.appWasHidden {
+                if !app.isHidden { shown.append(bundleID) }
+                continue
+            }
+            // A held window that has closed also reads as not minimised. The
+            // restore that follows finds nothing for it and holds whatever
+            // is still down, so that costs one pass and nothing else.
+            if entry.minimisedWindows.contains(where: { !WindowManager.isMinimised($0) }) {
+                shown.append(bundleID)
+            }
+        }
+        guard !shown.isEmpty else {
+            log("\(reason) — \(held.apps.count) app(s) still held, none shown yet", level: .verbose, type: .restore)
+            return
+        }
+        log("\(reason) — restoring \(shown.count) app(s) with windows held until shown", level: .moderate, type: .restore)
+        var remaining = held
+        for bundleID in shown { remaining.apps.removeValue(forKey: bundleID) }
+        heldUntilShown = remaining.apps.isEmpty ? nil : remaining
+        for bundleID in shown {
+            restore(snapshot: held.snapshot,
+                    animated: store.restoreAnimated,
+                    specificAppBundleID: bundleID,
+                    showNotification: false,
+                    skipCommandSend: true)
+        }
+    }
+
     /// Windows a restore could not reach because they are parked on a Space the
     /// user is not on, held until they go there. See `retryDeferredRestore`.
     private var deferredRestore: (snapshot: LayoutSnapshot, bundleIDs: Set<String>)?
@@ -438,6 +506,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             self,
             selector: #selector(appFocusChanged(_:)),
             name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
+
+        // A hidden app shown again may have windows held until shown.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(appUnhidden(_:)),
+            name: NSWorkspace.didUnhideApplicationNotification,
             object: nil
         )
 
@@ -894,6 +970,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // Focus changes can sometimes signal that an app has moved to a different Space,
         // which might invalidate our AX frame cache for that PID.
         log("🎯 Focus changed: \(name)", level: .verbose, type: .system)
+        // Un-minimising a window brings its app forward, so this is when a
+        // window held until shown usually becomes visible.
+        restoreShownHeldApps(reason: "\(name) came forward")
+    }
+
+    @objc private func appUnhidden(_ note: Notification) {
+        let name = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.localizedName ?? "an app"
+        restoreShownHeldApps(reason: "\(name) was shown")
     }
 
 
@@ -1221,6 +1305,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// the arrangement it belongs to.
     func retryDeferredRestore(reason: String) {
         restoreReachableHeldApps(reason: reason)
+        restoreShownHeldApps(reason: reason)
         scheduleDeferredRecheck()
     }
 
@@ -1322,6 +1407,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         if let bundleID = app.bundleIdentifier, var deferred = deferredRestore,
            deferred.bundleIDs.remove(bundleID) != nil {
             deferredRestore = deferred.bundleIDs.isEmpty ? nil : deferred
+        }
+        if var held = heldUntilShown {
+            if let bundleID = app.bundleIdentifier { held.apps.removeValue(forKey: bundleID) }
+            if let name = app.localizedName { held.apps.removeValue(forKey: name) }
+            heldUntilShown = held.apps.isEmpty ? nil : held
         }
         // Schedule a flush so the live layout drops the terminated app's windows
         if !store.usePollingMode {
@@ -3623,6 +3713,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             /// one is per-bundle and this has to be per-record: the application
             /// does have reachable windows, and those were restored correctly.
             var recordsWithoutAWindow: Set<UUID> = []
+            /// Records whose window is not displayed: minimised, or its app is
+            /// hidden. Nothing is written to them. A frame set on a minimised
+            /// window never shows in the window server's on-screen list, so
+            /// verification can never confirm it, and the window was marked
+            /// contested and nudged "via another display" indefinitely.
+            /// Measured on Safari: a minimised Private Browsing window nudged
+            /// from 08:13:37 until at least 08:14:41, with every write logged
+            /// as a success. Held instead, and restored when it is shown.
+            var recordsHeldUntilShown: Set<UUID> = []
+            var heldUntilShownByApp: [String: HeldUntilShown] = [:]
 
             let externalRecords = records.filter { $0.windowID.appBundleID != Bundle.main.bundleIdentifier && $0.windowID.appBundleID != ownProcessName }
             let groupedRecords = Dictionary(grouping: externalRecords, by: { $0.windowID.appBundleID })
@@ -3955,6 +4055,29 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                              level: .moderate, type: .restore)
                 }
 
+                // Hold what is not displayed. Matched first and filtered second, so
+                // a minimised window still claims its own record and the visible
+                // ones keep theirs; dropping it before matching would hand its
+                // record to a window it does not describe.
+                let appHidden = app.isHidden
+                var minimisedHere: [AXUIElement] = []
+                matchedTargetsForApp.removeAll { target in
+                    let minimised = WindowManager.isMinimised(target.element)
+                    guard appHidden || minimised else { return false }
+                    if minimised { minimisedHere.append(target.element) }
+                    recordsHeldUntilShown.insert(target.record.id)
+                    return true
+                }
+                // Nor are extra windows broadcast to the template position while
+                // they are out of sight.
+                unclaimed.removeAll { appHidden || WindowManager.isMinimised($0) }
+                if appHidden || !minimisedHere.isEmpty {
+                    heldUntilShownByApp[bundleID] = HeldUntilShown(minimisedWindows: minimisedHere, appWasHidden: appHidden)
+                    let why = appHidden ? "the app is hidden" : "\(minimisedHere.count) minimised"
+                    self.log("⏸️ Holding window(s) of '\(bundleID)' — \(why); will restore when shown",
+                             level: .moderate, type: .restore)
+                }
+
                 // Broadcast mode: if there are extra open AX windows that weren't claimed by saved records,
                 // apply the template target frame (e.g. from appRecords.first) to every extra window.
                 // This stacks all open windows at the saved position so the user can drag them apart.
@@ -4162,6 +4285,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     shouldSendShortcut: self.store.refreshFrontmostOnFullRestore && !skipCommandSend
                 )
                 self.log("🔒 Layout restore completed while locked. Deferred notch overlay and shortcut queued for screen unlock.", level: .necessary, type: .restore)
+            }
+
+            if specificAppBundleID == nil {
+                self.heldUntilShown = heldUntilShownByApp.isEmpty
+                    ? nil
+                    : (snapshot: snapshot, apps: heldUntilShownByApp)
+            } else if let app = specificAppBundleID {
+                var held = self.heldUntilShown ?? (snapshot: snapshot, apps: [:])
+                held.apps[app] = heldUntilShownByApp[app]
+                self.heldUntilShown = held.apps.isEmpty ? nil : held
             }
 
             if specificAppBundleID == nil {
@@ -4402,6 +4535,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         record.windowID.appBundleID != ownProcessName &&
                         !deferredBundleIDs.contains(record.windowID.appBundleID) &&
                         !recordsWithoutAWindow.contains(record.id) &&
+                        !recordsHeldUntilShown.contains(record.id) &&
                         !record.isNativeFullScreen &&
                         !record.isFullScreenMode &&
                         updatedRunningApps.values.contains(where: {
@@ -5347,11 +5481,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // The C callback is a plain C function pointer — captures a raw unmanaged pointer to self.
         // We hop to the MainActor explicitly so WindowManager's actor isolation is respected.
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        let err = AXObserverCreate(pid, { _, _, _, refcon in
+        let err = AXObserverCreate(pid, { _, _, notification, refcon in
             guard let refcon = refcon else { return }
             let manager = Unmanaged<WindowManager>.fromOpaque(refcon).takeUnretainedValue()
+            let deminiaturised = (notification as String) == kAXWindowDeminiaturizedNotification
             Task { @MainActor in
-                manager.scheduleAXEventFlush()
+                if deminiaturised {
+                    manager.restoreShownHeldApps(reason: "a window was un-minimised")
+                } else {
+                    manager.scheduleAXEventFlush()
+                }
             }
         }, &observer)
 
@@ -5365,7 +5504,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             kAXWindowMovedNotification,
             kAXWindowResizedNotification,
             kAXWindowCreatedNotification,
-            kAXUIElementDestroyedNotification
+            kAXUIElementDestroyedNotification,
+            // The one trigger that fires once a held window really is back.
+            // Focus changes first: measured bringing TextEdit back from its
+            // Dock icon, the app activated with the window still reading as
+            // minimised, it read as shown 50 ms later, and this notification
+            // arrived 438 ms after the activation. So the focus-change retry
+            // looked, found nothing shown, and the window was never restored.
+            kAXWindowDeminiaturizedNotification
         ]
         for n in notifications {
             // Errors here are expected for apps that don't expose AX windows — ignore them.
