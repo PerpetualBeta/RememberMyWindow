@@ -142,6 +142,7 @@ struct CommandOverlayView: View {
     let appName: String
     
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @AppStorage("minimalVisualAnimations") private var minimalVisualAnimations: Bool = true
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     
     // Entrance state
@@ -184,7 +185,7 @@ struct CommandOverlayView: View {
     }
 
     private var shouldReduceMotion: Bool {
-        accessibilityReduceMotion
+        minimalVisualAnimations || accessibilityReduceMotion
     }
     
     var body: some View {
@@ -408,6 +409,9 @@ struct CommandOverlayView: View {
             textOpacity = 1.0
         }
         .minimalVisualAnimations()
+        // This view is hosted in its own NSHostingView, so it must explicitly
+        // receive the persisted preference instead of the environment default.
+        .environment(\.minimalVisualAnimationsEnabled, minimalVisualAnimations)
     }
 }
 

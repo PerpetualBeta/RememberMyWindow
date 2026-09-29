@@ -34,8 +34,8 @@ export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR"
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
-echo "  - (this may take a few seconds) Preparing Swift sources..."
-echo "  - Compiling Swift files…"
+echo "  - Preparing Swift sources... (this may take a few seconds)"
+echo "  - Compiling Swift files..."
 swiftc -parse-as-library \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -target "arm64-apple-macosx14.0" \
@@ -128,6 +128,11 @@ fi
 echo "Copying onboarding capture..."
 if [ -f "WindowLayout/OnboardingMainWindow.png" ]; then
     cp "WindowLayout/OnboardingMainWindow.png" "${RESOURCES_DIR}/OnboardingMainWindow.png"
+fi
+
+echo "Copying bundled wallpapers..."
+if [ -f "WindowLayout/DesktopWallpaper.jpg" ]; then
+    cp "WindowLayout/DesktopWallpaper.jpg" "${RESOURCES_DIR}/DesktopWallpaper.jpg"
 fi
 
 echo "Copying localizations..."

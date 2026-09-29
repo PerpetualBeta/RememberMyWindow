@@ -405,9 +405,34 @@ struct OnboardingSetupView: View {
 /// Keeping it in the existing onboarding file also lets the main window reuse
 /// the same visual language without introducing another project resource.
 struct WindowServerLoadingStatus: View {
+    enum Style {
+        case onboarding
+        case toolbar
+    }
+
     var language: AppLanguage
+    var style: Style = .onboarding
 
     var body: some View {
+        styledStatus
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(Text("Preparing window tracking…".localized(language)))
+    }
+
+    @ViewBuilder
+    private var styledStatus: some View {
+        switch style {
+        case .onboarding:
+            statusContent
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.primary.opacity(0.07), in: Capsule())
+        case .toolbar:
+            statusContent
+        }
+    }
+
+    private var statusContent: some View {
         HStack(spacing: 7) {
             ProgressView()
                 .controlSize(.small)
@@ -418,15 +443,6 @@ struct WindowServerLoadingStatus: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(Color.primary.opacity(0.07), in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("Preparing window tracking…".localized(language)))
     }
 }
 
@@ -1203,8 +1219,30 @@ struct TourKeyCap: View {
 // MARK: - macOS Desktop Illustration Components
 
 private struct MacDesktopPlainSurface: View {
+    private var wallpaperImage: NSImage? {
+        if let url = Bundle.main.url(forResource: "DesktopWallpaper", withExtension: "jpg"),
+           let image = NSImage(contentsOf: url) {
+            return image
+        }
+        return nil
+    }
+
     var body: some View {
-        Color.clear
+        if let img = wallpaperImage {
+            Image(nsImage: img)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .clipped()
+        } else {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.55, green: 0.28, blue: 0.05),
+                    Color(red: 0.30, green: 0.15, blue: 0.03)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
     }
 }
 

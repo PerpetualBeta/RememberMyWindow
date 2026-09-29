@@ -84,6 +84,17 @@ struct ContentView: View {
             ToolbarItem(placement: .navigation) {
                 liquidGlassHeaderSlider
             }
+            if manager.isWindowServerInitializing {
+                ToolbarItem(id: "windowServerLoadingStatus", placement: .navigation) {
+                    HStack(spacing: 6) {
+                        Divider()
+                            .frame(height: 20)
+                            .accessibilityHidden(true)
+                        WindowServerLoadingStatus(language: appLanguage, style: .toolbar)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+            }
             ToolbarItem(placement: .principal) {
                 actionButtonsToolbar
             }
@@ -91,13 +102,6 @@ struct ContentView: View {
         .overlay(alignment: .top) {
             if !manager.hasAccessibilityPermission && !hidePermissionBanner {
                 permissionBanner
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            if manager.isWindowServerInitializing {
-                WindowServerLoadingStatus(language: appLanguage)
-                    .padding(.top, 8)
-                    .padding(.trailing, 16)
             }
         }
         .sheet(isPresented: Binding(

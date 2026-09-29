@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# dmg.sh - Build the app and package it into a shareable DMG
+# DMG-BuildandPackage.sh
+# Builds the app and packages it into a premium custom-styled DMG installer.
 
 APP_NAME="RememberMyWindows"
 DMG_NAME="${APP_NAME}.dmg"
 ZIP_NAME="${APP_NAME}.zip"
-TEMP_DMG_DIR="temp_dmg"
+BG_IMAGE="WindowLayout/DMGBackground.tiff"
 
 cd "$(dirname "$0")"
 
+# ──────────────────────────────────────────────
+# Step 1: Build the app
+# ──────────────────────────────────────────────
 echo "Step 1: Building a fresh version of the app..."
 
 APP_DIR="${APP_NAME}.app"
@@ -96,51 +100,62 @@ cat <<EOF > "${APP_DIR}/Contents/Info.plist"
 EOF
 
 echo "  - Copying icon..."
-if [ -f "WindowLayout/AppIcon.icns" ]; then
-    cp "WindowLayout/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
-fi
-if [ -f "WindowLayout/AppIcon.png" ]; then
-    cp "WindowLayout/AppIcon.png" "${RESOURCES_DIR}/AppIcon.png"
-fi
+[ -f "WindowLayout/AppIcon.icns" ] && cp "WindowLayout/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
+[ -f "WindowLayout/AppIcon.png"  ] && cp "WindowLayout/AppIcon.png"  "${RESOURCES_DIR}/AppIcon.png"
 
 echo "  - Copying localizations..."
-if [ -d "WindowLayout/he.lproj" ]; then
-    cp -R "WindowLayout/he.lproj" "${RESOURCES_DIR}/"
-fi
-if [ -d "WindowLayout/en.lproj" ]; then
-    cp -R "WindowLayout/en.lproj" "${RESOURCES_DIR}/"
-fi
+[ -d "WindowLayout/he.lproj" ] && cp -R "WindowLayout/he.lproj" "${RESOURCES_DIR}/"
+[ -d "WindowLayout/en.lproj" ] && cp -R "WindowLayout/en.lproj" "${RESOURCES_DIR}/"
 
 echo "  - Copying bundled sounds..."
-if [ -d "WindowLayout/Sounds" ]; then
-    cp WindowLayout/Sounds/*.m4a "${RESOURCES_DIR}/" 2>/dev/null || true
-fi
+[ -d "WindowLayout/Sounds" ] && cp WindowLayout/Sounds/*.m4a "${RESOURCES_DIR}/" 2>/dev/null || true
 
-echo "  - Code signing (Ad-hoc with stable designated requirement)..."
-codesign --force --deep --sign - -r="designated => identifier \"com.netanel.remembermywindows\"" --entitlements WindowLayout/RememberMyWindows.entitlements "${APP_DIR}"
+echo "  - Copying bundled wallpapers..."
+[ -f "WindowLayout/DesktopWallpaper.jpg" ] && cp "WindowLayout/DesktopWallpaper.jpg" "${RESOURCES_DIR}/DesktopWallpaper.jpg"
 
+echo "  - Code signing..."
+codesign --force --deep --sign - \
+  -r="designated => identifier \"com.netanel.remembermywindows\"" \
+  --entitlements WindowLayout/RememberMyWindows.entitlements \
+  "${APP_DIR}"
+
+# ──────────────────────────────────────────────
+# Step 2: ZIP for update channel
+# ──────────────────────────────────────────────
+echo ""
 echo "Step 2: Creating ZIP update package..."
 rm -f "$ZIP_NAME"
 ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "$ZIP_NAME"
 
-echo "Step 3: Preparing DMG contents..."
-rm -rf "$TEMP_DMG_DIR"
-mkdir -p "$TEMP_DMG_DIR"
+# ──────────────────────────────────────────────
+# Step 3: Build the DMG with create-dmg
+# ──────────────────────────────────────────────
+echo ""
+echo "Step 3: Building premium styled DMG..."
 
-# Copy the app
-cp -R "${APP_DIR}" "$TEMP_DMG_DIR/"
-
-# Create symlink to /Applications
-ln -s /Applications "$TEMP_DMG_DIR/Applications"
-
-echo "Step 4: Creating DMG..."
 rm -f "$DMG_NAME"
-hdiutil create -volname "${APP_NAME}" -srcfolder "$TEMP_DMG_DIR" -ov -format UDZO "$DMG_NAME"
 
-echo "Step 5: Cleanup..."
-rm -rf "$TEMP_DMG_DIR"
+# create-dmg handles:
+#   - Icon sizes and positions
+#   - Window size and styling
+#   - Read-only UDZO conversion
+create-dmg \
+  --volname "${APP_NAME}" \
+  --volicon "WindowLayout/AppIcon.icns" \
+  --background "${BG_IMAGE}" \
+  --window-pos 400 250 \
+  --window-size 600 360 \
+  --text-size 12 \
+  --icon-size 128 \
+  --icon "${APP_NAME}.app" 160 180 \
+  --hide-extension "${APP_NAME}.app" \
+  --app-drop-link 440 180 \
+  --no-internet-enable \
+  "${DMG_NAME}" \
+  "${APP_NAME}.app"
 
-echo "----------------------------------------------------"
-echo "Success! Your shareable DMG is ready:"
-echo "$(pwd)/${DMG_NAME}"
-echo "----------------------------------------------------"
+echo ""
+echo "────────────────────────────────────────────"
+echo "✅ Success! Premium DMG is ready:"
+echo "   $(pwd)/${DMG_NAME}"
+echo "────────────────────────────────────────────"
