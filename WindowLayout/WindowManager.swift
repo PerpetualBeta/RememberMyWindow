@@ -390,6 +390,39 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         return number
     }
 
+    /// Whether this process is parked on another Space: none of its windows is
+    /// on screen where the user is, and at least one is on a Space that is not
+    /// in front. Accessibility can reach none of them right now.
+    ///
+    /// "On screen" rather than "assigned to the current Space", because a window
+    /// can belong to the current Space without being shown. Browser Commander
+    /// had three: one on Space 12, one assigned to the current Space but not on
+    /// screen, and a leftover on no Space. Counting the second as reachable sent
+    /// the app to `activate()`, which took focus for nothing.
+    ///
+    /// Windows that belong to no Space are leftovers and are ignored. False
+    /// whenever the answer is not known (`WindowSpaces` unavailable, no current
+    /// Space, no windows), which keeps the caller's behaviour as it was.
+    nonisolated static func isParkedOnAnotherSpace(pid: pid_t) -> Bool {
+        guard WindowSpaces.isAvailable else { return false }
+        let current = WindowSpaces.currentSpaces()
+        guard !current.isEmpty else { return false }
+        func windowIDs(_ options: CGWindowListOption) -> [CGWindowID] {
+            let info = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+            return info.compactMap { entry in
+                guard (entry[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                      (entry[kCGWindowLayer as String] as? Int) == 0 else { return nil }
+                return (entry[kCGWindowNumber as String] as? CGWindowID)
+                    ?? (entry[kCGWindowNumber as String] as? Int).map { CGWindowID($0) }
+            }
+        }
+        guard windowIDs([.optionOnScreenOnly, .excludeDesktopElements]).isEmpty else { return false }
+        return windowIDs([.optionAll, .excludeDesktopElements]).contains { id in
+            let spaces = WindowSpaces.spaces(of: id)
+            return !spaces.isEmpty && Set(spaces).isDisjoint(with: current)
+        }
+    }
+
     // MARK: - Public API
 
     /// Switches between the automatic live layout and named saved sessions.
@@ -3837,7 +3870,30 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     wins = foundWins
                 }
                 
-                if wins.isEmpty {
+                // An app parked on another Space is not activated.
+                //
+                // Accessibility lists only the windows on the current Space (and
+                // minimised ones), so such an app always reads as empty here. With
+                // System Settings > Desktop & Dock > "When switching to an
+                // application, switch to a Space with open windows" turned on,
+                // `activate()` then moves the user to that app's Space in the middle
+                // of the restore, and every app after it is read from the wrong
+                // Space. Measured: activating Outlook, whose windows were all on
+                // another Space, took the display there, and TextEdit's window list
+                // fell from three to its two minimised windows; a restore that
+                // activated Jorvik Daily News did the same, and TextEdit's visible
+                // window was skipped as one that "no longer exists".
+                //
+                // With that setting off, activation did not bring the Space forward
+                // either, so these apps already ended up held until the user goes
+                // there (see below). This goes to that hold directly. Full-screen
+                // records keep the activation, which is what it was written for.
+                let parkedElsewhere = wins.isEmpty
+                    && !appRecords.contains(where: { $0.isNativeFullScreen || $0.isFullScreenMode })
+                    && WindowManager.isParkedOnAnotherSpace(pid: app.processIdentifier)
+                if parkedElsewhere {
+                    self.log("↪️ '\(bundleID)' is parked on another Space — not activating it", level: .verbose, type: .restore)
+                } else if wins.isEmpty {
                     // Activate the app and retry — necessary for full-screen Space occupants
                     app.activate()
                     for _ in 1...3 {
