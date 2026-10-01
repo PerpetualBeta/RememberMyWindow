@@ -1320,9 +1320,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     /// The active Space changed, so windows a restore could not reach may be
-    /// reachable now.
+    /// reachable now, and the live layout and Auto Layout are out of date.
+    ///
+    /// A Space switch, into or out of a full-screen app's Space included,
+    /// changes which windows are on screen without moving, resizing, creating
+    /// or destroying any of them, so no AX notification arrives and nothing
+    /// asked for a capture. Measured: two switches were followed by no capture,
+    /// and Auto Layout kept the previous Space's arrangement until a timed
+    /// capture or an unrelated window event (issue #43). The capture goes
+    /// through the usual flush, so the settle gate still waits out the Space
+    /// animation and every hold on recording still applies.
     @objc private func activeSpaceChanged() {
         retryDeferredRestore(reason: "the Space changed")
+        log("Space changed — capturing the layout", level: .verbose, type: .autoSave)
+        scheduleAXEventFlush(urgent: true)
     }
 
     /// Puts back whatever the last restore had to leave behind.
@@ -5589,18 +5600,26 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// Coalesces AX notification bursts and rate-limits expensive full window scans.
     /// A few apps emit these notifications while idle, so cancellation-based debouncing alone
     /// would repeatedly allocate tasks and keep the process awake.
-    func scheduleAXEventFlush(delay: UInt64 = 500_000_000) { // 500 ms default
+    ///
+    /// `urgent` is for an event the user caused, such as a Space switch, rather than an app's
+    /// idle chatter. It skips the idle back-off, which reaches 30 seconds, and replaces a flush
+    /// that back-off already scheduled for later, which would otherwise swallow the request.
+    func scheduleAXEventFlush(delay: UInt64 = 500_000_000, urgent: Bool = false) { // 500 ms default
         guard isLiveLayoutServerReady || !initialWindowServerCaptureInFlight else { return }
         guard isLiveLayoutServerReady else {
             startInitialWindowServerCapture()
             return
+        }
+        if urgent && isAXFlushScheduled {
+            axEventDebounceTask?.cancel()
+            isAXFlushScheduled = false
         }
         guard !isAXFlushScheduled else { return }
         isAXFlushScheduled = true
 
         // Keep live tracking responsive after a drag. Repeated idle notifications back off.
         let elapsed = lastAXCaptureDate.map { Date().timeIntervalSince($0) } ?? .infinity
-        let throttleDelay = UInt64(max(0, axIdleCaptureInterval - elapsed) * 1_000_000_000)
+        let throttleDelay = urgent ? 0 : UInt64(max(0, axIdleCaptureInterval - elapsed) * 1_000_000_000)
         let effectiveDelay = max(delay, throttleDelay)
         axEventDebounceTask = Task { [weak self] in
             if effectiveDelay > 0 {
