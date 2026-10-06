@@ -42,6 +42,7 @@ swiftc -parse-as-library \
     WindowLayout/SettingsView.swift \
     WindowLayout/WindowPreviewComponents.swift \
     WindowLayout/NotchNotification.swift \
+    WindowLayout/NotchWelcomePillView.swift \
     WindowLayout/DesktopToggleManager.swift \
     WindowLayout/Hotkey.swift \
     WindowLayout/ShortcutMigrationView.swift \

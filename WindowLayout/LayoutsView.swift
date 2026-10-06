@@ -68,6 +68,7 @@ struct LayoutsView: View {
 
 struct SnapshotListView: View {
     @EnvironmentObject var manager: WindowManager
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @State private var hoveredKey: String? = nil
@@ -197,6 +198,12 @@ struct SnapshotListView: View {
                             }
                         }
                     }
+                    .padding(8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.10), lineWidth: 1)
+                    }
                 }
                 .padding(12)
             }
@@ -312,6 +319,7 @@ struct SnapshotDetailView: View {
     @EnvironmentObject var manager: WindowManager
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @AppStorage("appListViewMode") private var appListViewMode: AppListViewMode = .list
     let snapshot: LayoutSnapshot
     let key: String
 
@@ -366,19 +374,36 @@ struct SnapshotDetailView: View {
 
             Divider()
 
-            // Window list
+            // Window list / grid
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(snapshot.records.deduplicatedByApp.filter { !$0.windowID.appBundleID.isEmpty }) { record in
-                            let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
-                            let isCurrentApp = record.windowID.appBundleID == manager.selectedAppBundleID
-                            windowRow(record, isForeground: isForeground, isCurrentApp: isCurrentApp)
-                                .id(record.id)
+                    let records = snapshot.records.deduplicatedByApp.filter { !$0.windowID.appBundleID.isEmpty }
+                    if appListViewMode == .grid {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 12)],
+                            spacing: 12
+                        ) {
+                            ForEach(records) { record in
+                                let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
+                                let isCurrentApp = record.windowID.appBundleID == manager.selectedAppBundleID
+                                windowGrid(record, isForeground: isForeground, isCurrentApp: isCurrentApp)
+                                    .id(record.id)
+                            }
                         }
+                        .padding(20)
+                    } else {
+                        LazyVStack(spacing: 8) {
+                            ForEach(records) { record in
+                                let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
+                                let isCurrentApp = record.windowID.appBundleID == manager.selectedAppBundleID
+                                windowRow(record, isForeground: isForeground, isCurrentApp: isCurrentApp)
+                                    .id(record.id)
+                            }
+                        }
+                        .padding(24)
                     }
-                    .padding(24)
                 }
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: appListViewMode)
                 .onAppear {
                     scrollToCurrentApp(using: proxy)
                 }
@@ -409,6 +434,23 @@ struct SnapshotDetailView: View {
         let rowTint = isFull ? Color.indigo : themeColor.color(seed: 6)
         
         return WindowRowContainer(
+            record: record,
+            isForeground: isForeground,
+            isCurrentApp: isCurrentApp,
+            isFull: isFull,
+            rowTint: rowTint,
+            snapshot: snapshot,
+            key: key,
+            appLanguage: appLanguage,
+            themeColor: themeColor
+        )
+    }
+
+    func windowGrid(_ record: WindowRecord, isForeground: Bool, isCurrentApp: Bool) -> some View {
+        let isFull = isEntireScreen(record)
+        let rowTint = isFull ? Color.indigo : themeColor.color(seed: 6)
+
+        return WindowGridCard(
             record: record,
             isForeground: isForeground,
             isCurrentApp: isCurrentApp,
@@ -674,7 +716,153 @@ struct WindowRowContainer: View {
     }
 }
 
+// MARK: - View Mode
 
+enum AppListViewMode: String {
+    case list, grid
+}
+
+// MARK: - Grid Card
+
+struct WindowGridCard: View {
+    let record: WindowRecord
+    let isForeground: Bool
+    let isCurrentApp: Bool
+    let isFull: Bool
+    let rowTint: Color
+    let snapshot: LayoutSnapshot
+    let key: String
+    let appLanguage: AppLanguage
+    let themeColor: ThemeColor
+    @EnvironmentObject var manager: WindowManager
+    @State private var isCardHovered = false
+    private var appID: String { record.windowID.appBundleID }
+    private var isCommandTriggerActive: Bool { snapshot.commandExcludedBundleIDs.contains(appID) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // ── Window-position thumbnail ──────────────────────────────
+            ZStack {
+                if isFull {
+                    FullScreenPreviewIcon(tint: rowTint)
+                        .frame(width: 82, height: 52)
+                } else {
+                    WindowPreviewIcon(record: record, tint: rowTint)
+                        .frame(width: 82, height: 52)
+                }
+            }
+            .frame(width: 82, height: 52)
+            .overlay(alignment: .topLeading) {
+                // Command Trigger badge pinned to top-left corner
+                if isCommandTriggerActive {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "command")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .foregroundStyle(.primary)
+                            .padding(3.5)
+                            .background(Circle().fill(.ultraThinMaterial))
+
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 5, height: 5)
+                            .offset(x: 1, y: -1)
+                    }
+                    .offset(x: 2, y: 2)
+                    .help("Command Trigger active for this app".localized(appLanguage))
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                // Foreground badge pinned to thumbnail corner
+                if isForeground {
+                    Image(systemName: "square.3.layers.3d.top.filled")
+                        .mainWindowSymbolAnimation(.breathePlain)
+                        .font(.system(size: 9))
+                        .foregroundStyle(themeColor.color(seed: 5))
+                        .padding(3)
+                        .background(Circle().fill(.ultraThinMaterial))
+                        .offset(x: -2, y: 2)
+                        .help("This app will be brought to the front upon restore".localized(appLanguage))
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if !snapshot.isAutoSave && isCardHovered {
+                    HStack(spacing: 2) {
+                        ExcludeCommandButton(appLanguage: appLanguage, isIncluded: isCommandTriggerActive) {
+                            manager.toggleCommandExclusion(key: key, bundleID: appID)
+                        }
+
+                        BringToFrontButton(appLanguage: appLanguage, isActive: isForeground) {
+                            manager.setForegroundApp(key: key, bundleID: appID)
+                            manager.bringAppToFront(bundleID: appID)
+                        }
+
+                        DeleteSessionAppButton(appLanguage: appLanguage) {
+                            manager.removeAppFromSnapshot(key: key, windowID: record.windowID)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .shadow(color: .black.opacity(0.18), radius: 3, x: 0, y: 1)
+                    .scaleEffect(0.8, anchor: .bottom)
+                    .offset(y: 6)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+                }
+            }
+            .padding(.top, 10)
+            .padding(.horizontal, 10)
+
+            // ── App icon + name ────────────────────────────────────────
+            VStack(spacing: 5) {
+                AppIconView(bundleID: record.windowID.appBundleID)
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .shadow(color: rowTint.opacity(0.2), radius: 4, x: 0, y: 2)
+
+                VStack(spacing: 2) {
+                    Text(record.windowID.appName ?? record.windowID.appBundleID)
+                        .font(.system(.caption, design: .rounded).weight(.semibold))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .minimumScaleFactor(0.8)
+
+                    if isFull {
+                        Text("Full Screen".localized(appLanguage))
+                            .font(.system(size: 8, weight: .bold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.indigo.opacity(0.18))
+                            .foregroundStyle(.primary)
+                            .clipShape(Capsule())
+                    } else if isCurrentApp {
+                        Text("Active".localized(appLanguage))
+                            .font(.system(size: 8, weight: .bold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.18))
+                            .foregroundStyle(.primary)
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+            .padding(.top, 8)
+            .padding(.bottom, 12)
+            .padding(.horizontal, 8)
+        }
+        .frame(maxWidth: .infinity)
+        .liquidGlass(isSelected: isCurrentApp || isForeground, prominent: false, tint: themeColor.color(seed: 6), isHovered: isCardHovered)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isCardHovered ? rowTint.opacity(0.4) : Color.clear, lineWidth: 1.5)
+        }
+        .mainWindowSymbolHoverRegion()
+        .onHover { hovering in
+            withAnimation(.snappy(duration: 0.15)) {
+                isCardHovered = hovering
+            }
+        }
+    }
+}
 
 struct LocationBlock: View {
     @EnvironmentObject var manager: WindowManager
@@ -945,7 +1133,7 @@ struct AutoLayoutCenterView: View {
                 updatedAt: entry.capturedAt,
                 location: nil,
                 isAutoSave: true,
-                foregroundBundleID: nil,
+                foregroundBundleID: manager.autoSaveStore?.foregroundApp(forScreenKey: entry.screenKey),
                 commandExcludedBundleIDs: []
             )
         }
@@ -1272,6 +1460,12 @@ struct AutoLayoutSidebarWindowListView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
+                .padding(8)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.10), lineWidth: 1)
+                }
 
                 Divider()
                     .padding(.horizontal, 6)
@@ -1355,7 +1549,9 @@ struct AutoLayoutSidebarWindowListView: View {
                     }
                 }
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .padding(.top, 16)
+            .padding(.bottom, 10)
         }
         .scrollContentBackground(.hidden)
         .navigationTitle("Remember")
@@ -1436,7 +1632,61 @@ struct AutoLayoutRememberedDisplayRow: View {
     }
 }
 
+// MARK: - Thumbnail Bring To Front Button (for Auto Layout sidebar thumbnail overlay)
+
+struct ThumbnailBringToFrontButton: View {
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @Environment(\.colorScheme) private var colorScheme
+    let appLanguage: AppLanguage
+    let isActive: Bool
+    let action: () -> Void
+
+    @State private var isButtonHovered = false
+
+    private var activeAccent: Color { themeColor.color(seed: 0) }
+    private var activeAccentText: Color {
+        if themeColor.isGalaxy {
+            return .black
+        }
+        return themeColor.onAccentColor(for: colorScheme)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(isActive
+                          ? activeAccent
+                          : (isButtonHovered ? Color.black.opacity(0.70) : Color.black.opacity(0.48)))
+                    .frame(width: 22, height: 22)
+                    .overlay {
+                        Circle()
+                            .stroke(isActive ? Color.white.opacity(0.35) : Color.white.opacity(0.22), lineWidth: 0.75)
+                    }
+                    .shadow(color: Color.black.opacity(0.35), radius: 2, y: 1)
+
+                Image(systemName: "square.3.layers.3d.top.filled")
+                    .mainWindowSymbolAnimation(.wiggleByLayer, capturesClicks: false)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(isActive ? activeAccentText : Color.white)
+            }
+            .frame(width: 22, height: 22)
+            .contentShape(Circle())
+            .scaleEffect(isButtonHovered ? 1.08 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .mainWindowSymbolHoverRegion()
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) { isButtonHovered = hovering }
+        }
+        .help(isActive
+              ? "Click to unset Bring to Front".localized(appLanguage)
+              : "Bring to Front".localized(appLanguage))
+    }
+}
+
 struct AutoLayoutSidebarWindowRow: View {
+    @EnvironmentObject var manager: WindowManager
     let record: WindowRecord
     let isSelected: Bool
     let themeColor: ThemeColor
@@ -1448,6 +1698,9 @@ struct AutoLayoutSidebarWindowRow: View {
         let isFull = record.isFullScreenMode
         let baseTint = isFull ? Color.indigo : themeColor.color(seed: 0)
         let thumbTint = isSelected ? baseTint : (isHovered ? baseTint : baseTint.opacity(0.85))
+        let appID = record.windowID.appBundleID
+        let screenKey = record.screenKey
+        let isForeground = manager.autoSaveStore?.foregroundApp(forScreenKey: screenKey) == appID
 
         HStack(spacing: 10) {
             // App Icon
@@ -1467,6 +1720,13 @@ struct AutoLayoutSidebarWindowRow: View {
                             .mainWindowSymbolAnimation(.wiggle, capturesClicks: false)
                             .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(.indigo)
+                    }
+
+                    if isForeground {
+                        Image(systemName: "square.3.layers.3d.top.filled")
+                            .mainWindowSymbolAnimation(.breathePlain, capturesClicks: false)
+                            .font(.system(size: 9))
+                            .foregroundStyle(themeColor.color(seed: 5))
                     }
                 }
 
@@ -1496,12 +1756,25 @@ struct AutoLayoutSidebarWindowRow: View {
 
             Spacer(minLength: 8)
 
-            // Window Thumbnail from Saved Sessions
-            Group {
-                if isFull {
-                    FullScreenPreviewIcon(tint: thumbTint)
-                } else {
-                    WindowPreviewIcon(record: record, tint: thumbTint)
+            // Window Thumbnail with interactive Front Most button overlay
+            ZStack {
+                Group {
+                    if isFull {
+                        FullScreenPreviewIcon(tint: thumbTint)
+                    } else {
+                        WindowPreviewIcon(record: record, tint: thumbTint)
+                    }
+                }
+                .frame(width: 52, height: 34)
+
+                if isHovered || isForeground {
+                    ThumbnailBringToFrontButton(
+                        appLanguage: appLanguage,
+                        isActive: isForeground
+                    ) {
+                        manager.setAutoLayoutForegroundApp(screenKey: screenKey, bundleID: appID)
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
             }
             .frame(width: 52, height: 34)

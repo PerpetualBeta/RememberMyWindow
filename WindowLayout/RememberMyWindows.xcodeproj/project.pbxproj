@@ -30,6 +30,7 @@
 		A1000025 /* WindowSpaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000025 /* WindowSpaces.swift */; };
 		A1000026 /* AutoSaveStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000026 /* AutoSaveStore.swift */; };
 		A1000027 /* AutoLayoutHeroCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000027 /* AutoLayoutHeroCard.swift */; };
+		A1000029 /* NotchWelcomePillView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000029 /* NotchWelcomePillView.swift */; };
 		A1000021 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = A2000021 /* AppIcon.icns */; };
 		A1000022 /* Sounds in Resources */ = {isa = PBXBuildFile; fileRef = A2000022 /* Sounds */; };
 		A1000023 /* en.lproj in Resources */ = {isa = PBXBuildFile; fileRef = A2000023 /* en.lproj */; };
@@ -61,6 +62,7 @@
 		A2000025 /* WindowSpaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSpaces.swift; sourceTree = "<group>"; };
 		A2000026 /* AutoSaveStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoSaveStore.swift; sourceTree = "<group>"; };
 		A2000027 /* AutoLayoutHeroCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoLayoutHeroCard.swift; sourceTree = "<group>"; };
+		A2000029 /* NotchWelcomePillView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchWelcomePillView.swift; sourceTree = "<group>"; };
 		A2000021 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 		A2000022 /* Sounds */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sounds; sourceTree = "<group>"; };
 		A2000023 /* en.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = en.lproj; sourceTree = "<group>"; };
@@ -114,6 +116,7 @@
 				A2000025 /* WindowSpaces.swift */,
 				A2000026 /* AutoSaveStore.swift */,
 				A2000027 /* AutoLayoutHeroCard.swift */,
+				A2000029 /* NotchWelcomePillView.swift */,
 				A2000021 /* AppIcon.icns */,
 				A2000022 /* Sounds */,
 				A2000023 /* en.lproj */,
@@ -227,6 +230,7 @@
 				A1000025 /* WindowSpaces.swift in Sources */,
 				A1000026 /* AutoSaveStore.swift in Sources */,
 				A1000027 /* AutoLayoutHeroCard.swift in Sources */,
+				A1000029 /* NotchWelcomePillView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -374,7 +378,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 14.6;
+				MARKETING_VERSION = 15.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.netanel.remembermywindows;
 				PRODUCT_NAME = RememberMyWindows;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -407,7 +411,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 14.6;
+				MARKETING_VERSION = 15.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.netanel.remembermywindows;
 				PRODUCT_NAME = RememberMyWindows;
 				SWIFT_EMIT_LOC_STRINGS = YES;

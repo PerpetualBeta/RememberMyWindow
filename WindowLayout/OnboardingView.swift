@@ -5,6 +5,7 @@ import Carbon
 // MARK: - Root
 
 struct OnboardingView: View {
+    var showsV15ReleaseNotes: Bool = false
     var onComplete: () -> Void
 
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
@@ -20,11 +21,22 @@ struct OnboardingView: View {
             case .setup:
                 OnboardingSetupView(selectedLanguage: $appLanguage) {
                     withAnimation(.spring(response: 0.52, dampingFraction: 0.82)) {
-                        phase = .guide
+                        phase = showsV15ReleaseNotes ? .releaseNotes : .guide
                     }
                 }
                 .transition(.asymmetric(
                     insertion: .opacity,
+                    removal: .move(edge: .leading).combined(with: .opacity)
+                ))
+
+            case .releaseNotes:
+                V15ReleaseNotesView(language: appLanguage) {
+                    withAnimation(.spring(response: 0.52, dampingFraction: 0.82)) {
+                        phase = .guide
+                    }
+                }
+                .transition(.asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity),
                     removal: .move(edge: .leading).combined(with: .opacity)
                 ))
 
@@ -37,12 +49,160 @@ struct OnboardingView: View {
             }
         }
         .frame(width: 760, height: 460)
-        .environment(\.layoutDirection, appLanguage == .hebrew ? .rightToLeft : .leftToRight)
+        .environment(\.layoutDirection, appLanguage.usesHebrew ? .rightToLeft : .leftToRight)
         .appThemeColorScheme(themeColor)
     }
 }
 
-private enum OnboardingPhase { case setup, guide }
+private enum OnboardingPhase { case setup, releaseNotes, guide }
+
+// LIFECYCLE / CLEANUP NOTE:
+// This view is specific to the v15.0 major update introduction.
+// In future versions (v15.1+ / v16.0), either:
+// 1. Remove this view and retire the `.releaseNotes` phase in OnboardingPhase, or
+// 2. Refactor into a version-agnostic ReleaseNotesView keyed dynamically by the current app version.
+private struct V15ReleaseNotesView: View {
+    let language: AppLanguage
+    var onContinue: () -> Void
+
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var accent: Color { themeColor.color(seed: 0) }
+    private var accentText: Color {
+        themeColor.isGalaxy ? .black : themeColor.onAccentColor(for: colorScheme)
+    }
+    private var alignment: HorizontalAlignment { language.usesHebrew ? .trailing : .leading }
+    private var sections: [V15ReleaseNoteSection] { V15ReleaseNoteContent.sections(for: language) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            ScrollView {
+                VStack(alignment: alignment, spacing: 15) {
+                    ForEach(sections) { section in
+                        VStack(alignment: alignment, spacing: 6) {
+                            Text(section.title)
+                                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
+
+                            ForEach(section.bullets.indices, id: \.self) { index in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Circle()
+                                        .fill(accent)
+                                        .frame(width: 4, height: 4)
+                                        .padding(.top, 6)
+
+                                    Text(section.bullets[index])
+                                        .font(.system(size: 12.5))
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
+                                }
+                                .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
+                .padding(.horizontal, 30)
+                .padding(.vertical, 8)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Button(action: onContinue) {
+                HStack(spacing: 8) {
+                    Text("Continue".localized(language))
+                    Image(systemName: language.usesHebrew ? "arrow.left" : "arrow.right")
+                }
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(accentText)
+                .padding(.horizontal, 24)
+                .frame(minWidth: 188, minHeight: 42)
+                .background(accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: accent.opacity(0.35), radius: 10, x: 0, y: 4)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Continue".localized(language)))
+            .padding(.top, 10)
+            .padding(.bottom, 18)
+        }
+        .padding(.top, 18)
+        .environment(\.layoutDirection, language.usesHebrew ? .rightToLeft : .leftToRight)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 21, weight: .medium))
+                .foregroundStyle(accent)
+
+            VStack(alignment: alignment, spacing: 3) {
+                Text("What's New in v15.0".localized(language))
+                    .font(.system(size: 23, weight: .bold, design: .rounded))
+                    .foregroundStyle(.primary)
+
+                Text("Make Yourself at Home — Your Windows Already Did".localized(language))
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
+        .padding(.horizontal, 30)
+        .padding(.bottom, 10)
+    }
+}
+
+private struct V15ReleaseNoteSection: Identifiable {
+    let title: String
+    let bullets: [String]
+
+    var id: String { title }
+}
+
+private enum V15ReleaseNoteContent {
+    static func sections(for language: AppLanguage) -> [V15ReleaseNoteSection] {
+        let localized: (String) -> String = { $0.localized(language) }
+        return [
+            V15ReleaseNoteSection(
+                title: localized("Restoration & Spaces"),
+                bullets: [
+                    localized("Minimized windows wait their turn — Minimized and hidden windows keep their own saved match until they are shown again, with retries when they are unminimized. - By Jonathan M. Hollin"),
+                    localized("More reliable window matching — Captured window IDs are matched first, preventing similar or untitled windows from being swapped. Thanks @PerpetualBeta"),
+                    localized("Spaces stay in sync — Restores no longer activate apps parked on another Space, and live layouts capture active-Space changes.")
+                ]
+            ),
+            V15ReleaseNoteSection(
+                title: localized("Auto Layout & App Controls"),
+                bullets: [
+                    localized("Choose the app that comes forward — Pin a preferred foreground app for saved layouts and individual Auto Layout display setups."),
+                    localized("Fixed Command+Shift+R controls — Configure the trigger per app; Auto Layout restores window geometry without sending a shortcut to whichever app happens to be active.")
+                ]
+            ),
+            V15ReleaseNoteSection(
+                title: localized("A Warmer Welcome in the Notch"),
+                bullets: [
+                    localized("Welcome Notch Pill — An optional animated greeting appears on eligible full restores: the first eligible restore after launch, for a layout outside the two most recent restores, or after eight hours. Its sound is controlled independently."),
+                    localized("Sound conflicts are actionable — “Go to…” jumps to the conflicting notification setting, scrolls it into view, and briefly highlights and flips the card")
+                ]
+            ),
+            V15ReleaseNoteSection(
+                title: localized("Main Window, Settings & Tour"),
+                bullets: [
+                    localized("List or grid — Switch the app cards between list and grid views, with quick per-window actions and clearer foreground-app controls."),
+                    localized("Personalized controls — Choose menu bar icon styles, tune notification sounds, and refine restore behavior."),
+                    localized("Settings window follows the app — Closing the main window also closes the separate Settings window."),
+                    localized("A more useful tour — The guide adds back/forward arrows, an editable desktop shortcut, and refreshed Quick Key and Settings previews.")
+                ]
+            )
+        ]
+    }
+}
 
 // MARK: - Phase 1: Permissions & Mode
 
@@ -132,7 +292,7 @@ struct OnboardingSetupView: View {
                 }
             }
 
-            VStack(alignment: selectedLanguage == .hebrew ? .trailing : .leading, spacing: 2) {
+            VStack(alignment: selectedLanguage.usesHebrew ? .trailing : .leading, spacing: 2) {
                 Text("RememberMyWindows")
                     .font(.system(size: 24, weight: .bold, design: .rounded))
 
@@ -141,20 +301,15 @@ struct OnboardingSetupView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if manager.isWindowServerInitializing {
-                WindowServerLoadingStatus(language: selectedLanguage)
-                    .transition(.opacity)
-            }
-
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: selectedLanguage == .hebrew ? .trailing : .leading)
+        .frame(maxWidth: .infinity, alignment: selectedLanguage.usesHebrew ? .trailing : .leading)
         .padding(.horizontal, 28)
         .padding(.bottom, 18)
     }
 
     private var modePickerPanel: some View {
-        OBIllustrationModePicker()
+        OBIllustrationModePicker(isWindowServerInitializing: manager.isWindowServerInitializing)
             .frame(width: 360, height: 220)
             .liquidGlass(cornerRadius: 16, style: .card)
             .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 6)
@@ -163,7 +318,7 @@ struct OnboardingSetupView: View {
     }
 
     private var permissionsPanel: some View {
-        VStack(alignment: selectedLanguage == .hebrew ? .trailing : .leading, spacing: 10) {
+        VStack(alignment: selectedLanguage.usesHebrew ? .trailing : .leading, spacing: 10) {
             HStack(spacing: 8) {
                 ZStack {
                     Circle()
@@ -176,7 +331,7 @@ struct OnboardingSetupView: View {
                 }
                 .frame(width: 30, height: 30)
 
-                VStack(alignment: selectedLanguage == .hebrew ? .trailing : .leading, spacing: 1) {
+                VStack(alignment: selectedLanguage.usesHebrew ? .trailing : .leading, spacing: 1) {
                     Text(allGranted ? "Permissions granted".localized(selectedLanguage) : "Permissions Required".localized(selectedLanguage))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(allGranted ? Color.green : Color.primary)
@@ -186,7 +341,7 @@ struct OnboardingSetupView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
-                .frame(maxWidth: .infinity, alignment: selectedLanguage == .hebrew ? .trailing : .leading)
+                .frame(maxWidth: .infinity, alignment: selectedLanguage.usesHebrew ? .trailing : .leading)
             }
 
             permissionCard(
@@ -222,28 +377,34 @@ struct OnboardingSetupView: View {
 
     private var footer: some View {
         VStack(spacing: 8) {
-            Button(action: primaryAction) {
-                HStack(spacing: 8) {
-                    Image(systemName: allGranted
-                          ? (selectedLanguage == .hebrew ? "arrow.left" : "arrow.right")
-                          : "lock.open.fill")
-                    Text(allGranted
-                         ? "Continue".localized(selectedLanguage)
-                         : "Grant Permissions…".localized(selectedLanguage))
+            if manager.isWindowServerInitializing {
+                WindowServerLoadingStatus(language: selectedLanguage)
+                    .transition(.opacity)
+            } else {
+                Button(action: primaryAction) {
+                    HStack(spacing: 8) {
+                        Image(systemName: allGranted
+                              ? (selectedLanguage.usesHebrew ? "arrow.left" : "arrow.right")
+                              : "lock.open.fill")
+                        Text(allGranted
+                             ? "Continue".localized(selectedLanguage)
+                             : "Grant Permissions…".localized(selectedLanguage))
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    // Both status fills are bright in Light Mode; black keeps the
+                    // action label readable on either the orange or green state.
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 22)
+                    .frame(minWidth: 188, minHeight: 42)
+                    .background(allGranted ? Color.green : Color.orange, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .shadow(color: (allGranted ? Color.green : Color.orange).opacity(0.35), radius: 10, x: 0, y: 4)
+                    .scaleEffect(hoverPrimary ? 1.03 : 1)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.75), value: hoverPrimary)
                 }
-                .font(.system(size: 15, weight: .semibold))
-                // Both status fills are bright in Light Mode; black keeps the
-                // action label readable on either the orange or green state.
-                .foregroundStyle(.black)
-                .padding(.horizontal, 22)
-                .frame(minWidth: 188, minHeight: 42)
-                .background(allGranted ? Color.green : Color.orange, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: (allGranted ? Color.green : Color.orange).opacity(0.35), radius: 10, x: 0, y: 4)
-                .scaleEffect(hoverPrimary ? 1.03 : 1)
-                .animation(.spring(response: 0.25, dampingFraction: 0.75), value: hoverPrimary)
+                .buttonStyle(.plain)
+                .onHover { hoverPrimary = $0 }
+                .transition(.opacity)
             }
-            .buttonStyle(.plain)
-            .onHover { hoverPrimary = $0 }
 
             Button(action: onContinue) {
                 Text("Skip for now".localized(selectedLanguage))
@@ -260,6 +421,7 @@ struct OnboardingSetupView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 28)
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: manager.isWindowServerInitializing)
     }
 
     @ViewBuilder
@@ -284,7 +446,7 @@ struct OnboardingSetupView: View {
                     .contentTransition(.symbolEffect(.replace))
             }
 
-            VStack(alignment: selectedLanguage == .hebrew ? .trailing : .leading, spacing: 3) {
+            VStack(alignment: selectedLanguage.usesHebrew ? .trailing : .leading, spacing: 3) {
                 HStack(spacing: 4) {
                     Text(title)
                         .font(.system(size: 13, weight: .semibold))
@@ -322,7 +484,7 @@ struct OnboardingSetupView: View {
                     .padding(.top, 2)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: selectedLanguage == .hebrew ? .trailing : .leading)
+            .frame(maxWidth: .infinity, alignment: selectedLanguage.usesHebrew ? .trailing : .leading)
         }
         .padding(10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -424,8 +586,8 @@ struct WindowServerLoadingStatus: View {
         switch style {
         case .onboarding:
             statusContent
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.horizontal, 22)
+                .frame(minWidth: 188, minHeight: 42)
                 .background(Color.primary.opacity(0.07), in: Capsule())
         case .toolbar:
             statusContent
@@ -452,10 +614,13 @@ struct OnboardingGuideView: View {
     let language: AppLanguage
     var onComplete: () -> Void
 
+    @ObservedObject private var desktopToggleManager = DesktopToggleManager.shared
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @Environment(\.colorScheme) private var colorScheme
     @State private var currentSlide = 0
     @State private var hoverNext = false
+    @State private var hoverPreviousArrow = false
+    @State private var hoverNextArrow = false
 
     private var guideAccent: Color {
         themeColor.color(seed: 0)
@@ -471,7 +636,10 @@ struct OnboardingGuideView: View {
     // Personalisation comes immediately after the setup/permissions screen,
     // before the feature walkthrough begins. Keep the settings carousel's
     // regular feature order unchanged by reordering only this tour sequence.
-    private var slides: [OBSlide] { OBSlide.onboarding(for: language) }
+    private var slides: [OBSlide] {
+        _ = desktopToggleManager.hotkey
+        return OBSlide.onboarding(for: language)
+    }
     private var isLast: Bool { currentSlide == slides.count - 1 }
 
     var body: some View {
@@ -494,21 +662,32 @@ struct OnboardingGuideView: View {
 
             // Controls
             VStack(spacing: 18) {
-                // Dot indicator
-                HStack(spacing: 8) {
-                    ForEach(slides.indices, id: \.self) { i in
-                        Button {
-                            withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
-                                currentSlide = i
+                HStack(spacing: 12) {
+                    navigationArrowButton(isNext: false)
+
+                    HStack(spacing: 8) {
+                        ForEach(slides.indices, id: \.self) { i in
+                            Button {
+                                withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
+                                    currentSlide = i
+                                }
+                            } label: {
+                                Capsule()
+                                    .fill(i == currentSlide ? Color.accentColor : Color.primary.opacity(0.2))
+                                    .frame(width: i == currentSlide ? 22 : 8, height: 8)
+                                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: currentSlide)
                             }
-                        } label: {
-                            Capsule()
-                                .fill(i == currentSlide ? Color.accentColor : Color.primary.opacity(0.2))
-                                .frame(width: i == currentSlide ? 22 : 8, height: 8)
-                                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: currentSlide)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(Text(String(
+                                format: "Tour page %d of %d".localized(language),
+                                i + 1,
+                                slides.count
+                            )))
+                            .accessibilityAddTraits(i == currentSlide ? .isSelected : [])
                         }
-                        .buttonStyle(.plain)
                     }
+
+                    navigationArrowButton(isNext: true)
                 }
 
                 Button {
@@ -524,7 +703,7 @@ struct OnboardingGuideView: View {
                         Text(isLast
                              ? "Get Started".localized(language)
                              : "Next".localized(language))
-                        Image(systemName: isLast ? "checkmark" : (language == .hebrew ? "arrow.left" : "arrow.right"))
+                        Image(systemName: isLast ? "checkmark" : (language.usesHebrew ? "arrow.left" : "arrow.right"))
                     }
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(guideAccentText)
@@ -540,7 +719,44 @@ struct OnboardingGuideView: View {
             }
             .padding(.bottom, 36)
         }
-        .environment(\.layoutDirection, language == .hebrew ? .rightToLeft : .leftToRight)
+        .environment(\.layoutDirection, language.usesHebrew ? .rightToLeft : .leftToRight)
+    }
+
+    private func navigationArrowButton(isNext: Bool) -> some View {
+        let isEnabled = isNext ? !isLast : currentSlide > 0
+        let isHovered = isNext ? hoverNextArrow : hoverPreviousArrow
+        let label = (isNext ? "Next tour page" : "Previous tour page").localized(language)
+        let symbol = isNext
+            ? (language.usesHebrew ? "chevron.left" : "chevron.right")
+            : (language.usesHebrew ? "chevron.right" : "chevron.left")
+
+        return Button {
+            let destination = currentSlide + (isNext ? 1 : -1)
+            guard slides.indices.contains(destination) else { return }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
+                currentSlide = destination
+            }
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.primary.opacity(isEnabled ? 0.82 : 0.28))
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle().fill(Color.primary.opacity(isHovered && isEnabled ? 0.10 : 0.045))
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .onHover { hovering in
+            if isNext {
+                hoverNextArrow = hovering
+            } else {
+                hoverPreviousArrow = hovering
+            }
+        }
+        .animation(.easeInOut(duration: 0.16), value: isHovered)
+        .help(label)
+        .accessibilityLabel(Text(label))
     }
 }
 
@@ -578,7 +794,7 @@ struct OBSlide: Identifiable {
             // 4: desktop toggle
             OBSlide(id: 4,
                     headline: "Hide Everything, Instantly".localized(lang),
-                    body: String(format: "Press %@ and every window vanishes — desktop is clean. Press again and they all come back exactly where they were.".localized(lang), HotkeyFormatter.desktopToggleGlyphs),
+                    body: "Press this shortcut to hide all windows and reveal the desktop. Press it again to bring them back.".localized(lang),
                     illustration: AnyView(OBIllustrationDesktopToggle())),
             // 5: Cmd+Shift+R post-restore action
             OBSlide(id: 5,
@@ -620,6 +836,7 @@ struct OBSlideView: View {
 
     @State private var settingsActiveIndex = 0
     @State private var timer: Timer?
+    @ObservedObject private var desktopMgr = DesktopToggleManager.shared
 
     var body: some View {
         HStack(spacing: 24) {
@@ -633,15 +850,16 @@ struct OBSlideView: View {
                     slide.illustration
                 }
             }
-            .frame(width: 380, height: 236)
+            .frame(width: 356, height: 236)
+            .clipped()
 
             // Onboarding explainers keep their supporting copy. The separate
             // Settings Feature Guide carousel controls its own shorter layout.
-            VStack(alignment: language == .hebrew ? .trailing : .leading, spacing: 10) {
+            VStack(alignment: language.usesHebrew ? .trailing : .leading, spacing: 10) {
                 Text(slide.headline)
                     .font(.system(size: 18, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
-                    .multilineTextAlignment(language == .hebrew ? .trailing : .leading)
+                    .multilineTextAlignment(language.usesHebrew ? .trailing : .leading)
                     .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -649,7 +867,7 @@ struct OBSlideView: View {
                     Text(getSettingsDescription(for: settingsActiveIndex, lang: language))
                         .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
-                        .multilineTextAlignment(language == .hebrew ? .trailing : .leading)
+                        .multilineTextAlignment(language.usesHebrew ? .trailing : .leading)
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
                         .id(settingsActiveIndex)
@@ -657,16 +875,23 @@ struct OBSlideView: View {
                             insertion: .opacity.combined(with: .move(edge: .bottom)),
                             removal: .opacity
                         ))
+                } else if slide.id == 4 {
+                    // Keep the localized explanation separate from the editable shortcut.
+                    OBDesktopToggleBodyView(
+                        language: language,
+                        explanation: slide.body,
+                        hotkey: $desktopMgr.hotkey
+                    )
                 } else {
                     Text(slide.body)
                         .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
-                        .multilineTextAlignment(language == .hebrew ? .trailing : .leading)
+                        .multilineTextAlignment(language.usesHebrew ? .trailing : .leading)
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .frame(width: 200, alignment: language == .hebrew ? .trailing : .leading)
+            .frame(width: 200, alignment: language.usesHebrew ? .trailing : .leading)
 
             Spacer(minLength: 4)
         }
@@ -701,6 +926,185 @@ struct OBSlideView: View {
         }
     }
 }
+
+// MARK: - Desktop Toggle slide: localized explanation + shortcut recorder
+
+/// Shows the desktop-toggle explanation above a clearly editable shortcut control.
+private struct OBDesktopToggleBodyView: View {
+    let language: AppLanguage
+    let explanation: String
+    @Binding var hotkey: HotkeyConfig
+
+    @State private var isRecording = false
+    @State private var monitor: Any?
+
+    var body: some View {
+        OBDesktopToggleShortcutEditor(
+                language: language,
+                explanation: explanation,
+                hotkey: $hotkey,
+                isRecording: $isRecording,
+                onTap: { startRecording() }
+            )
+        .onDisappear { stopRecording() }
+        .environment(\.layoutDirection, language.usesHebrew ? .rightToLeft : .leftToRight)
+    }
+
+    private func startRecording() {
+        guard !isRecording else { return }
+        isRecording = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 {  // Escape → cancel
+                stopRecording()
+                return nil
+            }
+            let flags = event.modifierFlags
+                .intersection(.deviceIndependentFlagsMask)
+                .intersection([.command, .control, .option, .shift])
+            guard flags.contains(.command) || flags.contains(.control) || flags.contains(.option) else {
+                return nil
+            }
+            hotkey = HotkeyConfig(keyCode: event.keyCode, rawModifierFlags: flags.rawValue)
+            stopRecording()
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        isRecording = false
+    }
+}
+
+// MARK: - Desktop Toggle shortcut editor
+
+/// Keeps explanatory copy separate from the keycaps, so mixed Hebrew/Latin
+/// text stays readable and the keycaps remain in their conventional order.
+private struct OBDesktopToggleShortcutEditor: View {
+    let language: AppLanguage
+    let explanation: String
+    @Binding var hotkey: HotkeyConfig
+    @Binding var isRecording: Bool
+    var onTap: () -> Void
+
+    @State private var isHovered = false
+    @State private var isPulsing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var tokens: [String] {
+        var t: [String] = []
+        let m = hotkey.modifierFlags
+        if m.contains(.control) { t.append("⌃") }
+        if m.contains(.option)  { t.append("⌥") }
+        if m.contains(.shift)   { t.append("⇧") }
+        if m.contains(.command) { t.append("⌘") }
+        if !hotkey.isEmpty { t.append(HotkeyFormatter.name(for: hotkey.keyCode)) }
+        return t
+    }
+
+    // Splits the explanation around the placeholder word so key caps appear between the two halves.
+    private func splitExplanation() -> (before: String, after: String) {
+        let placeholder = "this shortcut"
+        let localizedPlaceholder = placeholder.localized(language)
+        let src = explanation
+        if let r = src.range(of: localizedPlaceholder) {
+            return (String(src[src.startIndex..<r.lowerBound]),
+                    String(src[r.upperBound...]))
+        }
+        return (src, "")
+    }
+
+    var body: some View {
+        let (before, after) = splitExplanation()
+
+        VStack(alignment: .leading, spacing: 2) {
+            // First fragment of the explanation (e.g. "Press ")
+            if !before.isEmpty {
+                Text(before.trimmingCharacters(in: .whitespaces))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Keycaps — only interactive part
+            Button(action: onTap) {
+                HStack(spacing: 3) {
+                    if isRecording {
+                        Text("…")
+                            .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.orange)
+                    } else {
+                        ForEach(tokens, id: \.self) { token in
+                            keyCap(token)
+                        }
+                    }
+                }
+                .environment(\.layoutDirection, .leftToRight)
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .help(isRecording
+                  ? "Press a key combination — Esc cancels".localized(language)
+                  : "Click to record a new shortcut".localized(language))
+            .accessibilityLabel(Text("Desktop Toggle shortcut".localized(language)))
+            .accessibilityValue(Text(isRecording
+                                     ? "Press a key combination — Esc cancels".localized(language)
+                                     : HotkeyFormatter.glyphs(for: hotkey)))
+            .accessibilityHint(Text(isRecording
+                                    ? "Press a key combination — Esc cancels".localized(language)
+                                    : "Click to record a new shortcut".localized(language)))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isRecording)
+
+            // Second fragment of the explanation (e.g. " to hide all windows…")
+            if !after.isEmpty {
+                Text(after.trimmingCharacters(in: .whitespaces))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                isPulsing = true
+            }
+        }
+    }
+
+    private func keyCap(_ label: String) -> some View {
+        let glowing = isPulsing && !isHovered && !isRecording && !reduceMotion
+        return Text(label)
+            .font(.system(size: 12.5, weight: .medium, design: .rounded))
+            .foregroundStyle(isHovered ? Color.primary : Color.primary.opacity(0.82))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.primary.opacity(isHovered ? 0.10 : 0.07))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(
+                        Color.accentColor.opacity(isHovered ? 0.55 : (glowing ? 0.65 : 0.18)),
+                        lineWidth: 0.75
+                    )
+            }
+            .shadow(
+                color: Color.accentColor.opacity(glowing ? 0.45 : 0.0),
+                radius: glowing ? 5 : 0,
+                x: 0, y: 0
+            )
+    }
+
+}
+
+
+
 
 // MARK: - Shared Realistic macOS Tour Components
 
@@ -1219,6 +1623,11 @@ struct TourKeyCap: View {
 // MARK: - macOS Desktop Illustration Components
 
 private struct MacDesktopPlainSurface: View {
+    // isCollapsed is kept for API compatibility but the wallpaper itself
+    // is always static — it fills the whole frame and never moves.
+    // Only the window stack layer animates away in the parent view.
+    var isCollapsed = false
+
     private var wallpaperImage: NSImage? {
         if let url = Bundle.main.url(forResource: "DesktopWallpaper", withExtension: "jpg"),
            let image = NSImage(contentsOf: url) {
@@ -1228,25 +1637,34 @@ private struct MacDesktopPlainSurface: View {
     }
 
     var body: some View {
-        if let img = wallpaperImage {
-            Image(nsImage: img)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .clipped()
-        } else {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.55, green: 0.28, blue: 0.05),
-                    Color(red: 0.30, green: 0.15, blue: 0.03)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+        Group {
+            if let img = wallpaperImage {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 356, height: 236)
+                    .clipped()
+            } else {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.55, green: 0.28, blue: 0.05),
+                        Color(red: 0.30, green: 0.15, blue: 0.03)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
         }
+        .frame(width: 356, height: 236)
+        .clipped()
     }
 }
 
 private struct MacDesktopMenuBar: View {
+    static let width: CGFloat = 356
+    static let height: CGFloat = 26
+    static let topInset: CGFloat = 0
+
     var showsSystemStatus: Bool = true
 
     var body: some View {
@@ -1281,7 +1699,7 @@ private struct MacDesktopMenuBar: View {
             }
         }
         .padding(.horizontal, 12)
-        .frame(width: 356, height: 26)
+        .frame(width: Self.width, height: Self.height)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.black.opacity(0.65))
@@ -1290,7 +1708,7 @@ private struct MacDesktopMenuBar: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.white.opacity(0.12), lineWidth: 0.75)
         )
-        .padding(.top, 4)
+        .padding(.top, Self.topInset)
     }
 }
 
@@ -1475,28 +1893,19 @@ private struct MacDesktopDock: View {
 
 private struct MacShortcutBadge: View {
     let isActive: Bool
+    @ObservedObject private var manager = DesktopToggleManager.shared
 
     var body: some View {
-        HStack(spacing: 4) {
-            TourKeyCap(label: "⌘", lit: isActive, width: 20, height: 17)
-
-            Text("+")
-                .font(.system(size: 6.8, weight: .light))
-                .foregroundStyle(.white.opacity(0.60))
-
-            TourKeyCap(label: "D", lit: isActive, width: 20, height: 17)
-        }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
-        .background(Color.black.opacity(0.30), in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(Color.white.opacity(0.18), lineWidth: 0.6)
-        }
-        .shadow(color: .black.opacity(0.18), radius: 3, x: 0, y: 1.5)
-        .scaleEffect(isActive ? 0.80 : 0.86)
-        .blur(radius: isActive ? 0.55 : 0.25)
-        .animation(.easeInOut(duration: 0.15), value: isActive)
+        SettingsShortcutRecorder(
+            title: "Desktop Toggle shortcut",
+            subtitle: "Press any combination with at least one modifier",
+            icon: "command",
+            hotkey: $manager.hotkey,
+            onBeginRecording: { manager.suspendForRecording() },
+            onEndRecording: { manager.resumeAfterRecording() },
+            compact: true,
+            isActive: isActive
+        )
     }
 }
 
@@ -1634,7 +2043,8 @@ struct OBIllustrationSave: View {
                 .overlay(Capsule().stroke(Color.white.opacity(0.20), lineWidth: 0.75))
                 .shadow(color: Color.accentColor.opacity(0.45), radius: 10, x: 0, y: 3)
                 .transition(.move(edge: .top).combined(with: .opacity))
-                .offset(y: -92)
+                // Drop below the menu bar so the pill and its shadow stay clear of the card edge.
+                .offset(y: -78)
             }
 
             // Animated cursor
@@ -2151,7 +2561,8 @@ struct OBIllustrationLive: View {
                         isTracking: isDragging,
                         isSynced: isSyncedFlash
                     )
-                    .offset(x: 122, y: 17)
+                    // Keep the popover body and its shadow inside the illustration canvas.
+                    .offset(x: 98, y: 17)
                     .transition(.asymmetric(
                         insertion: .scale(scale: 0.85, anchor: .topTrailing).combined(with: .opacity),
                         removal: .scale(scale: 0.9, anchor: .topTrailing).combined(with: .opacity)
@@ -3468,22 +3879,23 @@ struct OBIllustrationMenuBar: View {
     }
 }
 
-// MARK: - Slide 4: Desktop Toggle Illustration (⌘D Automatic Hide & Restore)
+// MARK: - Slide 4: Desktop Toggle Illustration (Editable Shortcut Hide & Restore)
 
 struct OBIllustrationDesktopToggle: View {
     @State private var showWindows = true
-    @State private var keysLit = false
     @State private var timer: Timer?
     @State private var isMounted = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
-            MacDesktopPlainSurface()
+            MacDesktopPlainSurface(isCollapsed: !showWindows)
 
             // A quiet, authentic menu bar anchors the desktop and makes the scene
             // immediately read as macOS instead of a generic dark canvas.
             MacDesktopMenuBar(showsSystemStatus: false)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
 
             // Desktop files sit in the trailing column, as they do on a real Mac.
             VStack(alignment: .center, spacing: 6) {
@@ -3521,20 +3933,17 @@ struct OBIllustrationDesktopToggle: View {
             .scaleEffect(showWindows ? 1.0 : 0.96)
             .offset(y: showWindows ? 0 : 9)
             .opacity(showWindows ? 1.0 : 0.0)
-            .animation(.easeInOut(duration: 0.34), value: showWindows)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.34), value: showWindows)
 
             MacDesktopDock()
+                .scaleEffect(0.78, anchor: .bottom)
                 .frame(maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, 7)
 
-            // The shortcut is an instructional overlay, not a fake desktop widget.
-            MacShortcutBadge(isActive: keysLit)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, 28)
-                .padding(.leading, 10)
+            // Shortcut badge removed — the animation alone is sufficient.
         }
+        .frame(width: 356, height: 236)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .allowsHitTesting(false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Desktop toggle demonstration")
         .onAppear {
@@ -3570,12 +3979,11 @@ struct OBIllustrationDesktopToggle: View {
 
     private func triggerToggle() {
         guard isMounted else { return }
-
-        withAnimation(.easeInOut(duration: 0.15)) { keysLit = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             guard isMounted else { return }
-            withAnimation(.easeInOut(duration: 0.15)) { keysLit = false }
-            withAnimation(.spring(response: 0.52, dampingFraction: 0.74)) { showWindows.toggle() }
+            withAnimation(reduceMotion ? nil : .spring(response: 0.52, dampingFraction: 0.74)) {
+                showWindows.toggle()
+            }
         }
     }
 }
@@ -3735,7 +4143,7 @@ private struct CmdShiftRBrowserWindow: View {
                 Circle()
                     .fill(Color.blue)
                     .frame(width: 4, height: 4)
-                Text(phase == 2 ? "Reader Mode" : "⌘⇧R is working")
+                Text(phase == 2 ? "Reader Mode" : "Apple News")
                     .font(.system(size: 5.5, weight: .semibold))
                     .foregroundStyle(Color.black.opacity(0.52))
             }
@@ -4064,7 +4472,6 @@ private struct AlpineTreeSilhouette: Shape {
 struct OBIllustrationCmdShiftR: View {
     @State private var phase: Int = 0
     @State private var activeScene: Int = 0
-    @State private var keysLit = false
     @State private var reloadSpin: Double = 0
     @State private var timer: Timer?
     @State private var isMounted = false
@@ -4080,22 +4487,9 @@ struct OBIllustrationCmdShiftR: View {
 
     var body: some View {
         ZStack {
-            MacDesktopPlainSurface()
+            Color.clear
 
             VStack(spacing: 5) {
-                // Keycaps — light up during the automatic restore sequence.
-                HStack(spacing: 4) {
-                    TourKeyCap(label: "⌘", lit: keysLit, width: 26, height: 22, activeColor: sceneColor)
-                    Text("+").font(.system(size: 8, weight: .light)).foregroundStyle(.white.opacity(0.5))
-                    TourKeyCap(label: "⇧", lit: keysLit, width: 26, height: 22, activeColor: sceneColor)
-                    Text("+").font(.system(size: 8, weight: .light)).foregroundStyle(.white.opacity(0.5))
-                    TourKeyCap(label: "R", lit: keysLit, width: 26, height: 22, activeColor: sceneColor)
-                    Text("fires automatically".localized(appLanguage))
-                        .font(.system(size: 7.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.58))
-                        .padding(.leading, 4)
-                }
-
                 CmdShiftRBrowserWindow(
                     activeScene: activeScene,
                     phase: phase,
@@ -4149,7 +4543,6 @@ struct OBIllustrationCmdShiftR: View {
     private func runAutoSequence() {
         guard isMounted else { return }
         withAnimation(.easeInOut(duration: 0.2)) { phase = 0 }
-        keysLit = false
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             guard isMounted else { return }
@@ -4160,7 +4553,6 @@ struct OBIllustrationCmdShiftR: View {
             guard isMounted else { return }
             withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
                 phase = 1
-                keysLit = true
             }
         }
 
@@ -4168,7 +4560,6 @@ struct OBIllustrationCmdShiftR: View {
             guard isMounted else { return }
             withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
                 phase = 2
-                keysLit = false
                 if activeScene == 1 { reloadSpin += 360 }
             }
         }
@@ -4178,390 +4569,155 @@ struct OBIllustrationCmdShiftR: View {
 // MARK: - Slide 6: Quick Key Restore (Fn Long-Press & Caps Lock Double-Tap)
 
 struct OBIllustrationQuickKey: View {
-    @State private var mode: Int = 0 // 0: Fn Hold, 1: Caps Lock
-    @State private var isHolding = false
-    @State private var holdProgress: CGFloat = 0.0
-    @State private var isDoubleTapping = false
-    @State private var isRestored = false
-    @State private var showNotchPill = false
+    @State private var currentFrame: Int = 0
     @State private var timer: Timer?
     @State private var isMounted = false
-    @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+
+    // Load bundled or local frame images (1 to 6)
+    private static let frameImages: [NSImage?] = {
+        (1...6).map { index in
+            let name = "QuickKeyFrame\(index)"
+            if let url = Bundle.main.url(forResource: name, withExtension: "png"),
+               let img = NSImage(contentsOf: url) {
+                return img
+            }
+            if let img = NSImage(contentsOfFile: "WindowLayout/\(name).png") {
+                return img
+            }
+            return NSImage(contentsOfFile: "/Applications/RememberMyWindows/WindowLayout/\(name).png")
+        }
+    }()
+
+    @State private var isDoubleTapPhase = false
 
     var body: some View {
         ZStack {
-            TourDesktopBackground()
-
-            VStack(spacing: 0) {
-                // Mini floating macOS screen (cause -> effect)
-                ZStack(alignment: .top) {
-                    ZStack(alignment: .top) {
-                        // Clean neutral dark display background (no wallpaper)
-                        Color(white: 0.11)
-
-                        HStack(spacing: 4) {
-                            Image(systemName: "applelogo").font(.system(size: 4.5))
-                            Spacer()
-                            Text("9:41").font(.system(size: 4.5, weight: .medium))
-                        }
-                        .foregroundStyle(.white.opacity(0.75))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2.5)
-                        .background(Color.black.opacity(0.35))
-
-                        ZStack {
-                            if isRestored {
-                                MiniXcodeWindow(width: 136, height: 76, isRestoredGlow: true)
-                                    .offset(x: -44, y: 12)
-                                    .transition(.asymmetric(
-                                        insertion: .scale(scale: 0.7, anchor: .bottomLeading).combined(with: .opacity),
-                                        removal: .opacity
-                                    ))
-                                MiniSafariWindow(width: 124, height: 70, isRestoredGlow: true)
-                                    .offset(x: 52, y: 18)
-                                    .transition(.asymmetric(
-                                        insertion: .scale(scale: 0.7, anchor: .bottomTrailing).combined(with: .opacity),
-                                        removal: .opacity
-                                    ))
-                            } else {
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .strokeBorder(style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
-                                    .foregroundStyle(Color.white.opacity(0.20))
-                                    .frame(width: 136, height: 76)
-                                    .offset(x: -44, y: 12)
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .strokeBorder(style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
-                                    .foregroundStyle(Color.white.opacity(0.14))
-                                    .frame(width: 124, height: 70)
-                                    .offset(x: 52, y: 18)
-                            }
-                        }
-                        .animation(.spring(response: 0.42, dampingFraction: 0.72), value: isRestored)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 8)
-
-                        if showNotchPill {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 7)).foregroundStyle(.green)
-                                Text("Layout Restored".localized(appLanguage))
-                                    .font(.system(size: 6.5, weight: .bold)).foregroundStyle(.white)
-                            }
-                            .padding(.horizontal, 7).padding(.vertical, 2.5)
-                            .background(Color.black.opacity(0.90), in: Capsule())
-                            .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 0.5))
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                            .offset(y: 2)
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                    .padding(2)
+            ForEach(0..<6, id: \.self) { index in
+                if let nsImage = Self.frameImages[index] {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .opacity(currentFrame == index ? 1.0 : 0.0)
+                        .animation(.easeInOut(duration: isDoubleTapPhase ? 0.06 : 0.20), value: currentFrame)
                 }
-                .frame(width: 320, height: 126)
-                .background(Color(white: 0.18), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color.white.opacity(isRestored ? 0.35 : 0.18), lineWidth: 0.75)
-                )
-                .shadow(color: isRestored ? Color.accentColor.opacity(0.30) : .black.opacity(0.35), radius: isRestored ? 12 : 8, x: 0, y: 4)
-                .animation(.easeInOut(duration: 0.3), value: isRestored)
-                .padding(.top, 4)
-
-                Spacer(minLength: 4)
-
-                // Focused Apple Keyboard Corner Deck (Compact & proportional)
-                QuickKeyMacBookDeck(
-                    mode: mode,
-                    isHolding: isHolding,
-                    holdProgress: holdProgress,
-                    isDoubleTapping: isDoubleTapping,
-                    isRestored: isRestored
-                )
-                .padding(.bottom, 4)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .onTapGesture { if isMounted { triggerQuickKey() } }
-        .onAppear { isMounted = true; startLoop() }
-        .onDisappear { isMounted = false; timer?.invalidate() }
-    }
-
-    private func startLoop() {
-        runCycle()
-        timer = Timer.scheduledTimer(withTimeInterval: 4.8, repeats: true) { _ in
-            mode = (mode + 1) % 2
-            runCycle()
+        .frame(width: 380, height: 236)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            replayAnimation()
+        }
+        .onAppear {
+            isMounted = true
+            startAnimationLoop()
+        }
+        .onDisappear {
+            isMounted = false
+            stopAnimationLoop()
         }
     }
 
-    private func runCycle() {
+    private func startAnimationLoop() {
+        stopAnimationLoop()
+        scheduleCycle()
+    }
+
+    private func stopAnimationLoop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func scheduleCycle() {
         guard isMounted else { return }
-        withAnimation {
-            isRestored = false
-            showNotchPill = false
-            holdProgress = 0
-            isHolding = false
-            isDoubleTapping = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+
+        runFullAlternatingSequence()
+
+        timer?.invalidate()
+        // Total alternating sequence takes 8.2s
+        timer = Timer.scheduledTimer(withTimeInterval: 8.2, repeats: true) { [self] _ in
             guard isMounted else { return }
-            triggerQuickKey()
+            runFullAlternatingSequence()
         }
     }
 
-    private func triggerQuickKey() {
+    private func runFullAlternatingSequence() {
         guard isMounted else { return }
-        if mode == 0 {
-            withAnimation(.easeInOut(duration: 0.15)) { isHolding = true }
-            withAnimation(.linear(duration: 0.9)) { holdProgress = 1.0 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
-                guard isMounted else { return }
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                    isRestored = true
-                    showNotchPill = true
-                    isHolding = false
-                }
+
+        isDoubleTapPhase = false
+
+        // --- Sequence A: Fn Hold Restore ---
+        withAnimation(.easeInOut(duration: 0.20)) {
+            currentFrame = 0 // QuickKeyFrame1 (Idle)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [self] in
+            guard isMounted else { return }
+            withAnimation(.easeInOut(duration: 0.18)) {
+                currentFrame = 1 // QuickKeyFrame2 (Fn Hold)
             }
-        } else {
-            withAnimation(.easeInOut(duration: 0.1)) { isDoubleTapping = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                guard isMounted else { return }
-                withAnimation(.easeInOut(duration: 0.1)) { isDoubleTapping = false }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.3) { [self] in
+            guard isMounted else { return }
+            withAnimation(.easeInOut(duration: 0.24)) {
+                currentFrame = 2 // QuickKeyFrame3 (Restored)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                guard isMounted else { return }
-                withAnimation(.easeInOut(duration: 0.1)) { isDoubleTapping = true }
+        }
+
+        // --- Sequence B: Caps Lock Double-Tap Restore ---
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.2) { [self] in
+            guard isMounted else { return }
+            isDoubleTapPhase = false
+            withAnimation(.easeInOut(duration: 0.20)) {
+                currentFrame = 0 // QuickKeyFrame1 (Idle)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                guard isMounted else { return }
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                    isDoubleTapping = false
-                    isRestored = true
-                    showNotchPill = true
-                }
+        }
+
+        // Tap 1: Caps Lock illuminated
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.9) { [self] in
+            guard isMounted else { return }
+            isDoubleTapPhase = true
+            withAnimation(.easeInOut(duration: 0.06)) {
+                currentFrame = 3 // QuickKeyFrame4 (Caps Lock Tap 1)
             }
+        }
+
+        // Tactile Separator: Key released back to Idle for 0.35s
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.15) { [self] in
+            guard isMounted else { return }
+            withAnimation(.easeInOut(duration: 0.06)) {
+                currentFrame = 0 // QuickKeyFrame1 (Separator between Tap 1 & Tap 2)
+            }
+        }
+
+        // Tap 2: Caps Lock double-tap pulse
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.50) { [self] in
+            guard isMounted else { return }
+            withAnimation(.easeInOut(duration: 0.06)) {
+                currentFrame = 4 // QuickKeyFrame5 (Caps Lock Tap 2 Pulse)
+            }
+        }
+
+        // Windows Restored
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.85) { [self] in
+            guard isMounted else { return }
+            isDoubleTapPhase = false
+            withAnimation(.easeInOut(duration: 0.24)) {
+                currentFrame = 5 // QuickKeyFrame6 (Restored)
+            }
+        }
+    }
+
+    private func replayAnimation() {
+        guard isMounted else { return }
+        stopAnimationLoop()
+        runFullAlternatingSequence()
+        timer = Timer.scheduledTimer(withTimeInterval: 8.2, repeats: true) { [self] _ in
+            guard isMounted else { return }
+            runFullAlternatingSequence()
         }
     }
 }
-
-// Focused Apple Keyboard Corner Deck (Bottom-Left Corner Spotlight - Authentic Square Chiclet Keys)
-private struct QuickKeyMacBookDeck: View {
-    let mode: Int
-    let isHolding: Bool
-    let holdProgress: CGFloat
-    let isDoubleTapping: Bool
-    let isRestored: Bool
-
-    private var fnLit: Bool { mode == 0 && (isHolding || isRestored) }
-    private var capsLit: Bool { mode == 1 && (isDoubleTapping || isRestored) }
-
-    var body: some View {
-        ZStack {
-            // Anodized Aluminum Keyboard Unibody Chassis
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(white: 0.36), Color(white: 0.22)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.white.opacity(0.24), lineWidth: 0.75)
-                )
-                .shadow(color: .black.opacity(0.38), radius: 6, x: 0, y: 3)
-
-            // Recessed Matte Black Key Well
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color(white: 0.08))
-                .padding(3.5)
-
-            // 4 Compact Focused Corner Rows
-            VStack(alignment: .leading, spacing: 2.8) {
-                // Row 1: Tab row (Letter keys Q, W, E are 20x20 squares)
-                HStack(spacing: 2.8) {
-                    FocusedAppleKeycap(label: "tab", width: 44, height: 20)
-                    FocusedAppleKeycap(label: "Q", width: 20, height: 20)
-                    FocusedAppleKeycap(label: "W", width: 20, height: 20)
-                    FocusedAppleKeycap(label: "E", width: 20, height: 20)
-                }
-
-                // Row 2: Caps Lock Home Row (Spotlight Trigger Key! Letter keys A, S, D are 20x20 squares)
-                HStack(spacing: 2.8) {
-                    FocusedAppleKeycap(
-                        label: "caps lock",
-                        isTrigger: true,
-                        isLit: capsLit,
-                        activeColor: .orange,
-                        isPressed: isDoubleTapping,
-                        width: 48,
-                        height: 20,
-                        showCapsLed: true,
-                        isCapsLedOn: capsLit
-                    )
-                    FocusedAppleKeycap(label: "A", width: 20, height: 20)
-                    FocusedAppleKeycap(label: "S", width: 20, height: 20)
-                    FocusedAppleKeycap(label: "D", width: 20, height: 20)
-                }
-
-                // Row 3: Shift Row (Letter keys Z, X, C are 20x20 squares)
-                HStack(spacing: 2.8) {
-                    FocusedAppleKeycap(label: "shift", width: 54, height: 20)
-                    FocusedAppleKeycap(label: "Z", width: 20, height: 20)
-                    FocusedAppleKeycap(label: "X", width: 20, height: 20)
-                    FocusedAppleKeycap(label: "C", width: 20, height: 20)
-                }
-
-                // Row 4: Modifier Row (Fn / Globe Spotlight Trigger Key!)
-                HStack(spacing: 2.8) {
-                    FocusedAppleKeycap(
-                        label: "fn",
-                        icon: "globe",
-                        isTrigger: true,
-                        isLit: fnLit,
-                        activeColor: .accentColor,
-                        isPressed: isHolding,
-                        width: 27,
-                        height: 20,
-                        holdProgress: fnLit ? holdProgress : 0
-                    )
-                    FocusedAppleKeycap(label: "control", width: 27, height: 20)
-                    FocusedAppleKeycap(label: "option", width: 27, height: 20)
-                    FocusedAppleKeycap(label: "command", icon: "command", width: 36, height: 20)
-                }
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-        }
-        .frame(width: 144, height: 98)
-    }
-}
-
-// Focused Apple Keycap for Keyboard Corner Spotlight
-private struct FocusedAppleKeycap: View {
-    let label: String
-    var sublabel: String? = nil
-    var icon: String? = nil
-    var isTrigger: Bool = false
-    var isLit: Bool = false
-    var activeColor: Color = .accentColor
-    var isPressed: Bool = false
-    var width: CGFloat = 20
-    var height: CGFloat = 20
-    var showCapsLed: Bool = false
-    var isCapsLedOn: Bool = false
-    var holdProgress: CGFloat = 0.0
-
-    private var keyOpacity: Double {
-        if isTrigger {
-            return isLit ? 1.0 : 0.70
-        }
-        return 0.45
-    }
-
-    var body: some View {
-        ZStack {
-            // Keycap body
-            RoundedRectangle(cornerRadius: 3.0, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: isLit
-                            ? [activeColor.opacity(0.90), activeColor.opacity(0.65)]
-                            : [Color(white: 0.24), Color(white: 0.14)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3.0, style: .continuous)
-                        .stroke(
-                            isLit ? activeColor.opacity(0.85) : Color.white.opacity(isTrigger ? 0.24 : 0.12),
-                            lineWidth: isLit ? 0.9 : 0.45
-                        )
-                )
-                .shadow(
-                    color: isLit ? activeColor.opacity(0.45) : Color.black.opacity(0.40),
-                    radius: isLit ? 5 : 1.0,
-                    x: 0,
-                    y: isLit ? 0 : 1.0
-                )
-
-            // Content inside keycap
-            ZStack {
-                if showCapsLed {
-                    // Caps Lock key with authentic green LED dot + label
-                    HStack(spacing: 3) {
-                        Circle()
-                            .fill(isCapsLedOn ? Color(red: 0.25, green: 0.95, blue: 0.35) : Color.white.opacity(0.20))
-                            .frame(width: 2.8, height: 2.8)
-                            .shadow(color: isCapsLedOn ? Color.green : .clear, radius: 3)
-                            .padding(.leading, 3.5)
-
-                        Text("caps lock")
-                            .font(.system(size: 5.5, weight: .semibold, design: .rounded))
-                            .foregroundStyle(isLit ? .white : .white.opacity(0.80))
-
-                        Spacer(minLength: 0)
-                    }
-                } else if isTrigger && label == "fn" {
-                    // Fn / Globe key with progress ring
-                    HStack(spacing: 2) {
-                        Image(systemName: icon ?? "globe")
-                            .font(.system(size: 6.5, weight: .medium))
-                            .foregroundStyle(isLit ? .white : .white.opacity(0.80))
-                        Text("fn")
-                            .font(.system(size: 6.5, weight: .bold, design: .rounded))
-                            .foregroundStyle(isLit ? .white : .white.opacity(0.80))
-                    }
-                } else if let icon {
-                    HStack(spacing: 2) {
-                        Image(systemName: icon)
-                            .font(.system(size: 6.5, weight: .semibold))
-                        if width > 30 {
-                            Text("cmd")
-                                .font(.system(size: 5.0, weight: .medium, design: .rounded))
-                        }
-                    }
-                    .foregroundStyle(.white.opacity(0.68))
-                } else if !label.isEmpty {
-                    VStack(spacing: 0.5) {
-                        if let sublabel {
-                            Text(sublabel)
-                                .font(.system(size: 4.5, weight: .medium, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.45))
-                        }
-                        Text(label)
-                            .font(.system(size: label.count > 2 ? 6.0 : 8.5, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.75))
-                    }
-                }
-            }
-
-            // Fn circular progress ring
-            if holdProgress > 0 && holdProgress <= 1.0 {
-                Circle()
-                    .trim(from: 0, to: holdProgress)
-                    .stroke(
-                        Color.accentColor,
-                        style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
-                    )
-                    .frame(width: 20, height: 20)
-                    .rotationEffect(.degrees(-90))
-                    .shadow(color: Color.accentColor.opacity(0.8), radius: 3)
-            }
-        }
-        .frame(width: width, height: height)
-        .opacity(keyOpacity)
-        .offset(y: isPressed ? 1.0 : 0)
-        .animation(.spring(response: 0.16, dampingFraction: 0.72), value: isPressed)
-        .animation(.easeInOut(duration: 0.25), value: isLit)
-    }
-}
-
-
-
-
 
 // MARK: - Slide 7: Settings Guide Illustration (Authentic macOS Settings Panel)
 
@@ -4570,32 +4726,51 @@ struct OBIllustrationSettingsGuide: View {
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @Environment(\.colorScheme) private var colorScheme
 
+    private var notchPreviewData: NotificationData {
+        let snapshotName = "\u{2068}\("Home".localized(appLanguage))\u{2069}"
+        let restoredCount = "\u{2066}5\u{2069}"
+        let totalCount = "\u{2066}5\u{2069}"
+        let subtitle = String(
+            format: "Preview · %@ · %@/%@ windows".localized(appLanguage),
+            snapshotName,
+            restoredCount,
+            totalCount
+        )
+
+        return NotificationData(
+            title: "Layout Restored".localized(appLanguage),
+            subtitle: subtitle
+        )
+    }
+
     var body: some View {
         ZStack {
             TourDesktopBackground()
 
-            // Mini Notch Alert Preview when Row 2 (Notch Alerts) is selected
+            // Reuse the production view so the guide shows the real notch-attached
+            // shape, theme accent, indicator, and entrance animation.
             if activeIndex == 2 {
-                HStack(spacing: 5) {
-                    Image(systemName: "sparkles").font(.system(size: 8)).foregroundStyle(.pink)
-                    Text("Layout Restored · Notch Alert Preview".localized(appLanguage)).font(.system(size: 7.5, weight: .bold)).foregroundStyle(.white)
-                }
-                .padding(.horizontal, 10).padding(.vertical, 3.5)
-                .background(Color.black.opacity(0.88), in: Capsule())
-                .overlay(Capsule().stroke(Color.pink.opacity(0.5), lineWidth: 0.75))
-                .shadow(color: Color.pink.opacity(0.4), radius: 8)
+                NotchNotificationView(
+                    data: notchPreviewData,
+                    notchDepth: 10,
+                    pillWidth: 280,
+                    pillHeight: 48,
+                    isCompact: false,
+                    onDismiss: {}
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .transition(.move(edge: .top).combined(with: .opacity))
-                .frame(maxHeight: .infinity, alignment: .top)
-                .padding(.top, 6)
+                .accessibilityHidden(true)
+                .zIndex(1)
             }
 
-            VStack(spacing: 6) {
+            VStack(spacing: 4) {
                 settingRow(icon: "bolt.fill", color: .orange, title: "Auto-Restore".localized(appLanguage), subtitle: "Triggers on display connect or app launch".localized(appLanguage), isActive: activeIndex == 0)
                 settingRow(icon: "keyboard", color: .purple, title: "Desktop Toggle".localized(appLanguage), subtitle: String(format: "%@ to hide or show all windows".localized(appLanguage), HotkeyFormatter.desktopToggleGlyphs), isActive: activeIndex == 1)
                 settingRow(icon: "laptopcomputer", color: .pink, title: "Notch Alerts".localized(appLanguage), subtitle: "Pill notifications for layout events".localized(appLanguage), isActive: activeIndex == 2)
                 settingRow(icon: "list.bullet.rectangle.portrait", color: .blue, title: "Activity Log Level".localized(appLanguage), subtitle: "Filter which events appear in the log".localized(appLanguage), isActive: activeIndex == 3)
             }
-            .padding(12)
+            .padding(10)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -4604,8 +4779,9 @@ struct OBIllustrationSettingsGuide: View {
                         lineWidth: 0.8
                     )
             }
-            .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 6)
+            .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 4)
             .padding(.horizontal, 16)
+            .offset(y: 14)
         }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
@@ -4893,6 +5069,7 @@ struct OBIllustrationCustomize: View {
 // MARK: - Layout Mode Picker
 
 struct OBIllustrationModePicker: View {
+    let isWindowServerInitializing: Bool
     @State private var selectedMode: Bool? = nil // nil = nothing chosen yet; true = autoSave; false = sessions
     @State private var glowPulse = false
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
@@ -4904,6 +5081,8 @@ struct OBIllustrationModePicker: View {
             TourDesktopBackground()
 
             VStack(spacing: 12) {
+                // Keep both modes visible as a balanced pair while the setup
+                // screen is also showing its startup loading status.
                 HStack(spacing: 12) {
                     modeCard(
                         isAutoLayout: true,
@@ -4916,6 +5095,7 @@ struct OBIllustrationModePicker: View {
                             ("chart.bar.fill", "Timeline of all your positions"),
                         ]
                     )
+                    .frame(width: 158)
 
                     modeCard(
                         isAutoLayout: false,
@@ -4928,9 +5108,11 @@ struct OBIllustrationModePicker: View {
                             ("keyboard", "Restore with Fn or ⇪ shortcut"),
                         ]
                     )
+                    .frame(width: 158)
                 }
+                .frame(maxWidth: .infinity)
 
-                if selectedMode == nil {
+                if selectedMode == nil && !isWindowServerInitializing {
                     Text("Tap a card to activate your preferred mode")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
@@ -4942,10 +5124,16 @@ struct OBIllustrationModePicker: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onAppear {
-            // Reflect current state
-            selectedMode = manager.store.autoSaveEnabled ? true : false
+            // Hold both choices in the same neutral state until startup has
+            // finished resolving the live window server state.
+            selectedMode = isWindowServerInitializing ? nil : manager.store.autoSaveEnabled
             withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
                 glowPulse = true
+            }
+        }
+        .onChange(of: isWindowServerInitializing) { _, isInitializing in
+            withAnimation(.easeInOut(duration: 0.22)) {
+                selectedMode = isInitializing ? nil : manager.store.autoSaveEnabled
             }
         }
     }
@@ -4958,6 +5146,8 @@ struct OBIllustrationModePicker: View {
         bullets: [(String, String)]
     ) -> some View {
         let isSelected = selectedMode == isAutoLayout
+        let idleStrokeOpacity = isWindowServerInitializing ? 0.26 : 0.12
+        let idleStrokeWidth: CGFloat = isWindowServerInitializing ? 1 : 0.75
         return Button {
             withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) {
                 selectedMode = isAutoLayout
@@ -5051,8 +5241,8 @@ struct OBIllustrationModePicker: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .stroke(
-                        isSelected ? accentColor.opacity(glowPulse ? 0.85 : 0.5) : Color.primary.opacity(0.12),
-                        lineWidth: isSelected ? 1.5 : 0.75
+                        isSelected ? accentColor.opacity(glowPulse ? 0.85 : 0.5) : Color.primary.opacity(idleStrokeOpacity),
+                        lineWidth: isSelected ? 1.5 : idleStrokeWidth
                     )
             )
             .shadow(

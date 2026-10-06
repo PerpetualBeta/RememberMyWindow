@@ -1,6 +1,5 @@
 //this file is the main view of the app
 import SwiftUI
-import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var manager: WindowManager
@@ -8,10 +7,22 @@ struct ContentView: View {
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+    @AppStorage("hasCompletedV15Tour") private var hasCompletedV15Tour: Bool = false
     @AppStorage("minimalVisualAnimations") private var minimalVisualAnimations: Bool = true
+    @AppStorage("appListViewMode") private var appListViewMode: AppListViewMode = .list
     @ObservedObject private var desktopToggleManager = DesktopToggleManager.shared
     @State private var hidePermissionBanner = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
+
+    // LIFECYCLE / CLEANUP NOTE:
+    // This flow presents the v15.0 release notes sheet once to existing users who upgrade to v15.0.
+    // For future versions (v15.1+ / v16.0):
+    // - To retire: remove isV15ReleaseFlowPending, hasCompletedV15Tour, and the showsV15ReleaseNotes parameter.
+    // - To update for a new release: bump "15.0" to the new version and reset/rename the completion key (e.g., hasCompletedV16Tour).
+    private var isV15ReleaseFlowPending: Bool {
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return appVersion == "15.0" && !hasCompletedV15Tour
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -63,7 +74,7 @@ struct ContentView: View {
         } detail: {
             // Detail (Inspector): Actions + Preview + Activity
             inspectorColumn
-                .navigationSplitViewColumnWidth(min: 280, ideal: 350, max: 350)
+                .navigationSplitViewColumnWidth(min: 350, ideal: 350, max: 350)
                 .background {
                     if themeColor.isGalaxy {
                         ZStack {
@@ -81,9 +92,6 @@ struct ContentView: View {
             ToolbarItem(id: "mainSettings", placement: .navigation) {
                 settingsToolbarContent
             }
-            ToolbarItem(placement: .navigation) {
-                liquidGlassHeaderSlider
-            }
             if manager.isWindowServerInitializing {
                 ToolbarItem(id: "windowServerLoadingStatus", placement: .navigation) {
                     HStack(spacing: 6) {
@@ -95,8 +103,19 @@ struct ContentView: View {
                     .fixedSize(horizontal: true, vertical: false)
                 }
             }
-            ToolbarItem(placement: .principal) {
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.flexible, placement: .primaryAction)
+            }
+            ToolbarItem(id: "layoutModeSelector", placement: .primaryAction) {
+                liquidGlassHeaderSlider
+            }
+            ToolbarItem(id: "mainLayoutActions", placement: .primaryAction) {
                 actionButtonsToolbar
+            }
+            if !manager.store.autoSaveEnabled {
+                ToolbarItem(id: "appListViewToggle", placement: .primaryAction) {
+                    listGridToggleButton
+                }
             }
         }
         .overlay(alignment: .top) {
@@ -105,11 +124,17 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: Binding(
-            get: { !hasCompletedOnboarding },
+            get: { !hasCompletedOnboarding || isV15ReleaseFlowPending },
             set: { _ in }
         )) {
-            OnboardingView {
-                withAnimation { hasCompletedOnboarding = true }
+            let shouldMarkV15TourComplete = isV15ReleaseFlowPending
+            OnboardingView(showsV15ReleaseNotes: shouldMarkV15TourComplete) {
+                withAnimation {
+                    if shouldMarkV15TourComplete {
+                        hasCompletedV15Tour = true
+                    }
+                    hasCompletedOnboarding = true
+                }
                 Task { @MainActor in
                     UpdateManager.shared.checkIfNeeded()
                 }
@@ -117,11 +142,14 @@ struct ContentView: View {
             .environmentObject(manager)
             .fullVisualAnimations()
         }
-        // Shown only on the first launch after upgrading from a build with a
-        // hardcoded shortcut, and only once onboarding is out of the way so the
-        // two sheets can never compete for the window.
+        // Defer the shortcut migration notice until the first-run or v15 release
+        // tour is complete so two sheets never compete for the window.
         .sheet(isPresented: Binding(
-            get: { hasCompletedOnboarding && desktopToggleManager.needsShortcutMigrationNotice },
+            get: {
+                hasCompletedOnboarding &&
+                    !isV15ReleaseFlowPending &&
+                    desktopToggleManager.needsShortcutMigrationNotice
+            },
             set: { _ in }
         )) {
             ShortcutMigrationView(language: appLanguage, manager: desktopToggleManager) {
@@ -142,7 +170,6 @@ struct ContentView: View {
             }
         }
         .background(WindowTransparencyAccessor())
-        .background(MainToolbarOrderFix())
         .minimalVisualAnimations()
         .environment(\.minimalVisualAnimationsEnabled, minimalVisualAnimations)
         .appThemeColorScheme(themeColor)
@@ -213,9 +240,8 @@ struct ContentView: View {
 
     @ViewBuilder
     private var actionButtonsToolbar: some View {
-        HStack(spacing: 6) {
-
-            if !manager.store.autoSaveEnabled {
+        if !manager.store.autoSaveEnabled {
+            ControlGroup {
                 Button {
                     manager.saveNow()
                 } label: {
@@ -269,8 +295,23 @@ struct ContentView: View {
                 }())
                 .mainWindowSymbolHoverRegion()
             }
-
         }
+    }
+
+    private var listGridToggleButton: some View {
+        Button {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                appListViewMode = appListViewMode == .list ? .grid : .list
+            }
+        } label: {
+            Image(systemName: appListViewMode == .list ? "square.grid.2x2" : "list.bullet")
+                .mainWindowSymbolAnimation(.wiggle, capturesClicks: false)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.roundedRectangle)
+        .mainWindowSymbolHoverRegion()
+        .help(appListViewMode == .list ? "Switch to Grid View".localized(appLanguage) : "Switch to List View".localized(appLanguage))
+        .accessibilityLabel(appListViewMode == .list ? "Grid View" : "List View")
     }
 
     private var settingsToolbarContent: some View {
@@ -280,8 +321,10 @@ struct ContentView: View {
             Image(systemName: "gearshape")
                 .mainWindowSymbolAnimation(.rotate, capturesClicks: false)
         }
+        .buttonStyle(.bordered)
         .buttonBorderShape(.circle)
         .mainWindowSymbolHoverRegion()
+        .accessibilityLabel("Settings".localized(appLanguage))
         .help("Settings".localized(appLanguage))
     }
 
@@ -374,57 +417,5 @@ struct ContentView: View {
         }
         .padding(16)
         .transition(.move(edge: .top).combined(with: .opacity))
-    }
-}
-
-/// SwiftUI always places the NavigationSplitView sidebar toggle before custom
-/// navigation toolbar items on macOS 14. Move the settings item ahead of that
-/// native item once AppKit has created the toolbar.
-private struct MainToolbarOrderFix: NSViewRepresentable {
-    final class Coordinator {
-        weak var scheduledWindow: NSWindow?
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { [weak view] in
-            guard let view else { return }
-            scheduleReorder(for: view, coordinator: context.coordinator)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        scheduleReorder(for: nsView, coordinator: context.coordinator)
-    }
-
-    private func scheduleReorder(for view: NSView, coordinator: Coordinator) {
-        guard let window = view.window,
-              coordinator.scheduledWindow !== window else { return }
-
-        coordinator.scheduledWindow = window
-        for delay in [0.0, 0.1, 0.3, 0.7] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                reorderSettingsItem(in: window)
-            }
-        }
-    }
-
-    private func reorderSettingsItem(in window: NSWindow) {
-        guard let toolbar = window.toolbar,
-              let settingsIndex = toolbar.items.firstIndex(where: {
-                  $0.itemIdentifier.rawValue.contains("mainSettings")
-              }),
-              let sidebarIndex = toolbar.items.firstIndex(where: {
-                  $0.label.localizedCaseInsensitiveContains("sidebar") ||
-                  $0.itemIdentifier.rawValue.localizedCaseInsensitiveContains("sidebar")
-              }),
-              settingsIndex > sidebarIndex else { return }
-
-        let settingsIdentifier = toolbar.items[settingsIndex].itemIdentifier
-        toolbar.removeItem(at: settingsIndex)
-        toolbar.insertItem(withItemIdentifier: settingsIdentifier, at: sidebarIndex)
     }
 }

@@ -2,6 +2,29 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v15.0] — 2026-10-07
+
+### 🛋️ "Make Yourself at Home — Your Windows Already Did"
+
+#### 🛠️ Restoration & Spaces
+- **Minimized windows wait their turn** — Minimized and hidden windows keep their own saved match until they are shown again, with retries when they are unminimized. - By Jonathan M. Hollin
+- **More reliable window matching** — Captured window IDs are matched first, preventing similar or untitled windows from being swapped. Thanks @PerpetualBeta
+- **Spaces stay in sync** — Restores no longer activate apps parked on another Space, and live layouts capture active-Space changes.
+
+#### 🎯 Auto Layout & App Controls
+- **Choose the app that comes forward** — Pin a preferred foreground app for saved layouts and individual Auto Layout display setups.
+- **Fixed Command+Shift+R controls** — Configure the trigger per app; Auto Layout restores window geometry without sending a shortcut to whichever app happens to be active.
+
+#### ✨ A Warmer Welcome in the Notch
+- **Welcome Notch Pill** — An optional animated greeting appears on eligible full restores: the first eligible restore after launch, for a layout outside the two most recent restores, or after eight hours. Its sound is controlled independently.
+- **Sound conflicts are actionable** — “Go to…” jumps to the conflicting notification setting, scrolls it into view, and briefly highlights and flips the card
+
+#### 🎨 Main Window, Settings & Tour
+- **List or grid** — Switch the app cards between list and grid views, with quick per-window actions and clearer foreground-app controls.
+- **Personalized controls** — Choose menu bar icon styles, tune notification sounds, and refine restore behavior.
+- **Settings window follows the app** — Closing the main window also closes the separate Settings window.
+- **A more useful tour** — The guide adds back/forward arrows, an editable desktop shortcut, and refreshed Quick Key and Settings previews.
+
 ## [v14.8] — 2026-09-27
 
 ### 🪄 "Snap, Sleek, Settled"

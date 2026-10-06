@@ -520,7 +520,7 @@ struct LayoutStore: Codable {
     /// Per-event sound for macOS system notifications
     var systemSoundOnFullRestore: Bool = false
     var systemSoundOnSingleRestore: Bool = false
-    var systemSoundOnDisplayChange: Bool = true
+    var systemSoundOnDisplayChange: Bool = false
     var systemSoundOnSnapshotUpdate: Bool = false
     var systemSoundOnDesktopToggle: Bool = false
 
@@ -536,6 +536,13 @@ struct LayoutStore: Codable {
     var notchNotifyOnDisplayChange: Bool = true
     var notchNotifyOnSnapshotUpdate: Bool = true
     var notchNotifyOnDesktopToggle: Bool = true
+
+    /// Show the special animated Hello pill on eligible full restores.
+    /// New installs start with this opt-in effect disabled.
+    var welcomeNotchPillEnabled: Bool = false
+    /// Sound used by the special Hello pill, independent of regular full-restore alerts.
+    var welcomeNotchPillSoundEnabled: Bool = true
+    var welcomeNotchPillSoundName: String = SystemSound.welcome.rawValue
 
     /// When true, single app restore shows a quiet "Already in place" banner with no sound if the window was already in position.
     var quietSingleRestoreWhenInPlace: Bool = true
@@ -611,7 +618,7 @@ struct LayoutStore: Codable {
         // Per-event sound flags (system)
         systemSoundOnFullRestore              = try c.decodeIfPresent(Bool.self,                   forKey: .systemSoundOnFullRestore) ?? false
         systemSoundOnSingleRestore            = try c.decodeIfPresent(Bool.self,                   forKey: .systemSoundOnSingleRestore) ?? false
-        systemSoundOnDisplayChange            = try c.decodeIfPresent(Bool.self,                   forKey: .systemSoundOnDisplayChange) ?? true
+        systemSoundOnDisplayChange            = try c.decodeIfPresent(Bool.self,                   forKey: .systemSoundOnDisplayChange) ?? false
         systemSoundOnSnapshotUpdate           = try c.decodeIfPresent(Bool.self,                   forKey: .systemSoundOnSnapshotUpdate) ?? false
         systemSoundOnDesktopToggle            = try c.decodeIfPresent(Bool.self,                   forKey: .systemSoundOnDesktopToggle) ?? false
         systemSoundNameFullRestore            = migrateSound(try c.decodeIfPresent(String.self, forKey: .systemSoundNameFullRestore), fallback: SystemSound.stargaze.rawValue)
@@ -625,6 +632,10 @@ struct LayoutStore: Codable {
         notchNotifyOnDisplayChange            = try c.decodeIfPresent(Bool.self,                   forKey: .notchNotifyOnDisplayChange) ?? true
         notchNotifyOnSnapshotUpdate           = try c.decodeIfPresent(Bool.self,                   forKey: .notchNotifyOnSnapshotUpdate) ?? true
         notchNotifyOnDesktopToggle            = try c.decodeIfPresent(Bool.self,                   forKey: .notchNotifyOnDesktopToggle) ?? true
+        // Existing stores keep the pre-setting behavior; new LayoutStore() instances default off.
+        welcomeNotchPillEnabled               = try c.decodeIfPresent(Bool.self,                   forKey: .welcomeNotchPillEnabled) ?? true
+        welcomeNotchPillSoundEnabled          = try c.decodeIfPresent(Bool.self,                   forKey: .welcomeNotchPillSoundEnabled) ?? notchSoundOnFullRestore
+        welcomeNotchPillSoundName             = migrateSound(try c.decodeIfPresent(String.self, forKey: .welcomeNotchPillSoundName), fallback: SystemSound.welcome.rawValue)
     }
 
     init() {}

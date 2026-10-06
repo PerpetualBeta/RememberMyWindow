@@ -39,13 +39,17 @@ struct AutoSaveFile: Codable {
     /// Last frame seen for each window, newest first, and it never expires.
     /// See `AutoSaveStore.lastKnown`.
     var lastKnown: [WindowRecord] = []
+    /// Pinned frontmost app bundle ID per screen configuration.
+    var foregroundAppByScreenKey: [String: String] = [:]
 
     init(entries: [AutoSaveEntry] = [],
          displayEntries: [AutoSaveEntry] = [],
-         lastKnown: [WindowRecord] = []) {
+         lastKnown: [WindowRecord] = [],
+         foregroundAppByScreenKey: [String: String] = [:]) {
         self.entries = entries
         self.displayEntries = displayEntries
         self.lastKnown = lastKnown
+        self.foregroundAppByScreenKey = foregroundAppByScreenKey
     }
 
     /// Written by hand rather than synthesised, because synthesised decoding
@@ -58,6 +62,7 @@ struct AutoSaveFile: Codable {
         entries = try c.decodeIfPresent([AutoSaveEntry].self, forKey: .entries) ?? []
         displayEntries = try c.decodeIfPresent([AutoSaveEntry].self, forKey: .displayEntries) ?? []
         lastKnown = try c.decodeIfPresent([WindowRecord].self, forKey: .lastKnown) ?? []
+        foregroundAppByScreenKey = try c.decodeIfPresent([String: String].self, forKey: .foregroundAppByScreenKey) ?? [:]
     }
 }
 
@@ -137,6 +142,8 @@ final class AutoSaveStore: ObservableObject {
     /// of one record per moment. It is scoped by screen fingerprint, because a
     /// frame from another display setup is not an answer.
     @Published private(set) var lastKnown: [WindowRecord] = []
+    /// Pinned frontmost app bundle ID per screen configuration.
+    @Published private(set) var foregroundAppByScreenKey: [String: String] = [:]
     /// Set when the file existed but could not be read. Writing is refused
     /// while true, for the same reason `WindowManager.persist()` refuses.
     @Published private(set) var isUnreadable = false
@@ -184,6 +191,20 @@ final class AutoSaveStore: ObservableObject {
     /// five per configuration.
     func entries(forScreenKey screenKey: String) -> [AutoSaveEntry] {
         visibleEntries.filter { $0.screenKey == screenKey }
+    }
+
+    /// Preferred frontmost application bundle ID for a display setup when restored in Auto Layout mode.
+    func foregroundApp(forScreenKey screenKey: String) -> String? {
+        foregroundAppByScreenKey[screenKey]
+    }
+
+    func setForegroundApp(_ bundleID: String?, forScreenKey screenKey: String) {
+        if let bundleID = bundleID {
+            foregroundAppByScreenKey[screenKey] = bundleID
+        } else {
+            foregroundAppByScreenKey.removeValue(forKey: screenKey)
+        }
+        write()
     }
 
     private let fileURL: URL
@@ -374,7 +395,8 @@ final class AutoSaveStore: ObservableObject {
         do {
             let data = try JSONEncoder().encode(AutoSaveFile(entries: entries,
                                                              displayEntries: displayEntries,
-                                                             lastKnown: lastKnown))
+                                                             lastKnown: lastKnown,
+                                                             foregroundAppByScreenKey: foregroundAppByScreenKey))
             try data.write(to: fileURL, options: .atomic)
             log("auto-save: wrote \(entries.first?.windowCount ?? 0) window(s), \(entries.count) in ring, \(displayEntries.count) display configuration(s), \(lastKnown.count) remembered")
         } catch {
@@ -413,6 +435,7 @@ final class AutoSaveStore: ObservableObject {
             let file = try JSONDecoder().decode(AutoSaveFile.self, from: data)
             entries = file.entries
             lastKnown = file.lastKnown
+            foregroundAppByScreenKey = file.foregroundAppByScreenKey
 
             // Files written before per-display retention only have the recent
             // ring. Merge it with the new field, then recover configurations

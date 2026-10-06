@@ -6,16 +6,20 @@ import SwiftUI
 // Bi-directional localization helper. 
 // Takes the language explicitly to ensure SwiftUI re-renders when it changes.
 
+extension AppLanguage {
+    /// Whether this language setting resolves to the app's Hebrew localization.
+    var usesHebrew: Bool {
+        switch self {
+        case .hebrew:  return true
+        case .english: return false
+        case .auto:    return Locale.current.language.languageCode?.identifier == "he"
+        }
+    }
+}
+
 extension String {
     func localized(_ lang: AppLanguage) -> String {
-        let isHebrew: Bool
-        switch lang {
-        case .hebrew:  isHebrew = true
-        case .english: isHebrew = false
-        case .auto:    isHebrew = Locale.current.language.languageCode?.identifier == "he"
-        }
-        
-        if isHebrew {
+        if lang.usesHebrew {
             return translationDict[self] ?? self
         } else {
             return reverseDict[self] ?? self
@@ -53,6 +57,30 @@ private let translationDict: [String: String] = [
     "Next": "הבא",
     "Get Started": "בואו נתחיל",
     "Preparing window tracking…": "מכין את מעקב החלונות…",
+    "What's New in v15.0": "מה חדש ב־v15.0",
+    "Release notes since v14.8": "הערות גרסה מאז v14.8",
+    "Previous tour page": "העמוד הקודם במדריך",
+    "Next tour page": "העמוד הבא במדריך",
+    "Tour page %d of %d": "עמוד %d מתוך %d במדריך",
+    "More reliable window restoration": "שחזור חלונות אמין יותר",
+    "Minimized and hidden windows keep their matched saved slot until shown; restoration retries when they are unminimized.": "חלונות ממוזערים ומוסתרים שומרים על ההתאמה למיקום השמור עד להצגתם מחדש; השחזור מתבצע שוב כשהם יוצאים ממצב ממוזער.",
+    "Matching by captured window ID prevents similar windows from being swapped.": "התאמה לפי מזהה החלון שנשמר מונעת החלפה בין חלונות דומים.",
+    "Smarter Space handling": "ניהול חכם יותר של Spaces",
+    "Space-aware restores avoid activating apps parked elsewhere, and live layouts update when the active Space changes.": "שחזור מודע ל־Spaces נמנע מהפעלת יישומים שנמצאים ב־Space אחר, והפריסה החיה מתעדכנת כשמשתנה ה־Space הפעיל.",
+    "Auto Layout and app controls": "Auto Layout ובקרות יישומים",
+    "Choose which app comes forward for each display setup, and set Command+Shift+R behavior per app.": "אפשר לבחור איזה יישום יובא לקדמת המסך בכל תצורת צגים, ולהגדיר את פעולת Command+Shift+R לכל יישום.",
+    "Auto Layout restores window geometry without sending a shortcut to whichever app happens to be active.": "Auto Layout משחזר את מיקום החלונות בלי לשלוח קיצור מקשים ליישום הפעיל במקרה.",
+    "A warmer welcome in the notch": "ברכת פתיחה נעימה יותר במגרעת",
+    "The optional animated Welcome Notch Pill appears on eligible full restores: the first after launch, for a layout outside the two most recent restores, or after eight hours.": "התראת Welcome Notch Pill מונפשת ואופציונלית מופיעה בשחזור מלא מתאים: בשחזור המתאים הראשון לאחר ההפעלה, בפריסה שאינה בין שתי הפריסות האחרונות ששוחזרו, או לאחר שמונה שעות.",
+    "Its sound can be controlled independently.": "אפשר לשלוט בצליל שלה בנפרד.",
+    "Clearer controls and settings": "בקרות והגדרות ברורות יותר",
+    "Switch between list and grid views, use per-window actions, and choose menu bar icon styles.": "אפשר לעבור בין תצוגות רשימה ורשת, להשתמש בפעולות ישירות לכל חלון, ולבחור סגנונות לסמל שורת התפריטים.",
+    "Notification sounds can follow macOS volume at 80%, with quick previews for fine-tuning.": "צלילי ההתראות יכולים לעקוב אחר עוצמת הקול של macOS בגובה 80%, עם תצוגות מקדימות מהירות לכוונון.",
+    "When notification sounds conflict, Go to… takes you to the conflicting setting and briefly highlights and flips its card, even when macOS Reduce Motion is enabled.": "כשיש התנגשות בין צלילי התראות, האפשרות „עבור אל…” קופצת להגדרה המתנגשת ומדגישה והופכת זמנית את הכרטיס שלה, גם כאשר האפשרות Reduce Motion של macOS מופעלת.",
+    "Tour and app polish": "שיפורים במדריך ובאפליקציה",
+    "The tour adds back and forward arrows, a v15.0 release intro, and refined personalization, shortcut, Quick Key, and Settings walkthroughs.": "המדריך כולל חיצי חזרה והמשך, מבוא לגרסת v15.0, והתאמה אישית משופרת, קיצור שולחן עבודה ניתן לעריכה, ותצוגות Quick Key והגדרות מעודכנות.",
+    "The separate Settings window now closes when the main window closes.": "חלון ההגדרות הנפרד נסגר כעת יחד עם החלון הראשי.",
+    "CI installs create-dmg before packaging, and the app now includes the Welcome Notch view and Quick Key animation assets.": "תהליך CI מתקין את create-dmg לפני האריזה, והאפליקציה כוללת כעת את תצוגת Welcome Notch ואת תמונות האנימציה של Quick Key.",
     // Slide 0
     "Your Windows, Always Where You Left Them": "החלונות שלך, תמיד במקום שהשארת אותם",
     "Save your layout once. It'll be there every time you need it.": "שמור את הסידור פעם אחת. הוא יהיה שם בכל פעם שתזדקק לו.",
@@ -68,6 +96,9 @@ private let translationDict: [String: String] = [
     // Slide 4 — desktop toggle
     "Hide Everything, Instantly": "הסתר הכל, מיד",
     "Press %@ and every window vanishes — desktop is clean. Press again and they all come back exactly where they were.": "לחץ %@ וכל החלונות נעלמים — שולחן עבודה נקי. לחץ שוב והם חוזרים בדיוק למקומם.",
+    "Press this shortcut to hide all windows and reveal the desktop. Press it again to bring them back.": "לחץ על קיצור המקשים הזה כדי להסתיר את כל החלונות ולחשוף את שולחן העבודה. לחץ עליו שוב כדי להציג אותם מחדש.",
+    "Click to record a new shortcut": "לחץ כדי להקליט קיצור מקשים חדש",
+    "Press a key combination — Esc cancels": "הקש על צירוף מקשים — \u{2066}Esc\u{2069} לביטול",
     // Slide 5 — Cmd+Shift+R
     "Do More After Every Restore": "עשה יותר אחרי כל שחזור",
     "After restoring windows, RememberMyWindows can fire ⌘⇧R in your active app — Reading Mode in Safari, Hard Reload in Chrome, or PiP for a video.": "לאחר שחזור החלונות, RememberMyWindows יכול לשלוח ⌘⇧R ליישום הפעיל שלך — מצב קריאה בספארי, רענון מלא בכרום, או PiP לסרטון.",
@@ -129,6 +160,9 @@ private let translationDict: [String: String] = [
     "Muted": "מושתק",
     "Sound on for this event": "השמעת צליל מופעלת לאירוע זה",
     "Sound off for this event": "השמעת צליל מושתקת לאירוע זה",
+    "This event already has sound enabled for %@. Turn it off there to use sound here.": "הצליל לאירוע הזה כבר מופעל ב־%@. כבה אותו שם כדי להשתמש בצליל כאן.",
+    "Go to %@ settings…": "עבור להגדרות %@…",
+    "Jumps to and highlights the conflicting sound setting.": "עובר להגדרת הצליל המתנגשת ומדגיש אותה.",
     "Preview sound": "השמעת דוגמה",
     // Encore Tones
     "Welcome": "Welcome (ברוכים הבאים)",
@@ -286,6 +320,7 @@ private let translationDict: [String: String] = [
     "When all windows are restored to their saved layout": "כאשר כל החלונות משוחזרים לפריסה השמורה שלהם",
     "Single app restores": "שחזור יישום בודד",
     "When a single frontmost app or auto-restore fires": "כאשר מופעל שחזור יישום פעיל בודד או שחזור אוטומטי",
+    "When an app is launched or auto-restored": "כאשר יישום מופעל או משוחזר אוטומטית",
     "Display connections & changes": "חיבורים ושינויי צגים",
     "When monitors connect, disconnect, or reconnect": "כאשר צגים מתחברים, מתנתקים או מתחברים מחדש",
     "Snapshot & app updates": "עדכוני מפגשים ויישומים",
@@ -293,6 +328,7 @@ private let translationDict: [String: String] = [
     // Front App tooltip
     "Front App": "יישום קדמי",
     "Pin which app comes to the front after a full restore — tap the layers icon on any app row in a saved session.": "נעץ איזה יישום יבוא לקדמת המסך לאחר שחזור מלא — הקש על סמל השכבות בשורת כל יישום במפגש שמור.",
+    "Pin which app comes to the front after a full restore — tap the layers icon on any app row in captured windows.": "נעץ איזה יישום יבוא לקדמת המסך לאחר שחזור מלא — הקש על סמל השכבות בשורת כל יישום בחלונות שנלכדו.",
     // Single App Restore relationship hint
     "When either trigger fires, **Trigger Command on Single Restore** in Active App Command Trigger also applies.": "כאשר אחד מהטריגרים מופעל, ההגדרה **הפעל פקודה בשחזור יישום בודד** בטריגר פקודת יישום פעיל חלה גם היא.",
     // Active App Command Trigger
@@ -336,6 +372,9 @@ private let translationDict: [String: String] = [
     // Appearance
     "Appearance": "מראה",
     "Notch Notification": "התראות מגרעת",
+    "macOS Notification Center": "מרכז העדכונים של macOS",
+    "Welcome Notch Pill": "התראת פתיחה במגרעת",
+    "Shows on the first eligible restore after launch, for a layout not among the last two completed restores, or when 8 hours have passed since the pill last appeared.": "מוצגת בשחזור המתאים הראשון לאחר הפעלת האפליקציה, עבור פריסה שאינה בין שתי הפריסות ששוחזרו במלואן לאחרונה, או כאשר חלפו 8 שעות מאז הופעתה האחרונה.",
     "Show layout restore alerts from the notch": "הצג התראות שחזור מהמגרעת",
     "Show layout restore alerts sliding smoothly down from the MacBook notch": "מציג התראות שחזור מרהיבות המחליקות בצורה נעימה אל מחוץ למגרעת המסך (Notch)",
     "Theme Color": "צבע ערכת נושא",
@@ -464,7 +503,9 @@ private let translationDict: [String: String] = [
     "SCREEN ID": "מזהה מסך",
     "Windows": "חלונות",
     "windows": "חלונות",
+    "%@/%@ windows": "שוחזרו %@ מתוך %@ חלונות",
     "%@ · %@/%@ windows": "שוחזרו %@ מתוך %@ חלונות · %@",
+    "Preview · %@ · %@/%@ windows": "תצוגה מקדימה · %@ · %@/%@ חלונות",
     "Created": "נוצר",
     "Updated": "עודכן",
     "External Screens Missing": "מסכים חיצוניים חסרים",
@@ -600,6 +641,9 @@ private let translationDict: [String: String] = [
     "Enable all app alerts and sounds": "הפעל את כל ההתראות והצלילים באפליקציה",
     "Play sounds for alerts": "השמע צלילים בעת התראות",
     "Active App Command Trigger (⌘⇧R)": "טריגר פקודת יישום פעיל (⌘⇧R)",
+    "Command Trigger active for this app": "טריגר פקודה מופעל עבור יישום זה",
+    "Disable Command Trigger for this app": "השבת טריגר פקודה עבור יישום זה",
+    "Enable Command Trigger for this app": "הפעל טריגר פקודה עבור יישום זה",
     "Automatically run a full layout restore when the windows come back": "הפעל שחזור פריסה מלא באופן אוטומטי בעת חזרת החלונות",
     "Restore layout on unhide": "שחזר פריסה בעת ביטול הסתרה",
     "Quickly hide/show all windows across your desktop": "הסתר או הצג במהירות את כל החלונות בשולחן העבודה",

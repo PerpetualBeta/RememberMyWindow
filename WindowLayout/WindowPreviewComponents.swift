@@ -683,6 +683,19 @@ struct LayoutPreviewView: View {
     // MARK: - Classic 2D Preview (Exact restoration from last week for Saved Sessions & Inspector Mini-Map)
     
     private var classic2DBody: some View {
+        Group {
+            if isMenubarThumbnail {
+                classic2DCanvas
+                    .padding(10)
+            } else {
+                classic2DCanvas
+                    .padding(10)
+                    .liquidGlass(cornerRadius: 14, style: .card)
+            }
+        }
+    }
+
+    private var classic2DCanvas: some View {
         GeometryReader { geo in
             let boundingBox = calculateBoundingBox()
             let scale = calculateScale(for: geo.size, boundingBox: boundingBox)
@@ -722,8 +735,6 @@ struct LayoutPreviewView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(10)
-        .liquidGlass(cornerRadius: 14, style: .card)
     }
 
     /// `zIndex` is captured with 0 as the front-most window. Reveal the
@@ -1022,10 +1033,10 @@ struct LayoutPreviewView: View {
 
             // Compute front-to-back peel data for each window
             let peelDataMap: [UUID: WindowPeelData] = {
-                guard centerZoneWeight > 0.001, totalRecords > 0 else { return [:] }
+                guard centerZoneWeight > 0.001, !frontToBackRecords.isEmpty else { return [:] }
                 var map: [UUID: WindowPeelData] = [:]
                 
-                if totalRecords == 1 {
+                if frontToBackRecords.count == 1 {
                     let rec = frontToBackRecords[0]
                     let scale = 1.0 + CGFloat(scrubProgress) * 0.80 * centerZoneWeight
                     let lift = scrubProgress * 22.0 * centerZoneWeight

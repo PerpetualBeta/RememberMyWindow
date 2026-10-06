@@ -399,6 +399,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+
+        nc.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let closingWindow = notification.object as? NSWindow else { return }
+
+            let isClosingMainWindow = MainActor.assumeIsolated {
+                self?.isMainWindow(closingWindow) ?? false
+            }
+            guard isClosingMainWindow else { return }
+
+            // Wait until the main window finishes closing before dismissing
+            // the separate SwiftUI Settings scene.
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.closeSettingsWindow()
+                }
+            }
+        }
     }
 
     private func updateActivationPolicy() {
@@ -485,6 +502,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func isMainWindow(_ w: NSWindow) -> Bool {
         w.title == "RememberMyWindows" || w.identifier?.rawValue.contains("main") == true
+    }
+
+    private func closeSettingsWindow() {
+        for window in NSApp.windows where isSettingsWindow(window) {
+            window.performClose(nil)
+        }
+    }
+
+    private func isSettingsWindow(_ w: NSWindow) -> Bool {
+        w.title == "Settings" || w.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true
     }
 
     // MARK: - Status Item Setup

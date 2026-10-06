@@ -28,6 +28,16 @@ private func axValue(_ ref: CFTypeRef?) -> AXValue? {
     return (ref as! AXValue)
 }
 
+struct DisplayConnectionRestoreContext: Sendable {
+    let title: String
+    let showHelloPill: Bool
+}
+
+private struct DisplayConnectionRestoreRequest {
+    let title: String
+    let sendsSystemNotification: Bool
+}
+
 @MainActor
 final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate, UNUserNotificationCenterDelegate {
 
@@ -178,6 +188,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let restoredCount: Int
         let totalCount: Int
         let connectedDisplayNames: [String]
+        let displayConnection: DisplayConnectionRestoreContext?
         let shouldSendShortcut: Bool
     }
     private var pendingUnlockAction: PendingUnlockRestoreAction?
@@ -190,6 +201,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// restores, the unlocked ones logged no AX errors and the locked or
     /// lock-spanning ones logged seven and eleven. See `restoreHeldForUnlock()`.
     private var displayRestoreHeldForUnlock = false
+    private var pendingDisplayConnectionTitle: String?
 
     /// What a restore held back for one app because it was not displayed.
     struct HeldUntilShown {
@@ -477,6 +489,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             self,
             selector: #selector(screenUnlockedReceived),
             name: NSNotification.Name("com.apple.screenIsUnlocked"),
+            object: nil
+        )
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleTestWelcomeNotchNotification),
+            name: NSNotification.Name("com.netanel.remembermywindows.triggerWelcomeNotch"),
             object: nil
         )
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -904,6 +922,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     ///   display reconnecting, for instance. Those honour the Auto layout when
     ///   it is switched on. A restore the user asked for stays as it was.
     func restoreNow(animated: Bool? = nil, triggerSubtitle: String? = nil, automatic: Bool = false) {
+        restoreNow(
+            animated: animated,
+            triggerSubtitle: triggerSubtitle,
+            automatic: automatic,
+            displayConnectionRequest: nil
+        )
+    }
+
+    private func restoreNow(
+        animated: Bool? = nil,
+        triggerSubtitle: String? = nil,
+        automatic: Bool,
+        displayConnectionRequest: DisplayConnectionRestoreRequest?
+    ) {
         if automatic || store.autoSaveEnabled {
             // Ask the one place that knows how to choose. Reading
             // autoLayoutSnapshot directly here is what made a reconnected
@@ -916,8 +948,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             // automaticRestoreSnapshot() tries anyway.
             guard let source = automaticRestoreSnapshot() else {
                 statusMessage = "No saved layout for current display config"
+                deliverDisplayConnectionNotification(displayConnectionRequest, showHelloPill: false)
                 return
             }
+            let displayConnection = prepareDisplayConnectionRestore(
+                displayConnectionRequest,
+                layoutID: source.snapshot.id.uuidString
+            )
             if source.isAuto {
                 log("Restoring the Auto layout rather than a saved session — Auto is switched on",
                     level: .necessary, type: .autoSave)
@@ -925,7 +962,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             restore(snapshot: source.snapshot,
                     animated: animated ?? store.restoreAnimated,
                     skipCommandSend: source.isAuto || store.autoSaveEnabled,
-                    triggerSubtitle: triggerSubtitle)
+                    triggerSubtitle: triggerSubtitle,
+                    displayConnection: displayConnection)
             return
         }
         let fp = ScreenFingerprint.current()
@@ -941,10 +979,70 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
         guard let snapshot = candidate else {
             statusMessage = "No saved layout for current display config"
+            deliverDisplayConnectionNotification(displayConnectionRequest, showHelloPill: false)
             return
         }
+        let displayConnection = prepareDisplayConnectionRestore(
+            displayConnectionRequest,
+            layoutID: snapshot.id.uuidString
+        )
         let anim = animated ?? store.restoreAnimated
-        restore(snapshot: snapshot, animated: anim, triggerSubtitle: triggerSubtitle)
+        restore(
+            snapshot: snapshot,
+            animated: anim,
+            triggerSubtitle: triggerSubtitle,
+            displayConnection: displayConnection
+        )
+    }
+
+    private func prepareDisplayConnectionRestore(
+        _ request: DisplayConnectionRestoreRequest?,
+        layoutID: String
+    ) -> DisplayConnectionRestoreContext? {
+        guard let request else { return nil }
+        let showHelloPill = shouldShowHelloPillForDisplayConnectionRestore(layoutID: layoutID)
+        deliverDisplayConnectionNotification(request, showHelloPill: showHelloPill)
+        return DisplayConnectionRestoreContext(title: request.title, showHelloPill: showHelloPill)
+    }
+
+    private func deliverDisplayConnectionNotification(
+        _ request: DisplayConnectionRestoreRequest?,
+        showHelloPill: Bool
+    ) {
+        guard let request else { return }
+        if request.sendsSystemNotification {
+            deliverNotification(
+                type: .displayChange,
+                title: request.title,
+                subtitle: "Restoring layout...",
+                suppressNotch: showHelloPill
+            )
+        } else if !showHelloPill {
+            // A restore held until unlock had no display-change Notification
+            // Center alert before the lock. Keep that behavior while retaining
+            // the usual notch fallback when the Hello pill will not take its place.
+            deliverDisplayConnectionNotchFallback(title: request.title)
+        }
+    }
+
+    private func deliverDisplayConnectionNotchFallback(title: String) {
+        deliverNotification(
+            type: .displayChange,
+            title: title,
+            subtitle: "Restoring layout...",
+            suppressSystemNotification: true
+        )
+    }
+
+    private func shouldShowHelloPillForDisplayConnectionRestore(layoutID: String) -> Bool {
+        let notificationsEnabled = UserDefaults.standard.object(forKey: "masterNotificationsEnabled") as? Bool ?? true
+        let notchNotificationsEnabled = UserDefaults.standard.object(forKey: "showNotchNotification") as? Bool ?? true
+        guard notificationsEnabled,
+              notchNotificationsEnabled,
+              !isScreenLocked,
+              store.notchNotifyOnFullRestore else { return false }
+
+        return evaluateWelcomeNotchPill(for: layoutID)
     }
 
     /// Checks if a snapshot can be restored based on current screen configuration.
@@ -1056,6 +1154,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
         store.snapshots[key] = snap
         persist()
+    }
+
+    /// Sets or toggles the preferred app to bring to front for an Auto Layout display configuration.
+    func setAutoLayoutForegroundApp(screenKey: String, bundleID: String) {
+        guard let store = autoSaveStore else { return }
+        if store.foregroundApp(forScreenKey: screenKey) == bundleID {
+            store.setForegroundApp(nil, forScreenKey: screenKey)
+            log("Cleared auto-layout foreground app for display", level: .moderate, type: .system)
+        } else {
+            store.setForegroundApp(bundleID, forScreenKey: screenKey)
+            bringAppToFront(bundleID: bundleID)
+            log("Set auto-layout foreground app to '\(bundleID)' for display", level: .moderate, type: .system)
+        }
+        objectWillChange.send()
     }
 
     func deleteSnapshot(key: String) {
@@ -1565,7 +1677,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             updatedAt: entry.capturedAt,
             location: nil,
             isAutoSave: true,
-            foregroundBundleID: nil,
+            foregroundBundleID: autoSaveStore?.foregroundApp(forScreenKey: entry.screenKey),
             commandExcludedBundleIDs: []
         )
     }
@@ -1960,7 +2072,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 try? await Task.sleep(nanoseconds: Self.restoreInFlightPollNanoseconds)
             }
             guard let self, !self.isScreenLocked else { return }
-            self.restoreNow(automatic: true)
+            let connectionRequest = self.pendingDisplayConnectionTitle.map {
+                DisplayConnectionRestoreRequest(title: $0, sendsSystemNotification: false)
+            }
+            self.pendingDisplayConnectionTitle = nil
+            self.restoreNow(automatic: true, displayConnectionRequest: connectionRequest)
         }
     }
 
@@ -2007,6 +2123,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             }
 
             // 3. Deliver deferred Notch Notification
+            let helloPillEligibility = self.evaluateAndRecordCompletedFullRestoreForWelcomePill(
+                layoutID: pending.snapshot.id.uuidString
+            )
             self.deliverNotification(
                 type: .fullRestore,
                 title: lz("Layout Restored"),
@@ -2014,7 +2133,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     snapshotName: pending.snapshot.name,
                     restoredCount: pending.restoredCount,
                     totalCount: pending.totalCount
-                )
+                ),
+                layoutID: pending.snapshot.id.uuidString,
+                displayConnection: pending.displayConnection,
+                helloPillSubtitles: self.layoutRestoreWelcomePillSubtitles(
+                    snapshotName: pending.snapshot.name,
+                    restoredCount: pending.restoredCount,
+                    totalCount: pending.totalCount
+                ),
+                helloPillEligibility: helloPillEligibility
             )
 
             // 4. Send Command+Shift+R shortcut if enabled
@@ -2367,6 +2494,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         
         // Even if we don't know the name yet, remember that a screen was added
         let hasAnyAddedScreens = !addedScreens.isEmpty
+        if !hasAnyAddedScreens {
+            pendingConnectedNames.removeAll()
+        }
+
+        // This is scoped to an added display. Other display changes keep their
+        // existing notification path and never become Welcome subtitles.
+        pendingDisplayConnectionTitle = nil
+        let displayConnectionTitle: String? = {
+            guard hasAnyAddedScreens else { return nil }
+            let names = pendingConnectedNames.sorted()
+            guard !names.isEmpty else { return "Display Connected" }
+            return "\(names.joined(separator: " & ")) Connected"
+        }()
+        let displayChangeTitle = displayConnectionTitle ?? "Display Configuration Changed"
 
         // Nothing below starts a restore unless the branch just after this does,
         // so release the hold on every other path or auto-save stays switched
@@ -2405,26 +2546,30 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 if self.isScreenLocked {
                     self.log("🔒 Screen is locked — holding the restore until unlock; window positions set behind the lock do not stick", level: .necessary, type: .restore)
                     self.displayRestoreHeldForUnlock = true
+                    self.pendingDisplayConnectionTitle = displayConnectionTitle
                     self.pendingConnectedNames.removeAll()
                     return
                 }
 
-                // Show initial "Connected" notification (or send system notification if locked)
-                let names = Array(self.pendingConnectedNames)
-                let notifTitle: String
-                if !names.isEmpty {
-                    let joinedNames = names.joined(separator: " & ")
-                    notifTitle = "\(joinedNames) Connected"
-                } else if hasAnyAddedScreens {
-                    notifTitle = "Display Connected"
+                // For added displays, restore selection decides whether this
+                // is the ordinary connection alert or the first Welcome
+                // subtitle. Configuration changes keep their existing alert.
+                if let displayConnectionTitle {
+                    self.restoreNow(
+                        automatic: true,
+                        displayConnectionRequest: DisplayConnectionRestoreRequest(
+                            title: displayConnectionTitle,
+                            sendsSystemNotification: true
+                        )
+                    )
                 } else {
-                    notifTitle = "Display Configuration Changed"
+                    self.deliverNotification(
+                        type: .displayChange,
+                        title: displayChangeTitle,
+                        subtitle: "Restoring layout..."
+                    )
+                    self.restoreNow(automatic: true)
                 }
-
-                self.deliverNotification(type: .displayChange, title: notifTitle, subtitle: "Restoring layout...")
-
-                // Start restoration
-                self.restoreNow(automatic: true)
                 
                 // Clear the pending names
                 self.pendingConnectedNames.removeAll()
@@ -2444,6 +2589,81 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     private var notchWindow: NotchNotificationWindow?
+    private var welcomeNotchWindow: NotchWelcomeWindow?
+    private var isFirstRestoreSinceLaunch: Bool = true
+    private static let welcomePillRestoreHistoryKey = "welcomePillRecentFullRestoreLayoutIDs"
+    private static let welcomePillCooldown: TimeInterval = 8 * 60 * 60
+
+    /// Returns whether an eligible full restore should show the Hello pill.
+    /// It shows on the first eligible restore after launch, when the layout is
+    /// absent from the two most recent completed restores, or after eight hours.
+    func evaluateWelcomeNotchPill(for layoutKey: String?) -> Bool {
+        guard store.welcomeNotchPillEnabled,
+              let layoutKey,
+              !layoutKey.isEmpty else { return false }
+
+        let recentLayoutIDs = UserDefaults.standard.stringArray(forKey: Self.welcomePillRestoreHistoryKey) ?? []
+        let lastDate = UserDefaults.standard.object(forKey: "lastWelcomeNotchDate") as? Date
+
+        // 1. First eligible restore after app launch.
+        if isFirstRestoreSinceLaunch {
+            return true
+        }
+
+        // 2. The restored layout is different from each of the two most recent
+        // completed full restores. Repeated IDs remain separate restore events.
+        if !recentLayoutIDs.contains(layoutKey) {
+            return true
+        }
+
+        // 3. Eight hours have elapsed since the last pill.
+        guard let lastDate else { return true }
+        return Date().timeIntervalSince(lastDate) >= Self.welcomePillCooldown
+    }
+
+    /// Evaluates against prior restores, then records this completed restore.
+    /// Call once per completed full restore, regardless of notification settings.
+    private func evaluateAndRecordCompletedFullRestoreForWelcomePill(layoutID: String) -> Bool {
+        guard !layoutID.isEmpty else { return false }
+
+        let shouldShowPill = evaluateWelcomeNotchPill(for: layoutID)
+        let defaults = UserDefaults.standard
+        var recentLayoutIDs = defaults.stringArray(forKey: Self.welcomePillRestoreHistoryKey) ?? []
+        recentLayoutIDs.append(layoutID)
+        defaults.set(Array(recentLayoutIDs.suffix(2)), forKey: Self.welcomePillRestoreHistoryKey)
+        return shouldShowPill
+    }
+
+    /// Directly presents the Apple-style glass Hello notch notification pill.
+    func showWelcomeNotchPillDirect(
+        subtitle: String,
+        subsequentSubtitles: [String] = [],
+        playSound: Bool = true
+    ) {
+        self.notchWindow?.dismiss()
+        self.welcomeNotchWindow?.dismiss()
+        let welcomeWin = NotchWelcomeWindow(
+            subtitle: subtitle,
+            subsequentSubtitles: subsequentSubtitles
+        )
+        welcomeWin.isScreenLocked = self.isScreenLocked
+        self.welcomeNotchWindow = welcomeWin
+        welcomeWin.show(subtitle: subtitle)
+
+        let masterSoundEnabled = UserDefaults.standard.object(forKey: "masterSoundEnabled") as? Bool ?? true
+        if playSound && self.store.welcomeNotchPillSoundEnabled && masterSoundEnabled {
+            SystemSound.playSound(named: self.store.welcomeNotchPillSoundName, volume: self.effectiveNotchSoundVolume)
+        }
+    }
+
+    @objc private func handleTestWelcomeNotchNotification(_ notification: Notification) {
+        let testSubtitle = (notification.userInfo?["subtitle"] as? String) ?? "Home · 6/6 windows"
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.showWelcomeNotchPillDirect(subtitle: testSubtitle)
+        }
+    }
 
     private func layoutRestoreNotificationSubtitle(
         snapshotName: String,
@@ -2469,6 +2689,36 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         return subtitle
+    }
+
+    /// Queues the saved layout identity separately from the full restore result.
+    private func layoutRestoreWelcomePillSubtitles(
+        snapshotName: String,
+        restoredCount: Int,
+        totalCount: Int,
+        deferredCount: Int = 0
+    ) -> [String] {
+        let isolatedRestoredCount = "\u{2066}\(restoredCount)\u{2069}"
+        let isolatedTotalCount = "\u{2066}\(totalCount)\u{2069}"
+        var resultSubtitle = String(
+            format: lz("%@/%@ windows"),
+            isolatedRestoredCount,
+            isolatedTotalCount
+        )
+
+        if deferredCount > 0 {
+            let isolatedDeferredCount = "\u{2066}\(deferredCount)\u{2069}"
+            resultSubtitle += " · \(isolatedDeferredCount) \(lz("waiting for their Space"))"
+        }
+
+        return [snapshotName, resultSubtitle]
+    }
+
+    /// Splits the already-localized auto-restore subtitle without changing its copy.
+    private func autoRestoreWelcomePillSubtitles(from subtitle: String) -> [String] {
+        let components = subtitle.components(separatedBy: " · ")
+        guard components.count > 1 else { return [subtitle] }
+        return [components[0], components.dropFirst().joined(separator: " · ")]
     }
 
 
@@ -2595,7 +2845,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         bundleID: String? = nil,
         appIcon: NSImage? = nil,
         triggerKey: String? = nil,
-        silent: Bool = false
+        layoutID: String? = nil,
+        silent: Bool = false,
+        suppressNotch: Bool = false,
+        suppressSystemNotification: Bool = false,
+        displayConnection: DisplayConnectionRestoreContext? = nil,
+        helloPillSubtitles: [String]? = nil,
+        helloPillEligibility: Bool? = nil
     ) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -2604,7 +2860,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             let masterSoundEnabled = UserDefaults.standard.object(forKey: "masterSoundEnabled") as? Bool ?? true
             // 1. Notch Notification (suppressed while screen is locked to prevent LockScreen compositor flickering)
             let showNotch = UserDefaults.standard.object(forKey: "showNotchNotification") as? Bool ?? true
-            if showNotch && !self.isScreenLocked {
+            var notchSoundWasPlayed = false
+            if showNotch && !self.isScreenLocked && !suppressNotch {
                 var shouldShowNotch = false
                 var notchSoundEnabled = false
                 var notchSoundName = self.store.defaultNotificationSound
@@ -2636,23 +2893,55 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
 
                 if shouldShowNotch {
-                    if let window = self.notchWindow, window.isVisible, window.isCompact == isCompact {
-                        window.update(title: title, subtitle: subtitle, bundleID: bundleID, appIcon: appIcon)
-                    } else {
-                        self.notchWindow?.dismiss()
-                        let window = NotchNotificationWindow(title: title, subtitle: subtitle, isCompact: isCompact, bundleID: bundleID, appIcon: appIcon)
-                        self.notchWindow = window
-                        window.show()
-                    }
+                    let shouldShowHelloPill: Bool = {
+                        guard type == .fullRestore,
+                              let layoutID,
+                              !layoutID.isEmpty,
+                              self.store.welcomeNotchPillEnabled else { return false }
+                        if let helloPillEligibility {
+                            return helloPillEligibility
+                        }
+                        if let displayConnection {
+                            return displayConnection.showHelloPill
+                        }
+                        return self.evaluateWelcomeNotchPill(for: layoutID)
+                    }()
 
-                    if notchSoundEnabled && !silent {
-                        SystemSound.playSound(named: notchSoundName, volume: self.effectiveNotchSoundVolume)
+                    if shouldShowHelloPill {
+                        self.isFirstRestoreSinceLaunch = false
+                        UserDefaults.standard.set(Date(), forKey: "lastWelcomeNotchDate")
+                        var pillSubtitles = helloPillSubtitles ?? [subtitle]
+                        if let connectionTitle = displayConnection?.title, !connectionTitle.isEmpty {
+                            pillSubtitles.insert(connectionTitle, at: 0)
+                        }
+                        pillSubtitles.removeAll(where: \.isEmpty)
+
+                        self.showWelcomeNotchPillDirect(
+                            subtitle: pillSubtitles.first ?? subtitle,
+                            subsequentSubtitles: Array(pillSubtitles.dropFirst())
+                        )
+                        notchSoundWasPlayed = self.store.welcomeNotchPillSoundEnabled && masterSoundEnabled
+                    } else {
+                        if let window = self.notchWindow, window.isVisible, window.isCompact == isCompact {
+                            window.update(title: title, subtitle: subtitle, bundleID: bundleID, appIcon: appIcon)
+                        } else {
+                            self.notchWindow?.dismiss()
+                            self.welcomeNotchWindow?.dismiss()
+                            let window = NotchNotificationWindow(title: title, subtitle: subtitle, isCompact: isCompact, bundleID: bundleID, appIcon: appIcon)
+                            self.notchWindow = window
+                            window.show()
+                        }
+
+                        if notchSoundEnabled && !silent {
+                            SystemSound.playSound(named: notchSoundName, volume: self.effectiveNotchSoundVolume)
+                            notchSoundWasPlayed = true
+                        }
                     }
                 }
             }
 
             // 2. macOS System Notification (UNUserNotificationCenter)
-            if self.store.showSystemNotification && !silent {
+            if self.store.showSystemNotification && !silent && !suppressSystemNotification {
                 var shouldSend = false
                 var systemSoundEnabled = false
                 var systemSoundName = self.store.defaultNotificationSound
@@ -2702,7 +2991,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     let osTitle = "\(title)\(triggerSuffix)"
                     let osBody = (subtitle == "fn" || subtitle == "⇪" || subtitle == "⇪⇪") ? "" : subtitle
 
-                    self.sendSystemNotification(title: osTitle, subtitle: osBody, playSound: systemSoundEnabled && !silent, soundName: systemSoundName)
+                    self.sendSystemNotification(
+                        title: osTitle,
+                        subtitle: osBody,
+                        playSound: systemSoundEnabled && !silent && !notchSoundWasPlayed,
+                        soundName: systemSoundName
+                    )
                 }
             }
         }
@@ -3690,7 +3984,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     // MARK: - Restore
 
-    private func restore(snapshot: LayoutSnapshot, animated: Bool, specificAppBundleID: String? = nil, isAppLaunch: Bool = false, showNotification: Bool = true, skipCommandSend: Bool = false, triggerSubtitle: String? = nil, completion: (@MainActor () -> Void)? = nil) {
+    private func restore(snapshot: LayoutSnapshot, animated: Bool, specificAppBundleID: String? = nil, isAppLaunch: Bool = false, showNotification: Bool = true, skipCommandSend: Bool = false, triggerSubtitle: String? = nil, displayConnection: DisplayConnectionRestoreContext? = nil, completion: (@MainActor () -> Void)? = nil) {
         let fp = ScreenFingerprint.current()
 
         if !hasAccessibilityPermission {
@@ -3731,7 +4025,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let generationAtStart = displayChangeGeneration
 
         Task { [self] in
-            defer { self.restoresInFlight -= 1 }
+            var didQueueRestoreNotification = false
+            defer {
+                if let displayConnection,
+                   displayConnection.showHelloPill,
+                   !didQueueRestoreNotification,
+                   self.displayChangeGeneration == generationAtStart {
+                    self.deliverDisplayConnectionNotchFallback(title: displayConnection.title)
+                }
+                self.restoresInFlight -= 1
+            }
             let runningApps = Dictionary(
                 NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) },
                 uniquingKeysWith: { _, new in new }
@@ -4346,6 +4649,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     restoredCount: restoredCount,
                     totalCount: snapshot.records.count,
                     connectedDisplayNames: Array(self.pendingConnectedNames),
+                    displayConnection: displayConnection,
                     // Carries the same barrier: without it a restore that ran
                     // against a locked screen queues a keystroke that fires
                     // minutes later at unlock, against `foregroundBundleID` nil.
@@ -4389,6 +4693,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
                 self.log("Restoring layout for \(fp.readableName)", level: .necessary, type: .restore, details: details)
                 self.statusMessage = "Restore complete"
+
+                // A restore that finished behind the lock is recorded after its
+                // post-unlock settlement. For an unlocked restore, decide against
+                // the prior history before appending this layout ID.
+                let helloPillEligibility: Bool?
+                if isLocked {
+                    helloPillEligibility = nil
+                } else {
+                    helloPillEligibility = self.evaluateAndRecordCompletedFullRestoreForWelcomePill(
+                        layoutID: snapshot.id.uuidString
+                    )
+                }
                 
                 // `!skipCommandSend` is the barrier Netanel asked for on
                 // discussion #12: an auto layout has no user-chosen
@@ -4404,6 +4720,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
 
                 if showNotification {
+                    didQueueRestoreNotification = true
                     if snapshot.isAutoSave {
                         let seconds = Date().timeIntervalSince(snapshot.updatedAt)
                         let ageStr: String = {
@@ -4428,7 +4745,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                             type: .fullRestore,
                             title: lz("Auto Layout Restored"),
                             subtitle: subtitle,
-                            triggerKey: triggerSubtitle
+                            triggerKey: triggerSubtitle,
+                            layoutID: snapshot.id.uuidString,
+                            displayConnection: displayConnection,
+                            helloPillSubtitles: self.autoRestoreWelcomePillSubtitles(from: subtitle),
+                            helloPillEligibility: helloPillEligibility
                         )
                     } else {
                         // Saying "23/23 windows" while ten of them were skipped is
@@ -4444,7 +4765,16 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                             type: .fullRestore,
                             title: lz("Layout Restored"),
                             subtitle: subtitle,
-                            triggerKey: triggerSubtitle
+                            triggerKey: triggerSubtitle,
+                            layoutID: snapshot.id.uuidString,
+                            displayConnection: displayConnection,
+                            helloPillSubtitles: self.layoutRestoreWelcomePillSubtitles(
+                                snapshotName: snapshot.name,
+                                restoredCount: restoredCount,
+                                totalCount: snapshot.records.count,
+                                deferredCount: deferredCount
+                            ),
+                            helloPillEligibility: helloPillEligibility
                         )
                     }
                 }

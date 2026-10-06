@@ -3,18 +3,19 @@ set -euo pipefail
 
 # Reset all permissions for the app to start "fresh" every build
 # This automates the "minus" button in System Settings
-echo "Quitting existing app..."
+echo "Quitting existing app"
 pkill -x "RememberMyWindows" || true
 
 # Reset onboarding state so splash screens always appear on each dev build.
 # NOTE: TCC permissions (Accessibility) are NOT reset here — they persist across builds
 #       thanks to the stable designated requirement (identifier "com.netanel.remembermywindows").
-echo "Resetting onboarding state for dev build..."
+echo "Resetting onboarding state for dev build"
 defaults delete com.netanel.remembermywindows hasCompletedOnboarding 2>/dev/null || true
+defaults delete com.netanel.remembermywindows hasCompletedV15Tour 2>/dev/null || true
 
 # Reset Device Control and Data Access TCC permission for the old build
 # (disables the toggle shown in System Settings → Privacy → Device Control and Data Access)
-echo "Resetting Device Control and Data Access permission..."
+echo "Resetting Device Control and Data Access permission"
 tccutil reset DeviceControl com.netanel.remembermywindows 2>/dev/null || true
 
 cd "$(dirname "$0")"
@@ -34,8 +35,8 @@ export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR"
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
-echo "  - Preparing Swift sources... (this may take a few seconds)"
-echo "  - Compiling Swift files..."
+echo "Preparing Swift sources"
+echo "Compiling Swift files (this may take a few seconds)..."
 swiftc -parse-as-library \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -target "arm64-apple-macosx14.0" \
@@ -54,6 +55,7 @@ swiftc -parse-as-library \
     WindowLayout/SettingsView.swift \
     WindowLayout/WindowPreviewComponents.swift \
     WindowLayout/NotchNotification.swift \
+    WindowLayout/NotchWelcomePillView.swift \
     WindowLayout/DesktopToggleManager.swift \
     WindowLayout/Hotkey.swift \
     WindowLayout/ShortcutMigrationView.swift \
@@ -134,6 +136,9 @@ echo "Copying bundled wallpapers..."
 if [ -f "WindowLayout/DesktopWallpaper.jpg" ]; then
     cp "WindowLayout/DesktopWallpaper.jpg" "${RESOURCES_DIR}/DesktopWallpaper.jpg"
 fi
+
+echo "Copying QuickKey animation frames..."
+cp WindowLayout/QuickKeyFrame*.png "${RESOURCES_DIR}/" 2>/dev/null || true
 
 echo "Copying localizations..."
 if [ -d "WindowLayout/he.lproj" ]; then
