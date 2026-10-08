@@ -3773,6 +3773,37 @@ private struct EventCardView: View {
         )
     }
 
+    // The card's border and shadow, typed. Inline in `body` as nested ternaries of untyped
+    // literals, Swift 6.4 (Xcode 27) could not type-check `body` in reasonable time.
+    private var isLifted: Bool { isHovered && isOn && !isDisabled }
+
+    private var borderColor: Color {
+        if isHighlighted { return Color.orange.opacity(0.9) }
+        if isDisabled { return Color.black.opacity(0.15) }
+        if isHovered && isOn { return activeColor.opacity(0.4) }
+        return isOn ? activeColor.opacity(0.15) : Color.primary.opacity(0.06)
+    }
+
+    private var borderWidth: CGFloat {
+        if isHighlighted { return 1.8 }
+        return isLifted ? 1.4 : 1.0
+    }
+
+    private var shadowColor: Color {
+        if isHighlighted { return Color.orange.opacity(0.38) }
+        return isLifted ? activeColor.opacity(0.16) : Color.black.opacity(isDisabled ? 0.0 : 0.03)
+    }
+
+    private var shadowRadius: CGFloat {
+        if isHighlighted { return 15 }
+        return isLifted ? 8 : 2
+    }
+
+    private var shadowY: CGFloat {
+        if isHighlighted { return 2 }
+        return isLifted ? 3 : 1
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header row: icon + title + subtitle + toggle
@@ -3998,25 +4029,10 @@ private struct EventCardView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(
-                    isHighlighted
-                        ? Color.orange.opacity(0.9)
-                        : (isDisabled
-                            ? Color.black.opacity(0.15)
-                            : (isHovered && isOn
-                                ? activeColor.opacity(0.4)
-                                : (isOn ? activeColor.opacity(0.15) : Color.primary.opacity(0.06)))),
-                    lineWidth: isHighlighted ? 1.8 : ((isHovered && isOn && !isDisabled) ? 1.4 : 1.0)
-                )
+                .stroke(borderColor, lineWidth: borderWidth)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .shadow(
-            color: isHighlighted
-                ? Color.orange.opacity(0.38)
-                : ((isHovered && isOn && !isDisabled) ? activeColor.opacity(0.16) : Color.black.opacity(isDisabled ? 0.0 : 0.03)),
-            radius: isHighlighted ? 15 : ((isHovered && isOn && !isDisabled) ? 8 : 2),
-            y: isHighlighted ? 2 : ((isHovered && isOn && !isDisabled) ? 3 : 1)
-        )
+        .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
         .offset(y: (isHovered && isOn && !isDisabled) ? -1.5 : 0)
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isHovered)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isOn)
