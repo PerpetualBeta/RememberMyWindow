@@ -48,6 +48,7 @@ swiftc -parse-as-library \
     WindowLayout/ShortcutMigrationView.swift \
     WindowLayout/Localization.swift \
     WindowLayout/OnboardingView.swift \
+    WindowLayout/WhatsNewView.swift \
     WindowLayout/CommandOverlayManager.swift \
     WindowLayout/WebAppDetector.swift \
     WindowLayout/MenuBarIconManager.swift \

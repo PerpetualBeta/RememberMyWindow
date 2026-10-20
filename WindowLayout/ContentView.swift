@@ -7,21 +7,16 @@ struct ContentView: View {
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
-    @AppStorage("hasCompletedV15Tour") private var hasCompletedV15Tour: Bool = false
+    @AppStorage("hasSeenV15_5Notes") private var hasSeenV15_5Notes: Bool = false
     @AppStorage("minimalVisualAnimations") private var minimalVisualAnimations: Bool = true
     @AppStorage("appListViewMode") private var appListViewMode: AppListViewMode = .list
     @ObservedObject private var desktopToggleManager = DesktopToggleManager.shared
     @State private var hidePermissionBanner = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
 
-    // LIFECYCLE / CLEANUP NOTE:
-    // This flow presents the v15.0 release notes sheet once to existing users who upgrade to v15.0.
-    // For future versions (v15.1+ / v16.0):
-    // - To retire: remove isV15ReleaseFlowPending, hasCompletedV15Tour, and the showsV15ReleaseNotes parameter.
-    // - To update for a new release: bump "15.0" to the new version and reset/rename the completion key (e.g., hasCompletedV16Tour).
-    private var isV15ReleaseFlowPending: Bool {
+    private var isV15_5NotesPending: Bool {
         let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return appVersion == "15.0" && !hasCompletedV15Tour
+        return (appVersion == "15.5" || appVersion == "15.1") && hasCompletedOnboarding && !hasSeenV15_5Notes
     }
 
     var body: some View {
@@ -88,6 +83,11 @@ struct ContentView: View {
                     }
                 }
         }
+        .background {
+            Rectangle()
+                .fill(.regularMaterial)
+                .ignoresSafeArea()
+        }
         .toolbar {
             ToolbarItem(id: "mainSettings", placement: .navigation) {
                 settingsToolbarContent
@@ -123,17 +123,15 @@ struct ContentView: View {
                 permissionBanner
             }
         }
+        // 1. First-run onboarding for brand new users
         .sheet(isPresented: Binding(
-            get: { !hasCompletedOnboarding || isV15ReleaseFlowPending },
+            get: { !hasCompletedOnboarding },
             set: { _ in }
         )) {
-            let shouldMarkV15TourComplete = isV15ReleaseFlowPending
-            OnboardingView(showsV15ReleaseNotes: shouldMarkV15TourComplete) {
+            OnboardingView {
                 withAnimation {
-                    if shouldMarkV15TourComplete {
-                        hasCompletedV15Tour = true
-                    }
                     hasCompletedOnboarding = true
+                    hasSeenV15_5Notes = true
                 }
                 Task { @MainActor in
                     UpdateManager.shared.checkIfNeeded()
@@ -142,12 +140,28 @@ struct ContentView: View {
             .environmentObject(manager)
             .fullVisualAnimations()
         }
-        // Defer the shortcut migration notice until the first-run or v15 release
-        // tour is complete so two sheets never compete for the window.
+        // 2. Standalone What's New window for existing users who upgraded to v15.5
+        .sheet(isPresented: Binding(
+            get: { hasCompletedOnboarding && isV15_5NotesPending },
+            set: { _ in }
+        )) {
+            WhatsNewView {
+                withAnimation {
+                    hasSeenV15_5Notes = true
+                }
+                Task { @MainActor in
+                    UpdateManager.shared.checkIfNeeded()
+                }
+            }
+            .environmentObject(manager)
+            .fullVisualAnimations()
+        }
+        // Defer the shortcut migration notice until the first-run or v15.5 release
+        // notes are complete so two sheets never compete for the window.
         .sheet(isPresented: Binding(
             get: {
                 hasCompletedOnboarding &&
-                    !isV15ReleaseFlowPending &&
+                    !isV15_5NotesPending &&
                     desktopToggleManager.needsShortcutMigrationNotice
             },
             set: { _ in }

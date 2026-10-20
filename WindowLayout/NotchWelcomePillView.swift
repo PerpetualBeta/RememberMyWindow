@@ -62,8 +62,23 @@ private enum NotchWelcomePillTiming {
     }
 }
 
+private enum NotchWelcomePillLayout {
+    static let referenceHelloWidth: CGFloat = 110
+    static let referenceHelloHeight: CGFloat = 34
+    static let referenceHelloTopInset: CGFloat = 2
+    static let referenceSubtitleSpacing: CGFloat = 3
+    static let referenceSubtitleHeight: CGFloat = 12
+    static let referenceBottomInset: CGFloat = 6
+
+    static let preferredHelloHeight: CGFloat = 40
+    static let subtitleFontSize: CGFloat = 10
+    static let subtitleLineHeight: CGFloat = 13
+    static let subtitleSpacing: CGFloat = 1
+    static let contentBottomInset: CGFloat = 2
+}
+
 private enum NotchWelcomePillTextQueue {
-    private static let subtitleFontSize: CGFloat = 10
+    private static let subtitleFontSize = NotchWelcomePillLayout.subtitleFontSize
     private static let horizontalInset: CGFloat = 12
 
     static func fit(_ subtitles: [String], toWidth width: CGFloat) -> [String] {
@@ -135,7 +150,7 @@ public struct NotchWelcomePillView: View {
     public let pillHeight: CGFloat
     public let onDismiss: () -> Void
 
-    @AppStorage("themeColor") private var themeColorRaw: String = "Default"
+    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     
     @State private var appeared = false
     @State private var writeProgress: CGFloat = 0.0
@@ -158,18 +173,45 @@ public struct NotchWelcomePillView: View {
     }
 
     private var accentColor: Color {
-        switch themeColorRaw {
-        case "Black": return Color(white: 0.90)
-        case "Purple": return .purple
-        case "Yellow": return .yellow
-        case "Red": return .red
-        case "Blue": return .blue
-        case "Light Blue": return .cyan
-        case "Green": return .green
-        case "Orange": return .orange
-        case "Mint": return .mint
-        default: return Color(red: 0.2, green: 0.9, blue: 0.5)
+        if themeColor == .black {
+            return Color(white: 0.90)
         }
+        return themeColor.color(seed: 0)
+    }
+
+    /// Keep the old visible top edge as the highest position the enlarged script can reach.
+    private var currentHelloTopBoundary: CGFloat {
+        let contentBelowNotch = max(0, pillHeight - notchDepth)
+        let previousContentHeight =
+            NotchWelcomePillLayout.referenceHelloHeight
+            + NotchWelcomePillLayout.referenceHelloTopInset
+            + NotchWelcomePillLayout.referenceSubtitleSpacing
+            + NotchWelcomePillLayout.referenceSubtitleHeight
+            + NotchWelcomePillLayout.referenceBottomInset
+        return notchDepth + max(
+            0,
+            contentBelowNotch
+                - previousContentHeight
+                + NotchWelcomePillLayout.referenceHelloTopInset
+        )
+    }
+
+    private var helloSize: CGSize {
+        let availableHeight = max(
+            0,
+            pillHeight
+                - currentHelloTopBoundary
+                - NotchWelcomePillLayout.subtitleSpacing
+                - NotchWelcomePillLayout.subtitleLineHeight
+                - NotchWelcomePillLayout.contentBottomInset
+        )
+        let height = min(NotchWelcomePillLayout.preferredHelloHeight, availableHeight)
+        let scale = height / NotchWelcomePillLayout.referenceHelloHeight
+        let width = min(
+            NotchWelcomePillLayout.referenceHelloWidth * scale,
+            max(1, pillWidth - 24)
+        )
+        return CGSize(width: width, height: height)
     }
 
     public init(
@@ -221,44 +263,45 @@ public struct NotchWelcomePillView: View {
                     .padding(.bottom, 0.5)
             }
             .frame(width: pillWidth, height: pillHeight)
+            .scaleEffect(
+                x: appeared ? 1.0 : 0.88,
+                y: appeared ? 1.0 : 0.01,
+                anchor: .top
+            )
+            .animation(appearanceAnimation, value: appeared)
 
             // MARK: 2. Content Canvas (Cursive Glass Write + Subtitle)
-            VStack(spacing: 3) {
+            VStack(spacing: NotchWelcomePillLayout.subtitleSpacing) {
                 // Center Cursive Script
                 glassScriptView(shape: CursiveHelloShape())
-                    .frame(width: 110, height: 34)
-                    .padding(.top, 2)
+                    .frame(width: helloSize.width, height: helloSize.height)
+                    .clipped()
 
-                // Subtitle label softly fading in once write finishes
-                if let visibleSubtitle {
+                // Inserting the subtitle lets it push the script up from the pill's bottom.
+                if showSubtitle, let visibleSubtitle {
                     Text(visibleSubtitle)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .font(.system(size: NotchWelcomePillLayout.subtitleFontSize, weight: .medium, design: .rounded))
                         .foregroundColor(.white.opacity(0.68))
                         .lineLimit(1)
                         .minimumScaleFactor(0.9)
                         .padding(.horizontal, 12)
+                        .frame(height: NotchWelcomePillLayout.subtitleLineHeight)
                         .id(currentSubtitleIndex)
                         .transition(.opacity)
-                        .opacity(showSubtitle ? 1.0 : 0.0)
-                        .offset(y: showSubtitle ? 0 : 3)
-                        .animation(.easeOut(duration: 0.45), value: showSubtitle)
                         .animation(.easeInOut(duration: 0.25), value: currentSubtitleIndex)
                 }
             }
-            .padding(.bottom, subtitleSequence.isEmpty ? 9 : 6)
+            .padding(.bottom, NotchWelcomePillLayout.contentBottomInset)
             .frame(width: pillWidth, alignment: .center)
             .opacity(appeared ? 1.0 : 0.0)
             .offset(y: appeared ? 0 : -6)
+            .animation(.spring(response: 0.38, dampingFraction: 0.84), value: showSubtitle)
         }
         .frame(width: pillWidth, height: pillHeight, alignment: .top)
         .opacity(appeared ? 1.0 : 0.0)
-        .scaleEffect(
-            x: appeared ? 1.0 : 0.88,
-            y: appeared ? 1.0 : 0.01,
-            anchor: .top
-        )
         .animation(appearanceAnimation, value: appeared)
         .onAppear {
+            // The signature greeting intentionally animates even when macOS Reduce Motion is enabled.
             withAnimation(appearanceAnimation) {
                 appeared = true
             }
@@ -274,7 +317,8 @@ public struct NotchWelcomePillView: View {
                     nanoseconds: NotchWelcomePillTiming.nanoseconds(for: NotchWelcomePillTiming.drawingDuration)
                 )
                 guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.45)) {
+
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
                     showSubtitle = true
                 }
 
@@ -290,14 +334,13 @@ public struct NotchWelcomePillView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NotchDismiss"))) { _ in
-            subtitleSequenceTask?.cancel()
+            cancelAnimationTasks()
             withAnimation(.easeOut(duration: 0.28)) {
                 appeared = false
             }
         }
         .onDisappear {
-            subtitleSequenceTask?.cancel()
-            subtitleSequenceTask = nil
+            cancelAnimationTasks()
         }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
@@ -305,23 +348,33 @@ public struct NotchWelcomePillView: View {
             }
         }
         .onTapGesture {
-            subtitleSequenceTask?.cancel()
+            cancelAnimationTasks()
             onDismiss()
         }
+    }
+
+    private func cancelAnimationTasks() {
+        subtitleSequenceTask?.cancel()
+        subtitleSequenceTask = nil
     }
 
     // MARK: - Multi-Layered Glass Line Renderer
     @ViewBuilder
     private func glassScriptView<S: Shape>(shape: S) -> some View {
+        // Keep the theme-colored aura steady throughout the stroke, including when drawing ends.
+        let glowOpacity = 0.62
+        let glowLineWidth: CGFloat = 4.25
+        let glowBlurRadius: CGFloat = 2.75
+
         ZStack {
             // Layer 1: Ambient soft bloom / chromatic aura
             shape
                 .trim(from: 0, to: writeProgress)
                 .stroke(
-                    accentColor.opacity(0.35),
-                    style: StrokeStyle(lineWidth: 5.5, lineCap: .round, lineJoin: .round)
+                    accentColor.opacity(glowOpacity),
+                    style: StrokeStyle(lineWidth: glowLineWidth, lineCap: .round, lineJoin: .round)
                 )
-                .blur(radius: 3.5)
+                .blur(radius: glowBlurRadius)
 
             // Layer 2: Glowing frosted glass tube body
             shape
@@ -331,7 +384,7 @@ public struct NotchWelcomePillView: View {
                         colors: [
                             .white.opacity(0.95),
                             Color(white: 0.85),
-                            accentColor.opacity(0.85),
+                            Color(white: 0.92),
                             .white.opacity(0.95)
                         ],
                         startPoint: .topLeading,

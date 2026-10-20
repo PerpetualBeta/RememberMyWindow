@@ -99,6 +99,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var lastGeometrySignature: [CGWindowID: CGRect] = [:]
     private var settleWaitStartedAt: Date?
     private var settleRecheckTask: Task<Void, Never>?
+    private var coordinatedShrinkDetector = CoordinatedShrinkDetector()
+    private var coordinatedShrinkDetectionNeedsRebase = true
 
     /// Gap between geometry samples. Short enough to be invisible against the
     /// coalescing interval, long enough that a drag cannot produce two
@@ -165,9 +167,6 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private static let locationFixWaitLimit: TimeInterval = 15
     private var isWaitingForLocationUpdate: Bool = false
     private var lastLocationTimestamp: Date? = nil
-    /// Tracks window count across consecutive captures to detect sudden anomalous drops.
-    private var lastWindowCount: Int = 0
-
     // MARK: - Screen Lock Tracking
     private var _isScreenLockedState: Bool = false
 
@@ -497,6 +496,35 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             name: NSNotification.Name("com.netanel.remembermywindows.triggerWelcomeNotch"),
             object: nil
         )
+
+        // Observe Exposé / Mission Control / Show Desktop states to suppress captures
+        let overviewNotifications = [
+            "com.apple.expose.awake",
+            "com.apple.expose.front.awake",
+            "com.apple.showdesktop.awake"
+        ]
+        for name in overviewNotifications {
+            DistributedNotificationCenter.default().addObserver(
+                self,
+                selector: #selector(overviewDidBegin),
+                name: NSNotification.Name(name),
+                object: nil
+            )
+        }
+
+        let overviewExitNotifications = [
+            "com.apple.expose.cancelled",
+            "com.apple.expose.front.cancelled",
+            "com.apple.showdesktop.cancelled"
+        ]
+        for name in overviewExitNotifications {
+            DistributedNotificationCenter.default().addObserver(
+                self,
+                selector: #selector(overviewDidEnd),
+                name: NSNotification.Name(name),
+                object: nil
+            )
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(sessionDidResignActive),
@@ -901,6 +929,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // capture that schedules this is still executing, and any further capture
         // during the settling delay sees the desk the restore is about to replace.
         restoresInFlight += 1
+        invalidateCoordinatedShrinkBaseline()
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
@@ -1010,6 +1039,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         showHelloPill: Bool
     ) {
         guard let request else { return }
+        guard !store.welcomeNotchPillEnabled else { return }
         if request.sendsSystemNotification {
             deliverNotification(
                 type: .displayChange,
@@ -1096,6 +1126,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     }
 
     @objc private func appFocusChanged(_ note: Notification) {
+        if isOverviewActive {
+            isOverviewActive = false
+        }
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let name = app.localizedName ?? "Unknown App"
         // Focus changes can sometimes signal that an app has moved to a different Space,
@@ -1397,35 +1430,42 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     @objc private func appLaunched(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        let targetID = app.bundleIdentifier ?? app.localizedName
+
         // Configurable delay so the app's windows appear
         let delay = store.singleAppRestoreDelay
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self = self else { return }
             self.observeApp(app)
+
+            let canAutoRestore = self.store.autoRestoreOnAppOpen &&
+                (targetID.flatMap { self.automaticRestoreSnapshot(forAppLaunch: $0) } != nil) &&
+                !(self.restoresInFlight > 0 || self.isHandlingDisplayChange) &&
+                !(Date().timeIntervalSince(self.lastFullRestoreTime) < 3.0 && (targetID.map { self.lastFullRestoreBundleIDs.contains($0) } ?? false))
+
             // In event-driven mode, attach an AX observer so we detect its future window movements
             if !self.store.usePollingMode {
                 self.attachAXObserver(to: app)
-                // Trigger one immediate capture to populate the live layout for the new app
-                self.scheduleAXEventFlush()
+                // Only trigger an immediate layout capture if we're not about to auto-restore this app
+                if !canAutoRestore {
+                    self.scheduleAXEventFlush()
+                }
             }
-            
-            if self.store.autoRestoreOnAppOpen,
-               let targetID = app.bundleIdentifier ?? app.localizedName {
-                if self.restoresInFlight > 0 || self.isHandlingDisplayChange {
-                    self.log("⏭️ Skipping auto-restore on launch for '\(targetID)' — layout restore is currently in progress", level: .verbose, type: .restore)
-                    return
-                }
-                if Date().timeIntervalSince(self.lastFullRestoreTime) < 3.0 && self.lastFullRestoreBundleIDs.contains(targetID) {
-                    self.log("⏭️ Skipping auto-restore on launch for '\(targetID)' — recently placed by full layout restore", level: .verbose, type: .restore)
-                    return
-                }
+
+            if canAutoRestore, let targetID = targetID {
                 if let source = self.automaticRestoreSnapshot(forAppLaunch: targetID) {
                     self.restore(snapshot: source.snapshot,
                                  animated: self.store.restoreAnimated,
                                  specificAppBundleID: targetID,
                                  isAppLaunch: true,
                                  showNotification: true,
-                                 skipCommandSend: source.isAuto)
+                                 skipCommandSend: source.isAuto,
+                                 completion: { [weak self] in
+                                     // After restore settles, flush so the restored position
+                                     // gets recorded. AutoSaveStore's settle-window will
+                                     // merge this with any launch-position capture within 10s.
+                                     self?.scheduleAXEventFlush(delay: 200_000_000, urgent: true)
+                                 })
                 }
             }
         }
@@ -1444,8 +1484,17 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// animation and every hold on recording still applies.
     @objc private func activeSpaceChanged() {
         retryDeferredRestore(reason: "the Space changed")
-        log("Space changed — capturing the layout", level: .verbose, type: .autoSave)
-        scheduleAXEventFlush(urgent: true)
+        // Manual space changes (swiping between spaces, full-screen transitions, or Mission Control)
+        // navigate between views rather than modifying the user's window layout.
+        // Captures are only triggered by actual window movement, resizing, launch, or termination.
+        isHandlingSpaceChange = true
+        spaceChangeCooldownTask?.cancel()
+        spaceChangeCooldownTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled else { return }
+            self?.isHandlingSpaceChange = false
+        }
+        log("Space changed — skipping capture (deferred restores processed)", level: .verbose, type: .autoSave)
     }
 
     /// Puts back whatever the last restore had to leave behind.
@@ -1736,8 +1785,14 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         }
 
         if store.autoSaveEnabled {
-            if let auto = autoLayoutSnapshot, holdsTarget(auto) {
-                return (auto, true)
+            // For a newly launching app (bundleID != nil), the newest auto capture
+            // (autoLayoutSnapshot) describes the live desktop which may contain the newly opened window at its
+            // un-restored default launch coordinates. We must never restore a launching app
+            // to its un-restored launch coordinates!
+            if bundleID == nil {
+                if let auto = autoLayoutSnapshot, holdsTarget(auto) {
+                    return (auto, true)
+                }
             }
             // The newest capture for the current display is not always the one
             // that has the answer, and it fails in two different ways.
@@ -1759,7 +1814,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             candidates.append(contentsOf: (autoSaveStore?.visibleEntries ?? []).filter {
                 !knownIDs.contains($0.id)
             })
+            let currentLatestID = autoSaveStore?.entry(forScreenKey: currentFingerprint.key)?.id
             for entry in candidates {
+                // For an app launch restore, skip the live latest entry for this screen
+                // because it either doesn't have the app or only has its newly launched un-restored state
+                if bundleID != nil && entry.id == currentLatestID {
+                    continue
+                }
                 if let earlier = snapshot(from: entry), holdsTarget(earlier) {
                     log("Using an earlier auto capture\(bundleID.map { " for \($0)" } ?? "") — the newest one does not apply",
                         level: .verbose, type: .autoSave)
@@ -1823,6 +1884,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // one window was in flight, while this covers a two-window drag, a
         // restore sweep and a Mission Control animation alike.
         let signature = cgGeometrySignature()
+        updateCoordinatedShrinkDetector(with: signature)
         if signature != lastGeometrySignature {
             lastGeometrySignature = signature
             let waitedSince = settleWaitStartedAt ?? Date()
@@ -1856,13 +1918,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         let fp = ScreenFingerprint.current()
         let currentWindows = captureAllWindows(for: fp, silent: true)
         let newCount = currentWindows.count
-
-        // Detect sudden anomalous window count drops (≥3 windows lost in one cycle).
-        // Normal fluctuations are 0–1 as apps launch/quit. Large drops signal a filter regression.
-        if lastWindowCount > 0 && lastWindowCount - newCount >= 3 {
-            log("⚠️ Window count dropped: \(lastWindowCount) → \(newCount) — possible AX filter regression or Space switch", level: .moderate, type: .system)
-        }
-        lastWindowCount = newCount
+        commitCoordinatedShrinkBaseline(using: signature, for: currentWindows)
 
         let isInitialServerCapture = !isLiveLayoutServerReady
         if isInitialServerCapture {
@@ -1882,7 +1938,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             return
         }
         axIdleCaptureInterval = 2
-        liveRecords = currentWindows
+        // Only advance the live-layout baseline when we are also allowed to record.
+        // If a restore is in flight, the windows are still moving: updating the
+        // baseline here makes the post-restore flush see no change and silently
+        // skip the capture that should record where the windows actually landed.
+        if !isRestoreInFlight {
+            liveRecords = currentWindows
+        }
         log("Live layout updated (\(newCount) windows)", level: .verbose, type: .autoSave)
 
         if isInitialServerCapture {
@@ -1894,24 +1956,18 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // windows are still settling, and for the length of any restore, so the
         // arrangement a restore is about to replace does not become the
         // arrangement it restores to.
-        //
-        // The launch case is covered by the same hold rather than by a separate
-        // rule. This used to skip the first capture outright, on the assumption
-        // that a launch restore always follows it. It does not:
-        // `triggerLaunchRestoreIfNeeded` returns without scheduling anything when
-        // onboarding has not been completed, and when no saved session matches the
-        // current displays. Skipping regardless threw away the one capture that
-        // holds the arrangement the user left the machine in, and the next thing
-        // to reach the file was whatever the desk looked like after it had been
-        // disturbed. Measured 2026-09-04: two windows on an external display were
-        // recorded only in that first capture, the display was then unplugged,
-        // macOS moved them to the built-in, and every later capture agreed with
-        // the move.
-        if store.autoSaveEnabled && !isHandlingDisplayChange && !isSettlingContestedWindows
+        if store.autoSaveEnabled && !isHandlingDisplayChange && !isHandlingSpaceChange && !isSettlingContestedWindows
+            && !isSettlingRestoredLayout
             && !isRestoreInFlight {
-            autoSaveStore?.record(records: holdingHeldWindows(currentWindows, screenKey: fp.key),
-                                  screenKey: fp.key,
-                                  readableScreenKey: fp.readableName)
+            if isOverviewActive {
+                log("Skipping auto-save — system overview active (Mission Control / Exposé / Show Desktop)", level: .verbose, type: .autoSave)
+            } else if coordinatedShrinkDetector.isActive {
+                log("Skipping auto-save — coordinated window shrink detected; waiting for the windows to return", level: .verbose, type: .autoSave)
+            } else {
+                autoSaveStore?.record(records: holdingHeldWindows(currentWindows, screenKey: fp.key),
+                                      screenKey: fp.key,
+                                      readableScreenKey: fp.readableName)
+            }
         }
     }
 
@@ -2271,6 +2327,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// counter so a superseded task can tell whether the hold is still its own
     /// to release.
     private var isHandlingDisplayChange = false
+    private var isHandlingSpaceChange = false
+    private var spaceChangeCooldownTask: Task<Void, Never>?
+    private var isSettlingRestoredLayout = false
+    private var restoreSettlingTask: Task<Void, Never>?
     private var displayChangeGeneration = 0
 
     /// True while contested windows are still being re-applied.
@@ -2396,6 +2456,23 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     private var restoresInFlight = 0
     private var isRestoreInFlight: Bool { restoresInFlight > 0 }
 
+    /// True while Mission Control, App Exposé, or Show Desktop is in progress.
+    private(set) var isOverviewActive: Bool = false
+
+
+    @objc private func overviewDidBegin() {
+        guard !isOverviewActive else { return }
+        isOverviewActive = true
+        log("System overview active (Mission Control / Exposé / Show Desktop) — suppressing auto-layout captures", level: .verbose, type: .autoSave)
+    }
+
+    @objc private func overviewDidEnd() {
+        coordinatedShrinkDetector.noteOverviewEnded()
+        guard isOverviewActive else { return }
+        isOverviewActive = false
+        log("System overview ended", level: .verbose, type: .autoSave)
+    }
+
 
     @objc private func screensChanged() {
         let newFP = ScreenFingerprint.current()
@@ -2412,6 +2489,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // restore is about to apply.
         if settlingDisplayFingerprint == nil {
             isHandlingDisplayChange = true
+            invalidateCoordinatedShrinkBaseline()
             displayChangeGeneration += 1
             // Not deferred to the settle: the arrangement being preserved is the
             // one made before any of this started.
@@ -2563,11 +2641,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         )
                     )
                 } else {
-                    self.deliverNotification(
-                        type: .displayChange,
-                        title: displayChangeTitle,
-                        subtitle: "Restoring layout..."
-                    )
+                    if !self.store.welcomeNotchPillEnabled {
+                        self.deliverNotification(
+                            type: .displayChange,
+                            title: displayChangeTitle,
+                            subtitle: "Restoring layout..."
+                        )
+                    }
                     self.restoreNow(automatic: true)
                 }
                 
@@ -2654,6 +2734,22 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         if playSound && self.store.welcomeNotchPillSoundEnabled && masterSoundEnabled {
             SystemSound.playSound(named: self.store.welcomeNotchPillSoundName, volume: self.effectiveNotchSoundVolume)
         }
+    }
+
+    /// Settings hover-preview using the same subtitle sequence as a completed full restore.
+    func previewWelcomeNotchPill() {
+        let subtitles = layoutRestoreWelcomePillSubtitles(
+            snapshotName: lz("Home"),
+            restoredCount: 6,
+            totalCount: 6
+        )
+        guard let firstSubtitle = subtitles.first else { return }
+
+        showWelcomeNotchPillDirect(
+            subtitle: firstSubtitle,
+            subsequentSubtitles: Array(subtitles.dropFirst()),
+            playSound: true
+        )
     }
 
     @objc private func handleTestWelcomeNotchNotification(_ notification: Notification) {
@@ -2875,8 +2971,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     notchSoundEnabled = self.store.notchSoundOnSingleRestore && masterSoundEnabled
                     notchSoundName = self.store.notchSoundNameSingleRestore
                 case .displayChange:
-                    shouldShowNotch = self.store.notchNotifyOnDisplayChange
-                    notchSoundEnabled = self.store.notchSoundOnDisplayChange && masterSoundEnabled
+                    shouldShowNotch = self.store.notchNotifyOnDisplayChange && !self.store.welcomeNotchPillEnabled
+                    notchSoundEnabled = self.store.notchSoundOnDisplayChange && masterSoundEnabled && !self.store.welcomeNotchPillEnabled
                     notchSoundName = self.store.notchSoundNameDisplayChange
                 case .snapshotUpdate:
                     shouldShowNotch = self.store.notchNotifyOnSnapshotUpdate
@@ -2955,8 +3051,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     systemSoundEnabled = self.store.systemSoundOnSingleRestore && masterSoundEnabled
                     systemSoundName = self.store.systemSoundNameSingleRestore
                 case .displayChange:
-                    shouldSend = self.store.systemNotifyOnDisplayChange
-                    systemSoundEnabled = self.store.systemSoundOnDisplayChange && masterSoundEnabled
+                    shouldSend = self.store.systemNotifyOnDisplayChange && !self.store.welcomeNotchPillEnabled
+                    systemSoundEnabled = self.store.systemSoundOnDisplayChange && masterSoundEnabled && !self.store.welcomeNotchPillEnabled
                     systemSoundName = self.store.systemSoundNameDisplayChange
                 case .snapshotUpdate:
                     shouldSend = self.store.systemNotifyOnSnapshotUpdate
@@ -3085,6 +3181,220 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         return out
     }
 
+    private func updateCoordinatedShrinkDetector(with frames: [CGWindowID: CGRect]) {
+        let eligibleWindowIDs = Set(liveRecords.compactMap(\.cgWindowID))
+        let detectorIsPaused = isHandlingDisplayChange || isSettlingContestedWindows || isRestoreInFlight
+
+        if detectorIsPaused {
+            coordinatedShrinkDetector.reset(with: frames, eligibleWindowIDs: eligibleWindowIDs)
+            coordinatedShrinkDetectionNeedsRebase = true
+            return
+        }
+
+        if coordinatedShrinkDetectionNeedsRebase {
+            coordinatedShrinkDetector.reset(with: frames, eligibleWindowIDs: eligibleWindowIDs)
+            coordinatedShrinkDetectionNeedsRebase = false
+            return
+        }
+
+        switch coordinatedShrinkDetector.observe(frames, at: Date()) {
+        case .none:
+            break
+        case .activated(let windowCount):
+            log("Detected coordinated shrink across \(windowCount) windows — suppressing auto-layout until the overview ends",
+                level: .verbose, type: .autoSave)
+        case .recovered:
+            log("Coordinated window shrink ended — auto-layout capture resumed",
+                level: .verbose, type: .autoSave)
+        }
+    }
+
+    private func commitCoordinatedShrinkBaseline(using frames: [CGWindowID: CGRect],
+                                                  for records: [WindowRecord]) {
+        guard !isHandlingDisplayChange,
+              !isSettlingContestedWindows,
+              !isRestoreInFlight,
+              !isOverviewActive else { return }
+
+        let eligibleWindowIDs = Set(records.compactMap(\.cgWindowID))
+        if coordinatedShrinkDetector.commitStable(frames, eligibleWindowIDs: eligibleWindowIDs, at: Date()) {
+            log("Coordinated-shrink guard released after the overview ended",
+                level: .verbose, type: .autoSave)
+        }
+    }
+
+    private func invalidateCoordinatedShrinkBaseline() {
+        coordinatedShrinkDetector.reset(with: [:], eligibleWindowIDs: [])
+        coordinatedShrinkDetectionNeedsRebase = true
+    }
+
+    private struct CoordinatedShrinkDetector {
+        enum Event {
+            case none
+            case activated(Int)
+            case recovered
+        }
+
+        private static let minimumWindowCount = 3
+        private static let shrinkScale: CGFloat = 0.75
+        private static let simultaneityWindow: TimeInterval = 1
+        private static let recoveryTolerance: CGFloat = 12
+
+        private(set) var isActive = false
+        private var baselineFrames: [CGWindowID: CGRect] = [:]
+        private var shrinkObservedAt: [CGWindowID: Date] = [:]
+        private var shrinkOriginalFrames: [CGWindowID: CGRect] = [:]
+        private var overviewWindowIDs: Set<CGWindowID> = []
+        private var overviewOriginalFrames: [CGWindowID: CGRect] = [:]
+        private var overviewEndObserved = false
+
+        mutating func reset(with frames: [CGWindowID: CGRect],
+                            eligibleWindowIDs: Set<CGWindowID>) {
+            baselineFrames = Self.frames(frames, restrictedTo: eligibleWindowIDs)
+            clearOverviewState()
+            shrinkObservedAt.removeAll()
+            shrinkOriginalFrames.removeAll()
+        }
+
+        mutating func noteOverviewEnded() {
+            if isActive {
+                overviewEndObserved = true
+            }
+        }
+
+        mutating func observe(_ currentFrames: [CGWindowID: CGRect], at now: Date) -> Event {
+            guard !baselineFrames.isEmpty else { return .none }
+
+            if isActive {
+                let hasReturned = overviewWindowIDs.allSatisfy { windowID in
+                    guard let original = overviewOriginalFrames[windowID],
+                          let current = currentFrames[windowID] else { return false }
+                    return Self.framesMatch(current, original, tolerance: Self.recoveryTolerance)
+                }
+                guard hasReturned else { return .none }
+
+                let trackedIDs = Set(baselineFrames.keys)
+                baselineFrames = Self.frames(currentFrames, restrictedTo: trackedIDs)
+                clearOverviewState()
+                shrinkObservedAt.removeAll()
+                shrinkOriginalFrames.removeAll()
+                return .recovered
+            }
+
+            // A previous resize only remains part of this burst while that
+            // window is still at least 25% smaller than the frame it shrank from.
+            for windowID in Array(shrinkObservedAt.keys) {
+                guard let original = shrinkOriginalFrames[windowID],
+                      let current = currentFrames[windowID],
+                      Self.isCoordinatedShrink(current, relativeTo: original) else {
+                    shrinkObservedAt.removeValue(forKey: windowID)
+                    shrinkOriginalFrames.removeValue(forKey: windowID)
+                    continue
+                }
+            }
+
+            // Record the moment each known window crosses the shrink threshold.
+            // The stable baseline is held until a capture settles, so gradual
+            // Mission Control animations still count as one coordinated change.
+            for (windowID, original) in baselineFrames where shrinkObservedAt[windowID] == nil {
+                guard let current = currentFrames[windowID],
+                      Self.isCoordinatedShrink(current, relativeTo: original) else { continue }
+                shrinkObservedAt[windowID] = now
+                shrinkOriginalFrames[windowID] = original
+            }
+
+            for (windowID, observedAt) in Array(shrinkObservedAt) {
+                let age = now.timeIntervalSince(observedAt)
+                if age < 0 || age > Self.simultaneityWindow {
+                    shrinkObservedAt.removeValue(forKey: windowID)
+                    shrinkOriginalFrames.removeValue(forKey: windowID)
+                }
+            }
+
+            let events = shrinkObservedAt.sorted { $0.value < $1.value }
+            for firstEvent in events {
+                let windowIDs = Set(events.compactMap { event -> CGWindowID? in
+                    let elapsed = event.value.timeIntervalSince(firstEvent.value)
+                    return elapsed >= 0 && elapsed <= Self.simultaneityWindow ? event.key : nil
+                })
+                guard windowIDs.count >= Self.minimumWindowCount else { continue }
+
+                var originalFrames: [CGWindowID: CGRect] = [:]
+                for windowID in windowIDs {
+                    if let original = shrinkOriginalFrames[windowID] {
+                        originalFrames[windowID] = original
+                    }
+                }
+                guard originalFrames.count >= Self.minimumWindowCount else { continue }
+
+                isActive = true
+                overviewWindowIDs = Set(originalFrames.keys)
+                overviewOriginalFrames = originalFrames
+                return .activated(overviewWindowIDs.count)
+            }
+
+            return .none
+        }
+
+        /// Commits a settled, ordinary layout as the next comparison baseline.
+        /// Recent shrink timestamps survive this commit so three windows that
+        /// settle in sequence within one second still form one coordinated burst.
+        mutating func commitStable(_ frames: [CGWindowID: CGRect],
+                                   eligibleWindowIDs: Set<CGWindowID>,
+                                   at now: Date) -> Bool {
+            if isActive && overviewEndObserved {
+                baselineFrames = Self.frames(frames, restrictedTo: eligibleWindowIDs)
+                clearOverviewState()
+                shrinkObservedAt.removeAll()
+                shrinkOriginalFrames.removeAll()
+                return true
+            }
+            guard !isActive else { return false }
+
+            baselineFrames = Self.frames(frames, restrictedTo: eligibleWindowIDs)
+            for (windowID, observedAt) in Array(shrinkObservedAt) {
+                let age = now.timeIntervalSince(observedAt)
+                if !eligibleWindowIDs.contains(windowID)
+                    || age < 0
+                    || age > Self.simultaneityWindow {
+                    shrinkObservedAt.removeValue(forKey: windowID)
+                    shrinkOriginalFrames.removeValue(forKey: windowID)
+                }
+            }
+            return false
+        }
+
+        private mutating func clearOverviewState() {
+            isActive = false
+            overviewWindowIDs.removeAll()
+            overviewOriginalFrames.removeAll()
+            overviewEndObserved = false
+        }
+
+        private static func frames(_ source: [CGWindowID: CGRect],
+                                   restrictedTo windowIDs: Set<CGWindowID>) -> [CGWindowID: CGRect] {
+            var result: [CGWindowID: CGRect] = [:]
+            for (windowID, frame) in source where windowIDs.contains(windowID) {
+                result[windowID] = frame
+            }
+            return result
+        }
+
+        private static func isCoordinatedShrink(_ current: CGRect, relativeTo original: CGRect) -> Bool {
+            original.width > 0
+                && original.height > 0
+                && current.width <= original.width * shrinkScale
+                && current.height <= original.height * shrinkScale
+        }
+
+        private static func framesMatch(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
+            abs(lhs.origin.x - rhs.origin.x) <= tolerance
+                && abs(lhs.origin.y - rhs.origin.y) <= tolerance
+                && abs(lhs.width - rhs.width) <= tolerance
+                && abs(lhs.height - rhs.height) <= tolerance
+        }
+    }
+
     private typealias WindowServerCaptureLogger = (String, LogLevel, EventType) -> Void
 
     private struct WindowServerCaptureResult {
@@ -3122,6 +3432,9 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         var records: [WindowRecord] = []
         let screens = NSScreen.screens
         let primaryScreenHeight = screens.first?.frame.height ?? 0
+        // Our own PID — exclude it everywhere so RememberMyWindows never appears
+        // in captures, whether it runs as .regular or .accessory (after closing the window).
+        let ownPID = ProcessInfo.processInfo.processIdentifier
 
         // Use .optionAll so we capture windows on ALL Spaces (including full-screen spaces).
         // .excludeDesktopElements removes dock, menu bar wallpaper panels, etc.
@@ -3153,6 +3466,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         var cgWindowsByPID: [Int32: [CGWindowBriefInfo]] = [:]
         for entry in windowList {
             guard let pid = entry[kCGWindowOwnerPID as String] as? Int32,
+                  pid != ownPID,
                   let app = runningApps[pid],
                   (app.activationPolicy == .regular || app.activationPolicy == .accessory) else { continue }
 
@@ -3247,6 +3561,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
         for entry in windowList {
             guard let pid = entry[kCGWindowOwnerPID as String] as? Int32,
+                  pid != ownPID,
                   let app = runningApps[pid],
                   (app.activationPolicy == .regular || app.activationPolicy == .accessory) else { zOrder += 1; continue }
 
@@ -4016,6 +4331,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // that isolation and `defer` releases the hold on every path out of it,
         // including the early returns.
         restoresInFlight += 1
+        invalidateCoordinatedShrinkBaseline()
+        if !isAppLaunch {
+            isSettlingRestoredLayout = true
+            restoreSettlingTask?.cancel()
+        }
 
         // A display change that starts after this restore makes its layout the
         // wrong one. Measured on a dual-to-laptop unplug: the restore for a
@@ -4462,7 +4782,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 resolvedTargets.append(contentsOf: matchedTargetsForApp)
             }
 
-            // Pre-check if single-app windows were already in place before restoration
+            // Pre-check if single-app windows were already in place before restoration.
+            // Compares the app's live frame against the TRUE remembered target (from automaticRestoreSnapshot
+            // which now correctly skips the live latest entry for app launches, so this check is reliable
+            // even on app launch — if the app genuinely opened at its remembered position, this is true).
             let wasAlreadyInPlace: Bool = {
                 guard specificAppBundleID != nil, !records.isEmpty else { return false }
                 var claimedLiveIDs = Set<UUID>()
@@ -4805,6 +5128,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 // spawned this one, a capture landed 200ms later, and the four windows
                 // still held for another Space were recorded at their old frames.
                 restoresInFlight += 1
+                invalidateCoordinatedShrinkBaseline()
                 Task {
                     defer { self.restoresInFlight -= 1 }
                     self.log("🔎 Verifying each restored app against the live WindowServer layout...", level: .verbose, type: .restore)
@@ -5055,6 +5379,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                         // in place when a capture lands would become the layout
                         // the next restore reproduces.
                         self.isSettlingContestedWindows = true
+                        self.invalidateCoordinatedShrinkBaseline()
                         Task { [weak self] in
                             // Released on every path out, not just the end of the
                             // loop. The loop returns early the moment the last
@@ -5157,6 +5482,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                             self.log("⚠️ \(appID) could not be fully verified by WindowServer.", level: .moderate, type: .restore)
                         } else {
                             self.log("✅ \(appID) verified by WindowServer.", level: .verbose, type: .restore)
+                        }
+                    }
+
+                    if !isAppLaunch {
+                        let fp = ScreenFingerprint.current()
+                        let settled = self.captureAllWindows(for: fp, silent: true)
+                        self.liveRecords = settled
+                        self.axEventDebounceTask?.cancel()
+                        self.isAXFlushScheduled = false
+                        self.restoreSettlingTask?.cancel()
+                        self.restoreSettlingTask = Task { @MainActor [weak self] in
+                            try? await Task.sleep(nanoseconds: 1_200_000_000)
+                            guard !Task.isCancelled else { return }
+                            self?.isSettlingRestoredLayout = false
                         }
                     }
                 }
@@ -5291,6 +5630,20 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 if let completion = completion {
                     await MainActor.run {
                         completion()
+                    }
+                }
+
+                if !isAppLaunch {
+                    let fp = ScreenFingerprint.current()
+                    let settled = self.captureAllWindows(for: fp, silent: true)
+                    self.liveRecords = settled
+                    self.axEventDebounceTask?.cancel()
+                    self.isAXFlushScheduled = false
+                    self.restoreSettlingTask?.cancel()
+                    self.restoreSettlingTask = Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 1_200_000_000)
+                        guard !Task.isCancelled else { return }
+                        self?.isSettlingRestoredLayout = false
                     }
                 }
             }
@@ -5828,11 +6181,13 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
                     self.cachedAXWindowsByPID = result.cachedAXWindowsByPID
                     self.lastCGWindowsByPID = result.lastCGWindowsByPID
+                    let geometry = self.cgGeometrySignature()
+                    self.updateCoordinatedShrinkDetector(with: geometry)
+                    self.commitCoordinatedShrinkBaseline(using: geometry, for: result.records)
                     let layoutChanged = self.liveLayoutChanged(from: self.liveRecords, to: result.records)
                     if layoutChanged {
                         self.liveRecords = result.records
                     }
-                    self.lastWindowCount = result.records.count
                     for record in result.records {
                         self.lastKnownWindows[record.windowID] = (record.globalFrame, record.id)
                     }
@@ -5845,8 +6200,12 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
                     if layoutChanged && self.store.autoSaveEnabled
                         && !self.isHandlingDisplayChange
+                        && !self.isHandlingSpaceChange
                         && !self.isSettlingContestedWindows
-                        && !self.isRestoreInFlight {
+                        && !self.isSettlingRestoredLayout
+                        && !self.isRestoreInFlight
+                        && !self.isOverviewActive
+                        && !self.coordinatedShrinkDetector.isActive {
                         self.autoSaveStore?.record(
                             records: self.holdingHeldWindows(result.records, screenKey: fingerprint.key),
                             screenKey: fingerprint.key,
@@ -6019,6 +6378,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 }
                 
                 if hasChanges {
+                    let geometry = self.cgGeometrySignature()
+                    self.updateCoordinatedShrinkDetector(with: geometry)
                     // Update cache with ONLY current windows to avoid accumulating stale IDs
                     var nextMap: [WindowID: (frame: CGRect, id: UUID)] = [:]
                     for r in currentRecords {
@@ -6026,7 +6387,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     }
                     self.lastKnownWindows = nextMap
                     self.liveRecords = currentRecords
-                    self.lastWindowCount = currentRecords.count
+                    self.commitCoordinatedShrinkBaseline(using: geometry, for: currentRecords)
                     pollInterval = 5_000_000_000
                 } else {
                     pollInterval = min(pollInterval * 2, maximumPollInterval)

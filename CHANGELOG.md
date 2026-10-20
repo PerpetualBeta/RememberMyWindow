@@ -2,6 +2,41 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v15.5] — 2026-10-18
+
+### 🚀 "Smooth Springs & Polished Views — The Visual Edition"
+
+#### 🧭 Menu Bar Recent Auto Captures
+- **Live captures at your fingertips** — Access and browse your recent Auto Layout captures directly from the menu bar dropdown without opening the main window.
+- **Color-coded change badges** — Every capture instantly tells its story with colored status badges: green `+N` for added windows, blue resize arrows for window rearrangements, and orange clock icons for history baselines.
+- **Submenu preview cards** — Hover any capture in the menu to inspect a live arrangement preview card and restore it instantly with one click.
+
+#### 🟢 Native Fullscreen Styling & Intelligence
+- **Authentic full-screen thumbnails** — Full-screen applications now render with macOS-authentic green accents, featuring the centered native diagonal glyph across arrangement previews, menubar submenus, and session grids.
+- **No more movie interruptions** — Auto Layout detects full-screen apps and quietly suppresses transient captures while you are watching movies, gaming, or presenting.
+
+#### 🎯 Geometry-Smart Deduplication
+- **Zero duplicate spam** — Merely clicking between windows or shuffling focus order (z-index) no longer floods your history with duplicate captures. Auto Layout now checks true window geometry with sub-pixel tolerance before recording.
+- **Cleaner timeline** — Only actual changes (windows opened, closed, moved, or resized) earn a spot in your Auto Layout history.
+
+#### 🎨 Visual Timeline & Badges
+- **Change indicators at a glance** — Capture cards in the hero timeline now feature color-coded indicators: Green badge for added windows (+N), Blue badge for moved or resized windows, and Orange badge for baseline history.
+- **App icons tell the story** — Each capture card displays mini icons of the exact applications involved in that change.
+
+#### 🪄 Fluid Accordion History Banner
+- **Smooth spring reveal** — Selecting an earlier capture expands an elegant "Viewing Earlier Capture" banner with fluid spring physics, gracefully sliding down and pushing content down.
+- **Symmetric return** — Tapping "Return to Latest" collapses the banner vertically back into zero height with smooth opacity fade.
+- **Visual symphony highlight** — Hovering window lists activates a calm, synchronized highlight sweep across previews.
+
+#### ✨ A Warmer Welcome in the Notch
+- **Polished typography & proportions** — Refined script proportions and subtitle spacing ensure the Welcome Notch Pill looks crisp and balanced under every Mac notch and dynamic display.
+- **Theme-aware ambient glow** — The pill's subtle glow now dynamically matches your selected theme accent color.
+
+#### 🛠️ Architecture & Under-the-Hood
+- **Standalone What's New for existing users** — Upgrades now greet returning users with a standalone changelog window, completely removed from first-run onboarding and permissions screens.
+- **Cleaned first-run onboarding** — New users get a distraction-free 2-step setup (Setup → Guide) without release-note clutter.
+- **Xcode 27 & Swift 6 compatibility** — Build fixes, explicit strong-capture closures, and strict type-checks keep the engine humming smoothly.
+
 ## [v15.0] — 2026-10-07
 
 ### 🛋️ "Make Yourself at Home — Your Windows Already Did"

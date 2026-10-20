@@ -84,33 +84,73 @@ struct WindowPreviewIcon: View {
     }
 }
 
-// MARK: - Full-Screen Window Preview Icon
+// MARK: - Full-Screen Window Preview Icon & Glyph
+
+struct MacOSFullScreenGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let size = min(rect.width, rect.height)
+        guard size > 0 else { return Path() }
+        let originX = rect.minX + (rect.width - size) / 2
+        let originY = rect.minY + (rect.height - size) / 2
+        let r = size * 0.11
+
+        var path = Path()
+
+        // Top-left triangle
+        let p0 = CGPoint(x: originX, y: originY)
+        let p1 = CGPoint(x: originX + size * 0.72, y: originY)
+        let p2 = CGPoint(x: originX, y: originY + size * 0.72)
+        path.move(to: CGPoint(x: originX, y: (p2.y + p0.y) / 2))
+        path.addArc(tangent1End: p0, tangent2End: p1, radius: r)
+        path.addArc(tangent1End: p1, tangent2End: p2, radius: r)
+        path.addArc(tangent1End: p2, tangent2End: p0, radius: r)
+        path.closeSubpath()
+
+        // Bottom-right triangle
+        let q0 = CGPoint(x: originX + size, y: originY + size)
+        let q1 = CGPoint(x: originX + size * 0.28, y: originY + size)
+        let q2 = CGPoint(x: originX + size, y: originY + size * 0.28)
+        path.move(to: CGPoint(x: originX + size, y: (q2.y + q0.y) / 2))
+        path.addArc(tangent1End: q0, tangent2End: q1, radius: r)
+        path.addArc(tangent1End: q1, tangent2End: q2, radius: r)
+        path.addArc(tangent1End: q2, tangent2End: q0, radius: r)
+        path.closeSubpath()
+
+        return path
+    }
+}
 
 struct FullScreenPreviewIcon: View {
-    let tint: Color
+    var tint: Color = .green
     private let displayW: CGFloat = 52
     private let displayH: CGFloat = 34
-    private let cornerR: CGFloat = 4
 
     var body: some View {
-        ZStack {
-            // Screen bezel — fully filled with tint
-            RoundedRectangle(cornerRadius: cornerR, style: .continuous)
-                .fill(tint.opacity(0.18))
-                .overlay {
-                    RoundedRectangle(cornerRadius: cornerR, style: .continuous)
-                        .stroke(tint.opacity(0.6), lineWidth: 0.75)
-                }
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let actualW = w > 0 ? w : displayW
+            let actualH = h > 0 ? h : displayH
+            let r: CGFloat = max(2.5, min(actualW, actualH) * 0.12)
+            let glyphSize: CGFloat = max(6, min(actualW * 0.34, actualH * 0.44))
 
-            // Abstract Content: Multiple bars to show "filling"
-            VStack(spacing: 3) {
-                RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.3)).frame(width: 30, height: 2)
-                RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.2)).frame(width: 25, height: 2)
-                RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.1)).frame(width: 20, height: 2)
+            ZStack {
+                // Screen bezel — fully filled with green tint
+                RoundedRectangle(cornerRadius: r, style: .continuous)
+                    .fill(tint.opacity(0.18))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: r, style: .continuous)
+                            .stroke(tint.opacity(0.7), lineWidth: 0.75)
+                    }
+
+                // Centered macOS native full-screen glyph
+                MacOSFullScreenGlyph()
+                    .fill(tint.opacity(0.9))
+                    .frame(width: glyphSize, height: glyphSize)
             }
-            .offset(y: 2)
+            .frame(width: actualW, height: actualH)
         }
-        .frame(width: displayW, height: displayH)
+        .frame(minWidth: 24, idealWidth: displayW, maxWidth: 82, minHeight: 16, idealHeight: displayH, maxHeight: 52)
     }
 }
 
@@ -124,19 +164,64 @@ struct IconTintInfo {
 final class AppIconColorCache {
     static let shared = AppIconColorCache()
     private var cache = [String: IconTintInfo]()
+    private var iconCache = [String: NSImage]()
     private let lock = NSLock()
     
     private init() {}
     
-    static func appIcon(for bundleID: String) -> NSImage? {
+    static func appIcon(for bundleID: String, appName: String? = nil) -> NSImage? {
+        shared.cachedAppIcon(for: bundleID, appName: appName)
+    }
+
+    func cachedAppIcon(for bundleID: String, appName: String? = nil) -> NSImage? {
+        let key = "\(bundleID)|\(appName ?? "")"
+        lock.lock()
+        if let cached = iconCache[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let image = resolveAppIcon(for: bundleID, appName: appName)
+        if let image {
+            lock.lock()
+            iconCache[key] = image
+            lock.unlock()
+        }
+        return image
+    }
+
+    private func resolveAppIcon(for bundleID: String, appName: String?) -> NSImage? {
         // 1. Standard NSWorkspace lookup — works for .app bundles in /Applications
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
             return NSWorkspace.shared.icon(forFile: url.path)
         }
         // 2. Running-app icon — works for Chrome PWAs, Electron apps, anything currently running
-        if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }),
-           let icon = runningApp.icon {
+        if let runningApp = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == bundleID || (appName != nil && $0.localizedName == appName)
+        }), let icon = runningApp.icon {
             return icon
+        }
+        // 3. Fallback by app name lookup
+        if let appName = appName, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: appName) {
+            return NSWorkspace.shared.icon(forFile: url.path)
+        }
+        // 4. Common app directories search for WebApps or user apps
+        if let appName = appName, !appName.isEmpty {
+            let fileManager = FileManager.default
+            let searchDirectories = [
+                fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true),
+                fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Safari Web Apps", isDirectory: true),
+                fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Chrome Apps.localized", isDirectory: true),
+                URL(fileURLWithPath: "/Applications", isDirectory: true),
+                URL(fileURLWithPath: "/System/Applications", isDirectory: true)
+            ]
+            for dir in searchDirectories {
+                let appPath = dir.appendingPathComponent("\(appName).app")
+                if fileManager.fileExists(atPath: appPath.path) {
+                    return NSWorkspace.shared.icon(forFile: appPath.path)
+                }
+            }
         }
         return nil
     }
@@ -565,6 +650,16 @@ struct LayoutPreviewView: View {
     var animateWindowReveal: Bool = false
     var isMainWindow: Bool = false
     var isMenubarThumbnail: Bool = false
+    /// Enables the border treatment only for the main Window Arrangement preview.
+    var isWindowArrangementPreview: Bool = false
+    var isMinimalVisualAnimations: Bool? = nil
+    var triggeringRecordIDs: Set<UUID> = []
+    var triggeringBundleIDs: Set<String> = []
+    var triggeringAppNames: Set<String> = []
+    /// The capture indicator type when shown inside AutoSavePreviewCardView.
+    /// `.history` = run full animation for all windows even under minimal animations.
+    /// `.addedWindows` / `.sameWindowCount` = show only triggering windows under minimal animations.
+    var captureIndicator: AutoLayoutCaptureIndicator? = nil
     
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.minimalVisualAnimationsEnabled) private var minimalVisualAnimationsEnabled
@@ -576,16 +671,75 @@ struct LayoutPreviewView: View {
     @State private var centerEnteredFromLeft: Bool = true
     @State private var isPlayingIntro: Bool = false
     @State private var introTask: Task<Void, Never>? = nil
-    @State private var revealedWindowCount: Int = 0
-    @State private var currentlyPoppingIndex: Int? = nil
+    @State private var revealedRecordIDs: Set<UUID> = []
+    @State private var currentlyPoppingRecordID: UUID? = nil
     @State private var windowRevealTask: Task<Void, Never>? = nil
 
     private var windowRevealCount: Int {
         max(snapshot.previewRecords.count, 1)
     }
 
+    private var isIsolatedCapture: Bool {
+        guard let indicator = captureIndicator else { return false }
+        switch indicator {
+        case .addedWindows, .sameWindowCount:
+            return true
+        case .history:
+            return false
+        }
+    }
+
+    private var effectiveMinimalVisualAnimations: Bool {
+        // History captures always use the full animation, even when the
+        // global reduced-animations setting is ON.
+        if case .history = captureIndicator { return false }
+        return isMinimalVisualAnimations ?? minimalVisualAnimationsEnabled
+    }
+
     private var usesFlatPreview: Bool {
-        minimalVisualAnimationsEnabled
+        // Isolated captures (green + / blue resize) always use the flat 2D canvas.
+        if isIsolatedCapture { return true }
+        // History captures use the flat 2D canvas to execute the full sequential staggered window reveal.
+        if case .history = captureIndicator { return true }
+        // Flat 2D canvas is used whenever minimal animations is enabled.
+        return isMinimalVisualAnimations ?? minimalVisualAnimationsEnabled
+    }
+
+    private func isTriggeringRecord(_ record: WindowRecord) -> Bool {
+        // Prefer exact record-ID match when all such windows are on-canvas.
+        // If the exact-ID match exists but its globalFrame is entirely outside
+        // the bounding box (e.g. an off-screen space parked on the external
+        // display), fall back to matching any visible window of the same app.
+        if !triggeringRecordIDs.isEmpty {
+            if triggeringRecordIDs.contains(record.id) {
+                return true
+            }
+            // Check if every exact-ID-matched record is off-canvas. If so, any
+            // on-canvas window of the triggering app should be highlighted instead.
+            let boundingBox = calculateBoundingBox()
+            let allExactMatchesOffCanvas = snapshot.previewRecords
+                .filter { triggeringRecordIDs.contains($0.id) }
+                .allSatisfy { !boundingBox.intersects($0.globalFrame) }
+            if allExactMatchesOffCanvas {
+                // Gather triggering bundle IDs from the matched-but-off-canvas records
+                let fallbackBundleIDs = Set(
+                    snapshot.previewRecords
+                        .filter { triggeringRecordIDs.contains($0.id) }
+                        .map { $0.windowID.appBundleID }
+                )
+                if fallbackBundleIDs.contains(record.windowID.appBundleID) {
+                    return true
+                }
+            }
+            return false
+        }
+        if !triggeringBundleIDs.isEmpty, triggeringBundleIDs.contains(record.windowID.appBundleID) {
+            return true
+        }
+        if let appName = record.windowID.appName, !appName.isEmpty, triggeringAppNames.contains(appName) {
+            return true
+        }
+        return false
     }
 
     /// Sequential reveal duration per window (extended to match pacing).
@@ -607,10 +761,15 @@ struct LayoutPreviewView: View {
         .onDisappear {
             windowRevealTask?.cancel()
             windowRevealTask = nil
-            revealedWindowCount = 0
-            currentlyPoppingIndex = nil
+            revealedRecordIDs.removeAll()
+            currentlyPoppingRecordID = nil
         }
         .onChange(of: snapshot.id) { _, _ in
+            if animateWindowReveal {
+                startWindowReveal()
+            }
+        }
+        .onChange(of: captureIndicator) { _, _ in
             if animateWindowReveal {
                 startWindowReveal()
             }
@@ -635,24 +794,94 @@ struct LayoutPreviewView: View {
     private func startWindowReveal() {
         windowRevealTask?.cancel()
         windowRevealTask = nil
-        revealedWindowCount = 0
-        currentlyPoppingIndex = nil
+        revealedRecordIDs.removeAll()
+        currentlyPoppingRecordID = nil
 
         guard animateWindowReveal else {
-            revealedWindowCount = windowRevealCount
-            currentlyPoppingIndex = nil
+            revealedRecordIDs = Set(snapshot.previewRecords.map(\.id))
+            currentlyPoppingRecordID = nil
             return
         }
 
         // Both Menubar thumbnail and Window Arrangement use 350ms pacing for a consistent rhythm.
         let useMinimalPop = isMenubarThumbnail
-        let count = windowRevealCount
         let stepNanoseconds: UInt64 = 350_000_000
+        let initialDelayNanoseconds: UInt64 = isMenubarThumbnail ? 250_000_000 : 0
+        let allRecords = backgroundFirstPreviewRecords
 
+        // For isolated captures (addedWindows / sameWindowCount):
+        // Always isolate the triggering window(s), regardless of minimalVisualAnimations setting.
+        if isIsolatedCapture {
+            let triggeringRecords = allRecords.filter { isTriggeringRecord($0) }
+
+            guard !triggeringRecords.isEmpty else {
+                revealedRecordIDs = Set(allRecords.map(\.id))
+                return
+            }
+
+            // Animate only the window(s) of the app that triggered the capture
+            windowRevealTask = Task { @MainActor in
+                await Task.yield()
+
+                if initialDelayNanoseconds > 0 {
+                    do {
+                        try await Task.sleep(nanoseconds: initialDelayNanoseconds)
+                    } catch {
+                        return
+                    }
+                }
+                guard !Task.isCancelled else { return }
+
+                for (idx, record) in triggeringRecords.enumerated() {
+                    if idx > 0 {
+                        do {
+                            try await Task.sleep(nanoseconds: stepNanoseconds)
+                        } catch {
+                            return
+                        }
+                    }
+
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeInOut(duration: useMinimalPop ? 0.25 : denseRevealWindowDuration)) {
+                        currentlyPoppingRecordID = record.id
+                        revealedRecordIDs.insert(record.id)
+                    }
+                }
+
+                do {
+                    try await Task.sleep(nanoseconds: stepNanoseconds)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: useMinimalPop ? 0.35 : denseRevealWindowDuration)) {
+                    currentlyPoppingRecordID = nil
+                }
+            }
+            return
+        }
+
+        // When reduced animations is ON for non-isolated layouts (e.g. Saved Sessions):
+        if effectiveMinimalVisualAnimations {
+            revealedRecordIDs = Set(allRecords.map(\.id))
+            currentlyPoppingRecordID = nil
+            return
+        }
+
+        // Full animations mode (e.g. .history captures or normal motion): sequentially reveal and pop all windows
         windowRevealTask = Task { @MainActor in
             await Task.yield()
 
-            for index in 0..<count {
+            if initialDelayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: initialDelayNanoseconds)
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+
+            for (index, record) in allRecords.enumerated() {
                 if index > 0 {
                     do {
                         try await Task.sleep(nanoseconds: stepNanoseconds)
@@ -663,8 +892,8 @@ struct LayoutPreviewView: View {
 
                 guard !Task.isCancelled else { return }
                 withAnimation(.easeInOut(duration: useMinimalPop ? 0.25 : denseRevealWindowDuration)) {
-                    currentlyPoppingIndex = index
-                    revealedWindowCount = index + 1
+                    currentlyPoppingRecordID = record.id
+                    revealedRecordIDs.insert(record.id)
                 }
             }
 
@@ -675,7 +904,7 @@ struct LayoutPreviewView: View {
             }
             guard !Task.isCancelled else { return }
             withAnimation(.easeInOut(duration: useMinimalPop ? 0.35 : denseRevealWindowDuration)) {
-                currentlyPoppingIndex = nil
+                currentlyPoppingRecordID = nil
             }
         }
     }
@@ -705,7 +934,10 @@ struct LayoutPreviewView: View {
             let offsetY = max(0, (geo.size.height - layoutHeight) / 2)
             let revealEnabled = animateWindowReveal
             let backgroundFirstRecords = backgroundFirstPreviewRecords
-            
+            // For addedWindows/sameWindowCount, hide all
+            // non-triggering windows entirely — only the triggering app is visible.
+            let hidingNonTriggeringWindows = isIsolatedCapture
+
             ZStack {
                 // Screens
                 ForEach(Array(getScreenFrames().enumerated()), id: \.offset) { _, frame in
@@ -717,20 +949,28 @@ struct LayoutPreviewView: View {
                         offsetY: offsetY
                     )
                 }
-                
+
                 // Windows
                 ForEach(Array(backgroundFirstRecords.enumerated()), id: \.element.id) { revealIndex, record in
-                    classicWindowView(
-                        record: record,
-                        boundingBox: boundingBox,
-                        scale: scale,
-                        offsetX: offsetX,
-                        offsetY: offsetY,
-                        revealEnabled: revealEnabled,
-                        revealProgress: revealedWindowCount,
-                        revealIndex: revealIndex,
-                        isCurrentlyPopping: revealIndex == currentlyPoppingIndex
-                    )
+                    let isTarget = isTriggeringRecord(record)
+                    // Skip non-triggering windows completely when in isolated mode
+                    if hidingNonTriggeringWindows && !isTarget { EmptyView() } else {
+                        let isWaiting = revealEnabled && (isIsolatedCapture ? (isTarget && !revealedRecordIDs.contains(record.id)) : !revealedRecordIDs.contains(record.id))
+                        let isPopping = isIsolatedCapture
+                            ? (isTarget && record.id == currentlyPoppingRecordID)
+                            : (record.id == currentlyPoppingRecordID)
+                        classicWindowView(
+                            record: record,
+                            boundingBox: boundingBox,
+                            scale: scale,
+                            offsetX: offsetX,
+                            offsetY: offsetY,
+                            revealEnabled: revealEnabled,
+                            isWaitingToReveal: isWaiting,
+                            revealIndex: revealIndex,
+                            isCurrentlyPopping: isPopping
+                        )
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -796,7 +1036,7 @@ struct LayoutPreviewView: View {
         offsetX: CGFloat,
         offsetY: CGFloat,
         revealEnabled: Bool,
-        revealProgress: Int,
+        isWaitingToReveal: Bool,
         revealIndex: Int,
         isCurrentlyPopping: Bool = false
     ) -> some View {
@@ -809,22 +1049,38 @@ struct LayoutPreviewView: View {
         let w = record.globalFrame.width * scale
         let h = record.globalFrame.height * scale
         
+        let isFullScreen = record.isFullScreenMode
         // Match Theme Colors (Use high-contrast slate for Black theme so preview window cards remain visible)
-        let baseTint = (tint == .black || tint == Color.black) ? Color(white: 0.8) : tint
+        // Full screen windows are rendered green with the centered native macOS symbol
+        let baseTint = isFullScreen ? Color.green : ((tint == .black || tint == Color.black) ? Color(white: 0.8) : tint)
         let winCorner: CGFloat = max(4, 8 * scale)
         let baseSize: CGFloat = min(max(w * 0.24, 20.0), 30.0)
         let iconSize: CGFloat = min(baseSize, max(8.0, min(w - 3, h - 3)))
         let titleBarHeight: CGFloat = max(iconSize + 3, 14 * scale)
-        let isWaitingToReveal = revealEnabled && (revealIndex >= revealProgress)
         let revealScale: CGFloat = !isMinimal && isWaitingToReveal ? 0.97 : 1.0
         let revealOffsetY: CGFloat = !isMinimal && isWaitingToReveal ? 6.0 : 0.0
         let foregroundProgress: Double = {
             guard windowRevealCount > 1 else { return 1.0 }
             return Double(revealIndex) / Double(windowRevealCount - 1)
         }()
-        let foregroundBorderOpacity = isHighlighted
-            ? 1.0
-            : (revealEnabled ? 0.65 + foregroundProgress * 0.35 : 0.65)
+        let isTarget = isTriggeringRecord(record)
+        // Under minimal/reduced animations, non-target windows use a flat, dim
+        // border so the foreground-most window (e.g. TV covering the entire screen)
+        // doesn't get a nearly-full-opacity theme-tint border that looks highlighted.
+        let foregroundBorderOpacity: Double = {
+            if isHighlighted { return 1.0 }
+            if isIsolatedCapture && !isTarget {
+                return 0.45  // quiet baseline — won't look "selected"
+            }
+            return revealEnabled ? 0.65 + foregroundProgress * 0.35 : 0.65
+        }()
+        let isPoppingNow = isCurrentlyPopping && !isWaitingToReveal
+        let pulsesArrivalBorder = isMinimal || isWindowArrangementPreview
+        let windowBorderWidth: CGFloat = {
+            if pulsesArrivalBorder && isPoppingNow { return 3.0 }
+            if isMinimal { return 0.8 }
+            return isHighlighted ? 1.5 : 0.8
+        }()
         let revealOpacity: Double = isWaitingToReveal ? 0.0 : 1.0
         let foregroundFadeDuration = denseRevealWindowDuration
         let revealAnimation: Animation? = {
@@ -835,14 +1091,17 @@ struct LayoutPreviewView: View {
             return .easeInOut(duration: foregroundFadeDuration)
         }()
 
-        let isPoppingNow = isCurrentlyPopping && !isWaitingToReveal
         let bodyFillOpacity: Double = {
             if isHighlighted {
                 return isMinimal ? 0.65 : 0.45
             }
-            if isMinimal || minimalVisualAnimationsEnabled {
-                return isPoppingNow ? 0.60 : (0.18 + foregroundProgress * 0.32)
+            if isIsolatedCapture {
+                // For isolated captures, only the actively-popping target window
+                // gets the bright theme-tint fill.
+                if isPoppingNow { return 0.60 }
+                return isTarget ? 0.18 : 0.14
             }
+            if isPoppingNow { return 0.50 }
             return 0.22
         }()
 
@@ -856,17 +1115,32 @@ struct LayoutPreviewView: View {
                 }
                 .overlay {
                     // Vibrant theme-colored border
-                    RoundedRectangle(cornerRadius: winCorner, style: .continuous)
-                        .stroke(baseTint.opacity(foregroundBorderOpacity), lineWidth: isHighlighted ? 1.5 : 0.8)
+                    if pulsesArrivalBorder {
+                        RoundedRectangle(cornerRadius: winCorner, style: .continuous)
+                            .stroke(baseTint.opacity(foregroundBorderOpacity), lineWidth: windowBorderWidth)
+                            .animation(.spring(response: 0.25, dampingFraction: 0.78), value: isPoppingNow)
+                    } else {
+                        RoundedRectangle(cornerRadius: winCorner, style: .continuous)
+                            .stroke(baseTint.opacity(foregroundBorderOpacity), lineWidth: windowBorderWidth)
+                    }
                 }
                 .shadow(color: isHighlighted ? baseTint.opacity(0.5) : Color.black.opacity(0.35), radius: isHighlighted ? 6 : 2.5, x: 0, y: 1)
             
-            // Thin title bar divider line if window is tall enough
-            if h > titleBarHeight + 4 {
+            // Thin title bar divider line if window is tall enough (only for non-fullscreen windows)
+            if !isFullScreen && h > titleBarHeight + 4 {
                 Rectangle()
                     .fill(baseTint.opacity(0.35))
                     .frame(height: 0.75)
                     .offset(y: titleBarHeight)
+            }
+
+            // Centered macOS native full-screen glyph in the middle of the window dimensions
+            if isFullScreen {
+                let glyphSize = min(max(min(w, h) * 0.26, 9), min(w - 2, h - 2), 30)
+                MacOSFullScreenGlyph()
+                    .fill(Color.green.opacity(0.85))
+                    .frame(width: glyphSize, height: glyphSize)
+                    .position(x: max(8, w) / 2, y: max(8, h) / 2)
             }
 
             // Top-left App Icon badge with inline app name on hover or selection
@@ -906,7 +1180,7 @@ struct LayoutPreviewView: View {
                 .animation(.easeInOut(duration: 0.25), value: isPoppingNow)
                 .frame(width: max(8, w), height: max(8, h))
                 .opacity(revealOpacity)
-                .animation(isMinimal ? .easeInOut(duration: 0.25) : revealAnimation, value: revealProgress)
+                .animation(isMinimal ? .easeInOut(duration: 0.25) : revealAnimation, value: isWaitingToReveal)
         }
         .frame(width: max(8, w), height: max(8, h))
         .position(x: x + w/2, y: y + h/2)
@@ -934,7 +1208,7 @@ struct LayoutPreviewView: View {
             revealEnabled && !isMinimal
                 ? .easeInOut(duration: denseRevealWindowDuration)
                 : nil,
-            value: revealProgress
+            value: isWaitingToReveal
         )
     }
     
@@ -1137,6 +1411,7 @@ struct LayoutPreviewView: View {
                         selectedRecordID: selectedRecordID,
                         hoveredRecordID: $hoveredRecordID,
                         tint: tint,
+                        isWindowArrangementPreview: isWindowArrangementPreview,
                         is3D: is3D,
                         layerStep: dynamicLayerStep,
                         layerDirectionX: signedOuterOffset >= 0 ? -1.0 : 1.0,  // Fan right when tilted left, left when tilted right
@@ -1419,6 +1694,7 @@ private struct WindowPreviewTileView: View {
     let selectedRecordID: UUID?
     @Binding var hoveredRecordID: UUID?
     let tint: Color
+    let isWindowArrangementPreview: Bool
     let is3D: Bool
     let layerStep: CGFloat
     /// +1.0 = layers fan toward right (left-side view), -1.0 = layers fan toward left (right-side view, default)
@@ -1464,16 +1740,21 @@ private struct WindowPreviewTileView: View {
         let baseX = x + (is3D ? layerDirectionX * layerOffset * 0.9 : 0)
         let baseY = y + (is3D ? -layerOffset * 0.12 : 0)
         
-        let baseTint = (tint == .black || tint == Color.black) ? Color(white: 0.8) : tint
+        let isFullScreen = record.isFullScreenMode
+        let baseTint = isFullScreen ? Color.green : ((tint == .black || tint == Color.black) ? Color(white: 0.8) : tint)
         let tintInfo = AppIconColorCache.shared.tintInfo(for: record.windowID.appBundleID)
-        let cardFillColor = tintInfo?.color ?? baseTint
-        let isDarkCard = tintInfo?.isDark ?? false
+        let cardFillColor = isFullScreen ? Color.green : (tintInfo?.color ?? baseTint)
+        let isDarkCard = isFullScreen ? false : (tintInfo?.isDark ?? false)
         let winCorner: CGFloat = max(4, 8 * scale)
         
         let fillOpacity: Double = {
             if isSelected { return 0.50 }
             if isFocused { return 0.45 }
             if isPeeling { return min(0.60, 0.26 + Double(peelData.scale - 1.0) * 0.18) }
+            if isFullScreen {
+                if is3D { return hasHoverFocus ? 0.22 : 0.28 }
+                return 0.30
+            }
             if isDarkCard {
                 // Rich smoked glass: ~35-42% opacity for dark/black apps
                 if is3D { return hasHoverFocus ? 0.28 : 0.38 }
@@ -1487,6 +1768,12 @@ private struct WindowPreviewTileView: View {
             if isSelected || isFocused || isPeeling { return 1.0 }
             if is3D { return hasHoverFocus ? 0.35 : 0.50 }
             return 0.60
+        }()
+
+        let windowBorderWidth: CGFloat = {
+            if isSelected || isFocused { return 2.8 }
+            if isPeeling { return 3.0 }
+            return 2.2
         }()
         
         let activeScale: CGFloat = {
@@ -1506,8 +1793,9 @@ private struct WindowPreviewTileView: View {
                         RoundedRectangle(cornerRadius: winCorner, style: .continuous)
                             .stroke(
                                 baseTint.opacity(strokeOpacity),
-                                lineWidth: (isSelected || isFocused) ? 2.8 : (isPeeling ? 3.0 : 2.2)
+                                lineWidth: windowBorderWidth
                             )
+                            .animation(.spring(response: 0.25, dampingFraction: 0.78), value: windowBorderWidth)
                     }
                     .overlay {
                         // Inner contrast bevel highlight (1.0pt)
@@ -1545,12 +1833,21 @@ private struct WindowPreviewTileView: View {
                     )
                 
                 // ── Titlebar divider line ───────────────────────────────
-                if h >= 14 {
+                if !isFullScreen && h >= 14 {
                     let titleBarH: CGFloat = max(6, h * 0.14)
                     Rectangle()
                         .fill(baseTint.opacity(strokeOpacity * 0.35))
                         .frame(height: 0.75)
                         .offset(y: titleBarH)
+                }
+
+                // Centered macOS native full-screen glyph in the middle of the window dimensions
+                if isFullScreen {
+                    let glyphSize = min(max(min(w, h) * 0.26, 9), min(w - 2, h - 2), 30)
+                    MacOSFullScreenGlyph()
+                        .fill(Color.green.opacity(0.85))
+                        .frame(width: glyphSize, height: glyphSize)
+                        .position(x: max(8, w) / 2, y: max(8, h) / 2)
                 }
 
                 // ── Top-left App Icon Badge ─────────────────────────────
@@ -1951,7 +2248,7 @@ struct MenuWindowListView: View {
 
     private func appRow(_ record: WindowRecord, isFirstOfApp: Bool = true) -> some View {
         let isForeground = record.windowID.appBundleID == snapshot.foregroundBundleID
-        let rowTint = record.isFullScreenMode ? Color.indigo : themeColor.color(seed: 6)
+        let rowTint = record.isFullScreenMode ? Color.green : themeColor.color(seed: 6)
         let isHovered = hoveredRecordID == record.id
         let itemTint = isHovered ? Color.white : rowTint
         // Active badge shown only on the first (topmost) window of the frontmost app
@@ -2086,10 +2383,23 @@ struct MenuWindowListView: View {
 
 struct AutoSavePreviewCardView: View {
     let snapshot: LayoutSnapshot
+    var indicator: AutoLayoutCaptureIndicator = .sameWindowCount
+    let activityApps: [AutoLayoutCaptureAppIcon]
+    var triggeringRecordIDs: Set<UUID> = []
     let tint: Color
     let language: AppLanguage
     let onRestore: () -> Void
     @AppStorage("minimalVisualAnimations") private var minimalVisualAnimations: Bool = true
+
+    private var triggeringBundleIDs: Set<String> {
+        guard indicator != .history else { return [] }
+        return Set(activityApps.map(\.bundleID).filter { !$0.isEmpty })
+    }
+
+    private var triggeringAppNames: Set<String> {
+        guard indicator != .history else { return [] }
+        return Set(activityApps.compactMap(\.appName).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2104,7 +2414,59 @@ struct AutoSavePreviewCardView: View {
                     Text("Restore this layout".localized(language))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.primary)
+
                     Spacer(minLength: 8)
+
+                    if case .addedWindows = indicator, !activityApps.isEmpty {
+                        HStack(spacing: 4) {
+                            Text("+")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(Color.green)
+
+                            ForEach(activityApps.prefix(4)) { app in
+                                Image(nsImage: app.image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(width: 16, height: 16)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
+                            }
+
+                            if activityApps.count > 4 {
+                                Text("+\(activityApps.count - 4)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Text("·")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    } else if case .sameWindowCount = indicator, !activityApps.isEmpty {
+                        HStack(spacing: 4) {
+                            Image(systemName: "rectangle.and.arrow.up.right.and.arrow.down.left")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color.blue)
+
+                            ForEach(activityApps.prefix(4)) { app in
+                                Image(nsImage: app.image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(width: 16, height: 16)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
+                            }
+
+                            if activityApps.count > 4 {
+                                Text("+\(activityApps.count - 4)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Text("·")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+
                     Text(snapshot.previewRecords.count == 1 ? "1 window".localized(language) : "\(snapshot.previewRecords.count) \("windows".localized(language))")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -2122,7 +2484,12 @@ struct AutoSavePreviewCardView: View {
                 selectedRecordID: nil,
                 tint: tint,
                 animateWindowReveal: true,
-                isMenubarThumbnail: true
+                isMenubarThumbnail: true,
+                isMinimalVisualAnimations: minimalVisualAnimations,
+                triggeringRecordIDs: triggeringRecordIDs,
+                triggeringBundleIDs: triggeringBundleIDs,
+                triggeringAppNames: triggeringAppNames,
+                captureIndicator: indicator
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)

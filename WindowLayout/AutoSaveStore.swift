@@ -158,11 +158,19 @@ final class AutoSaveStore: ObservableObject {
     /// flushes before it restores. Every restore the user asks for by hand did.
     var latest: AutoSaveEntry? { pending ?? entries.first }
 
-    /// Every capture a caller can reach, newest first.
-    ///
-    /// The unwritten one belongs at the front, so `first` is `latest` and any
-    /// walk that skips the first entry skips the one already tried.
-    var visibleEntries: [AutoSaveEntry] { pending.map { [$0] + entries } ?? entries }
+    /// Every capture a caller can reach, newest first, deduplicating any consecutive identical captures per screen.
+    var visibleEntries: [AutoSaveEntry] {
+        let all = pending.map { [$0] + entries } ?? entries
+        var result: [AutoSaveEntry] = []
+        for entry in all {
+            if let last = result.last(where: { $0.screenKey == entry.screenKey }),
+               Self.recordsMatchGeometry(entry.records, last.records) {
+                continue
+            }
+            result.append(entry)
+        }
+        return result
+    }
 
     /// The unwritten capture replaces the stored capture for its display while
     /// it is pending, so the UI and a manual restore always see the same state.
@@ -228,6 +236,91 @@ final class AutoSaveStore: ObservableObject {
 
     // MARK: - Recording
 
+    /// Compares two sets of window records for layout equality (same count, same bundle IDs, and matching frames within tolerance).
+    /// Focus order/zIndex is intentionally ignored so active window switches do not create duplicate captures.
+    private static func recordsMatchGeometry(_ lhs: [WindowRecord], _ rhs: [WindowRecord], tolerance: CGFloat = 2) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        var unmatchedRHS = rhs
+        for left in lhs {
+            guard let matchIndex = unmatchedRHS.firstIndex(where: { right in
+                left.windowID.appBundleID == right.windowID.appBundleID &&
+                left.isFullScreenMode == right.isFullScreenMode &&
+                abs(left.globalFrame.origin.x - right.globalFrame.origin.x) <= tolerance &&
+                abs(left.globalFrame.origin.y - right.globalFrame.origin.y) <= tolerance &&
+                abs(left.globalFrame.width - right.globalFrame.width) <= tolerance &&
+                abs(left.globalFrame.height - right.globalFrame.height) <= tolerance
+            }) else {
+                return false
+            }
+            unmatchedRHS.remove(at: matchIndex)
+        }
+        return true
+    }
+
+    /// Detailed diagnostic difference explainer when two snapshots have the same count but fail geometry matching.
+    private static func explainGeometryDifference(_ lhs: [WindowRecord], _ rhs: [WindowRecord], tolerance: CGFloat = 2) -> String {
+        guard lhs.count == rhs.count else {
+            return "count mismatch (\(lhs.count) vs \(rhs.count))"
+        }
+        var unmatchedRHS = rhs
+        var diffs: [String] = []
+        for left in lhs {
+            if let matchIndex = unmatchedRHS.firstIndex(where: { right in
+                left.windowID.appBundleID == right.windowID.appBundleID &&
+                left.isFullScreenMode == right.isFullScreenMode &&
+                abs(left.globalFrame.origin.x - right.globalFrame.origin.x) <= tolerance &&
+                abs(left.globalFrame.origin.y - right.globalFrame.origin.y) <= tolerance &&
+                abs(left.globalFrame.width - right.globalFrame.width) <= tolerance &&
+                abs(left.globalFrame.height - right.globalFrame.height) <= tolerance
+            }) {
+                unmatchedRHS.remove(at: matchIndex)
+            } else {
+                let app = left.windowID.appName ?? left.windowID.appBundleID
+                if let closest = unmatchedRHS.first(where: { $0.windowID.appBundleID == left.windowID.appBundleID }) {
+                    let dx = left.globalFrame.origin.x - closest.globalFrame.origin.x
+                    let dy = left.globalFrame.origin.y - closest.globalFrame.origin.y
+                    let dw = left.globalFrame.width - closest.globalFrame.width
+                    let dh = left.globalFrame.height - closest.globalFrame.height
+                    var reasons: [String] = []
+                    if abs(dx) > tolerance { reasons.append(String(format: "dx=%.1f", dx)) }
+                    if abs(dy) > tolerance { reasons.append(String(format: "dy=%.1f", dy)) }
+                    if abs(dw) > tolerance { reasons.append(String(format: "dw=%.1f", dw)) }
+                    if abs(dh) > tolerance { reasons.append(String(format: "dh=%.1f", dh)) }
+                    if left.isFullScreenMode != closest.isFullScreenMode {
+                        reasons.append("isFullScreenMode (\(left.isFullScreenMode) vs \(closest.isFullScreenMode))")
+                    }
+                    diffs.append("\(app): [\(reasons.joined(separator: ", "))]")
+                    unmatchedRHS.removeAll(where: { $0.id == closest.id })
+                } else {
+                    diffs.append("\(app): missing in other snapshot")
+                }
+            }
+        }
+        return diffs.isEmpty ? "no difference" : diffs.prefix(3).joined(separator: "; ")
+    }
+
+    /// Checks if `subset` is a strict subset of `superset` where every window in `subset`
+    /// has identical geometry to its corresponding window in `superset`.
+    /// When true, windows were closed/hidden but none of the remaining windows moved or resized.
+    private static func isSubsetWithoutMovement(subset: [WindowRecord], superset: [WindowRecord], tolerance: CGFloat = 3) -> Bool {
+        guard subset.count < superset.count, !subset.isEmpty else { return false }
+        var unmatchedSuperset = superset
+        for sub in subset {
+            guard let matchIndex = unmatchedSuperset.firstIndex(where: { sup in
+                sub.windowID.appBundleID == sup.windowID.appBundleID &&
+                sub.isFullScreenMode == sup.isFullScreenMode &&
+                abs(sub.globalFrame.origin.x - sup.globalFrame.origin.x) <= tolerance &&
+                abs(sub.globalFrame.origin.y - sup.globalFrame.origin.y) <= tolerance &&
+                abs(sub.globalFrame.width - sup.globalFrame.width) <= tolerance &&
+                abs(sub.globalFrame.height - sup.globalFrame.height) <= tolerance
+            }) else {
+                return false
+            }
+            unmatchedSuperset.remove(at: matchIndex)
+        }
+        return true
+    }
+
     /// Offers a capture. Held in memory and written only when the coalescing
     /// interval has passed, unless `force` is set.
     func record(records: [WindowRecord],
@@ -245,6 +338,87 @@ final class AutoSaveStore: ObservableObject {
         // windows still open are where the capture says they are.
         rememberLastKnown(records)
 
+        // Existing captures for this screen configuration, newest first.
+        let existingForScreen = entries.filter { $0.screenKey == screenKey }
+
+        // 1. Check if the incoming layout is identical to the latest capture or pending capture
+        if let p = pending, p.screenKey == screenKey, Self.recordsMatchGeometry(records, p.records) {
+            log("auto-save: layout matches pending capture — skipping duplicate snapshot")
+            return
+        }
+        if let latestCommitted = existingForScreen.first, Self.recordsMatchGeometry(records, latestCommitted.records) {
+            log("auto-save: layout matches latest committed capture — skipping duplicate snapshot")
+            pending = nil
+            return
+        }
+
+        // Check if windows were closed without any remaining windows moving/resizing:
+        // Test against pending first (if set for this screen), then against the committed latestEntry.
+        let isSubsetOfPending = (pending?.screenKey == screenKey) && Self.isSubsetWithoutMovement(subset: records, superset: pending!.records)
+        let isSubsetOfCommitted = existingForScreen.first.map { Self.isSubsetWithoutMovement(subset: records, superset: $0.records) } ?? false
+
+        if isSubsetOfPending || isSubsetOfCommitted {
+            log("auto-save: windows closed but remaining windows did not move — skipping capture to keep existing history intact")
+            return
+        }
+
+        // 2. Check if the incoming layout matches a previous capture (e.g. Capture 1 in a 2-layout toggle, or older in ring)
+        if let matchIndex = existingForScreen.indices.first(where: { idx in
+            if pending != nil && pending?.screenKey == screenKey {
+                return Self.recordsMatchGeometry(records, existingForScreen[idx].records)
+            } else {
+                return idx > 0 && Self.recordsMatchGeometry(records, existingForScreen[idx].records)
+            }
+        }) {
+            let matchedEntry = existingForScreen[matchIndex]
+            if let globalIndex = entries.firstIndex(where: { $0.id == matchedEntry.id }) {
+                entries.remove(at: globalIndex)
+                let updatedEntry = AutoSaveEntry(
+                    id: matchedEntry.id,
+                    capturedAt: now,
+                    screenKey: screenKey,
+                    readableScreenKey: readableScreenKey ?? matchedEntry.readableScreenKey,
+                    records: records
+                )
+                entries.insert(updatedEntry, at: 0)
+
+                // Update displayEntries for this screen
+                displayEntries.removeAll { $0.screenKey == screenKey }
+                displayEntries.insert(updatedEntry, at: 0)
+                displayEntriesIsDirty = true
+
+                // If pending was for this screen and had a distinct layout, preserve it as an older capture
+                if let p = pending, p.screenKey == screenKey {
+                    pending = nil
+                    if !Self.recordsMatchGeometry(p.records, records) {
+                        entries.insert(p, at: 1)
+                    }
+                }
+
+                // Trim per configuration to maintain ring capacity
+                var keptPerConfiguration: [String: Int] = [:]
+                entries = entries.filter { candidate in
+                    let kept = (keptPerConfiguration[candidate.screenKey] ?? 0) + 1
+                    keptPerConfiguration[candidate.screenKey] = kept
+                    return kept <= Self.ringCapacity
+                }
+                if entries.count > Self.ringTotalCapacity {
+                    entries.removeSubrange(Self.ringTotalCapacity...)
+                }
+
+                consecutiveCollapseRefusals = 0
+                log("auto-save: layout matches previous capture — rearranged layouts, promoted to latest")
+                scheduleWrite(now: now, force: force)
+                return
+            }
+        }
+
+        // Diagnostic: If no match was found, explain why recent captures with the same count differed
+        for (idx, candidate) in existingForScreen.prefix(3).enumerated() where candidate.windowCount == records.count {
+            let diff = Self.explainGeometryDifference(records, candidate.records)
+            log("auto-save diff vs [\(idx == 0 ? "latest" : "capture #\(idx)")]: \(diff)")
+        }
+
         if let reason = collapseReason(newCount: records.count, screenKey: screenKey) {
             consecutiveCollapseRefusals += 1
             if consecutiveCollapseRefusals < Self.collapseRefusalLimit {
@@ -256,6 +430,32 @@ final class AutoSaveStore: ObservableObject {
         }
         consecutiveCollapseRefusals = 0
 
+        // If an entry for this screen has the same window count and was captured
+        // within a short settling window (10s), it was likely an unplaced launch position
+        // or intermediate window move. Replace it with this settled layout rather than cluttering
+        // history with two captures of the same window count back-to-back.
+        if let p = pending, p.screenKey == screenKey, p.windowCount == records.count, now.timeIntervalSince(p.capturedAt) < 10.0 {
+            log("auto-save: updating pending layout (\(String(format: "%.1f", now.timeIntervalSince(p.capturedAt)))s old, count \(records.count)) with settled layout")
+            pending = AutoSaveEntry(id: p.id,
+                                    capturedAt: now,
+                                    screenKey: screenKey,
+                                    readableScreenKey: readableScreenKey ?? p.readableScreenKey,
+                                    records: records)
+            scheduleWrite(now: now, force: force)
+            return
+        }
+
+        if pending == nil,
+           let latest = existingForScreen.first,
+           latest.windowCount == records.count,
+           now.timeIntervalSince(latest.capturedAt) < 10.0 {
+            if let globalIndex = entries.firstIndex(where: { $0.id == latest.id }) {
+                entries.remove(at: globalIndex)
+                displayEntries.removeAll { $0.id == latest.id }
+                log("auto-save: updating recently captured layout (\(String(format: "%.1f", now.timeIntervalSince(latest.capturedAt)))s old, count \(records.count)) with settled layout")
+            }
+        }
+
         pending = AutoSaveEntry(capturedAt: now,
                                 screenKey: screenKey,
                                 readableScreenKey: readableScreenKey,
@@ -266,7 +466,7 @@ final class AutoSaveStore: ObservableObject {
     /// Writes now if the coalescing interval has run out, otherwise arms the
     /// trailing timer so it is written when it does.
     private func scheduleWrite(now: Date, force: Bool) {
-        guard pending != nil || lastKnownIsDirty else { return }
+        guard pending != nil || lastKnownIsDirty || displayEntriesIsDirty else { return }
         if force || lastWrite == nil || now.timeIntervalSince(lastWrite!) >= Self.coalescingInterval {
             flush(now: now)
         } else {
@@ -340,19 +540,30 @@ final class AutoSaveStore: ObservableObject {
         }
         if let entry = pending {
             pending = nil
-            entries.insert(entry, at: 0)
-            // Trim per configuration. `entries` is newest-first, so counting
-            // forward per `screenKey` and dropping a configuration's sixth and
-            // later captures keeps the five newest of each, and leaves every
-            // other configuration's history alone.
-            var keptPerConfiguration: [String: Int] = [:]
-            entries = entries.filter { candidate in
-                let kept = (keptPerConfiguration[candidate.screenKey] ?? 0) + 1
-                keptPerConfiguration[candidate.screenKey] = kept
-                return kept <= Self.ringCapacity
-            }
-            if entries.count > Self.ringTotalCapacity {
-                entries.removeSubrange(Self.ringTotalCapacity...)
+            // If this entry was an in-place update of an existing entry, update it in-place in entries
+            if let existingIndex = entries.firstIndex(where: { $0.id == entry.id }) {
+                entries[existingIndex] = entry
+            } else {
+                let isDuplicateOfLatest = entries.first(where: { $0.screenKey == entry.screenKey }).map {
+                    Self.recordsMatchGeometry(entry.records, $0.records)
+                } ?? false
+
+                if !isDuplicateOfLatest {
+                    entries.insert(entry, at: 0)
+                    // Trim per configuration. `entries` is newest-first, so counting
+                    // forward per `screenKey` and dropping a configuration's sixth and
+                    // later captures keeps the five newest of each, and leaves every
+                    // other configuration's history alone.
+                    var keptPerConfiguration: [String: Int] = [:]
+                    entries = entries.filter { candidate in
+                        let kept = (keptPerConfiguration[candidate.screenKey] ?? 0) + 1
+                        keptPerConfiguration[candidate.screenKey] = kept
+                        return kept <= Self.ringCapacity
+                    }
+                    if entries.count > Self.ringTotalCapacity {
+                        entries.removeSubrange(Self.ringTotalCapacity...)
+                    }
+                }
             }
             displayEntries.removeAll { $0.screenKey == entry.screenKey }
             displayEntries.insert(entry, at: 0)
@@ -392,6 +603,17 @@ final class AutoSaveStore: ObservableObject {
     // MARK: - Disk
 
     private func write() {
+        // Deduplicate consecutive identical entries per screen configuration before saving:
+        var deduplicated: [AutoSaveEntry] = []
+        for entry in entries {
+            if let last = deduplicated.last(where: { $0.screenKey == entry.screenKey }),
+               Self.recordsMatchGeometry(entry.records, last.records) {
+                continue
+            }
+            deduplicated.append(entry)
+        }
+        entries = deduplicated
+
         do {
             let data = try JSONEncoder().encode(AutoSaveFile(entries: entries,
                                                              displayEntries: displayEntries,
@@ -433,7 +655,17 @@ final class AutoSaveStore: ObservableObject {
         }
         do {
             let file = try JSONDecoder().decode(AutoSaveFile.self, from: data)
-            entries = file.entries
+            // Filter out duplicate captures for the same screen configuration:
+            var deduplicatedEntries: [AutoSaveEntry] = []
+            for entry in file.entries {
+                let hasDuplicate = deduplicatedEntries.contains { existing in
+                    existing.screenKey == entry.screenKey && Self.recordsMatchGeometry(entry.records, existing.records)
+                }
+                if !hasDuplicate {
+                    deduplicatedEntries.append(entry)
+                }
+            }
+            entries = deduplicatedEntries
             lastKnown = file.lastKnown
             foregroundAppByScreenKey = file.foregroundAppByScreenKey
 

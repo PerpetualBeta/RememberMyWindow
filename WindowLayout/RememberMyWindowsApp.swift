@@ -307,6 +307,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
     private var lastFrontmostAppID: String?
+    private var autoSaveMenuIconVariants: [ObjectIdentifier: (normal: NSImage, highlighted: NSImage)] = [:]
+    private weak var highlightedAutoSaveMenuItem: NSMenuItem?
     private var windowServerCursorCancellable: AnyCancellable?
     private var hasWindowServerCursorOverride = false
 
@@ -637,8 +639,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 
 
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        guard menu === self.menu else { return }
+
+        restoreHighlightedAutoSaveMenuIcon()
+        guard let item,
+              let icons = autoSaveMenuIconVariants[ObjectIdentifier(item)] else { return }
+
+        item.image = icons.highlighted
+        highlightedAutoSaveMenuItem = item
+    }
+
+    private func restoreHighlightedAutoSaveMenuIcon() {
+        guard let item = highlightedAutoSaveMenuItem else { return }
+        item.image = autoSaveMenuIconVariants[ObjectIdentifier(item)]?.normal
+        highlightedAutoSaveMenuItem = nil
+    }
+
     // Called right after the menu closes so we can detach it
     func menuDidClose(_ menu: NSMenu) {
+        restoreHighlightedAutoSaveMenuIcon()
+        autoSaveMenuIconVariants.removeAll()
         statusItem?.menu = nil
     }
 
@@ -665,6 +686,95 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return true
         }
         img.isTemplate = true
+        return img
+    }
+
+    private func applicationIconMenuImage() -> NSImage? {
+        guard let appIcon = NSApplication.shared.applicationIconImage else {
+            return nil
+        }
+
+        let targetSize = NSSize(width: 16, height: 16)
+        let image = NSImage(size: targetSize, flipped: false) { rect in
+            let iconSize = appIcon.size
+            guard iconSize.width > 0, iconSize.height > 0 else { return false }
+
+            let scale = min(rect.width / iconSize.width, rect.height / iconSize.height)
+            let width = iconSize.width * scale
+            let height = iconSize.height * scale
+            let drawRect = NSRect(
+                x: rect.midX - width / 2,
+                y: rect.midY - height / 2,
+                width: width,
+                height: height
+            )
+            appIcon.draw(in: drawRect, from: .zero, operation: .sourceOver, fraction: 1.0)
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+
+    private func menuColoredSymbolImage(_ symbolName: String, color: NSColor) -> NSImage? {
+        let sizeConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        let colorConfig = NSImage.SymbolConfiguration(paletteColors: [color])
+        let config = sizeConfig.applying(colorConfig)
+        guard let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?.withSymbolConfiguration(config) else {
+            return nil
+        }
+        let targetSize = NSSize(width: 18, height: 16)
+        let img = NSImage(size: targetSize, flipped: false) { rect in
+            let bSize = base.size
+            if bSize.width > 0 && bSize.height > 0 {
+                let scale = min(targetSize.width / bSize.width, targetSize.height / bSize.height)
+                let w = bSize.width * scale
+                let h = bSize.height * scale
+                let x = (targetSize.width - w) / 2
+                let y = (targetSize.height - h) / 2
+                base.draw(in: NSRect(x: x, y: y, width: w, height: h))
+            } else {
+                base.draw(in: rect)
+            }
+            return true
+        }
+        img.isTemplate = false
+        return img
+    }
+
+    private func menuAddedWindowsBadgeImage(_ count: Int, color: NSColor = .systemGreen) -> NSImage? {
+        let countStr = "\(count)"
+        let numberFont = NSFont.systemFont(ofSize: 11, weight: .bold)
+        let plusFont = NSFont.systemFont(ofSize: 8.5, weight: .bold)
+
+        let attrStr = NSMutableAttributedString()
+        attrStr.append(NSAttributedString(
+            string: countStr,
+            attributes: [
+                .font: numberFont,
+                .foregroundColor: color
+            ]
+        ))
+        attrStr.append(NSAttributedString(
+            string: "+",
+            attributes: [
+                .font: plusFont,
+                .foregroundColor: color,
+                .baselineOffset: 2.0
+            ]
+        ))
+
+        let textSize = attrStr.size()
+        let targetWidth = max(18.0, ceil(textSize.width))
+        let targetHeight: CGFloat = 16.0
+        let targetSize = NSSize(width: targetWidth, height: targetHeight)
+
+        let img = NSImage(size: targetSize, flipped: false) { _ in
+            let x = (targetWidth - textSize.width) / 2
+            let y = (targetHeight - textSize.height) / 2
+            attrStr.draw(at: NSPoint(x: x, y: y))
+            return true
+        }
+        img.isTemplate = false
         return img
     }
 
@@ -699,7 +809,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         let openItem = menu.addItem(withTitle: openTitle, action: #selector(openMainWindow), keyEquivalent: "o")
-        openItem.image = menuSymbolImage("macwindow.on.rectangle")
+        openItem.image = applicationIconMenuImage() ?? menuSymbolImage("macwindow.on.rectangle")
         menu.addItem(NSMenuItem.separator())
 
         if let snap = WindowManager.shared.currentApplicableSnapshot {
@@ -838,16 +948,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupAutoSaveMenu(_ menu: NSMenu) {
         let openItem = menu.addItem(withTitle: lz("Open RememberMyWindows"), action: #selector(openMainWindow), keyEquivalent: "o")
-        openItem.image = menuSymbolImage("macwindow.on.rectangle")
+        openItem.image = applicationIconMenuImage() ?? menuSymbolImage("macwindow.on.rectangle")
         menu.addItem(NSMenuItem.separator())
 
-        let headerItem = NSMenuItem(title: lz("Recent Auto Captures"), action: nil, keyEquivalent: "")
+        let headerTitle = lz("Recent Auto Captures")
+        let headerItem = NSMenuItem()
         headerItem.isEnabled = false
+        let headerView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 20))
+        let headerLabel = NSTextField(labelWithString: headerTitle)
+        headerLabel.frame = NSRect(x: 16, y: 2, width: 300, height: 16)
+        headerLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        headerLabel.textColor = .secondaryLabelColor
+        headerView.addSubview(headerLabel)
+        headerItem.view = headerView
         menu.addItem(headerItem)
 
-        let matchingEntries = (WindowManager.shared.autoSaveStore?.visibleEntries ?? []).compactMap { entry -> (AutoSaveEntry, LayoutSnapshot)? in
-            guard let snap = WindowManager.shared.snapshot(from: entry) else { return nil }
-            return (entry, snap)
+        let currentScreenKey = WindowManager.shared.currentFingerprint.key
+        let captures = AutoLayoutCapturePresentation.make(
+            from: WindowManager.shared.autoSaveStore?.entries(forScreenKey: currentScreenKey) ?? [],
+            displayScreenKey: currentScreenKey,
+            currentScreenKey: currentScreenKey
+        )
+        let matchingEntries = captures.compactMap { capture -> (AutoLayoutCapturePresentation, LayoutSnapshot)? in
+            guard let snap = WindowManager.shared.snapshot(from: capture.entry) else { return nil }
+            return (capture, snap)
         }
 
         if matchingEntries.isEmpty {
@@ -861,17 +985,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let langStr = UserDefaults.standard.string(forKey: "appLanguage") ?? "system"
             let appLanguage = AppLanguage(rawValue: langStr) ?? .auto
 
-            for (index, (entry, snap)) in matchingEntries.enumerated() {
-                let ageStr = formatAutoSaveAge(of: entry.capturedAt)
-                let count = entry.windowCount
-                let title: String
-                if index == 0 {
-                    let format = count == 1 ? lz("Latest (%@) · 1 window") : lz("Latest (%@) · %d windows")
-                    title = count == 1 ? String(format: format, ageStr) : String(format: format, ageStr, count)
-                } else {
-                    let format = count == 1 ? lz("%@ · 1 window") : lz("%@ · %d windows")
-                    title = count == 1 ? String(format: format, ageStr) : String(format: format, ageStr, count)
-                }
+            for (capture, snap) in matchingEntries {
+                let entry = capture.entry
+                let title = capture.title(at: Date(), language: appLanguage)
 
                 let item = NSMenuItem(
                     title: title,
@@ -879,7 +995,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     keyEquivalent: ""
                 )
                 item.representedObject = entry.id.uuidString
-                item.image = menuSymbolImage("clock.arrow.circlepath")
+
+                let indicator = capture.changeIndicator
+
+                let normalIcon: NSImage?
+                let highlightedIcon: NSImage?
+                switch indicator {
+                case .sameWindowCount:
+                    normalIcon = menuColoredSymbolImage(
+                        "rectangle.and.arrow.up.right.and.arrow.down.left",
+                        color: indicator.nsColor
+                    )
+                    highlightedIcon = menuColoredSymbolImage(
+                        "rectangle.and.arrow.up.right.and.arrow.down.left",
+                        color: .black
+                    )
+                case .addedWindows(let difference):
+                    normalIcon = menuAddedWindowsBadgeImage(difference, color: indicator.nsColor)
+                    highlightedIcon = menuAddedWindowsBadgeImage(difference, color: .black)
+                case .history:
+                    normalIcon = menuColoredSymbolImage("clock.arrow.circlepath", color: indicator.nsColor)
+                    highlightedIcon = menuColoredSymbolImage("clock.arrow.circlepath", color: .black)
+                }
+
+                item.image = normalIcon
+                if let normalIcon, let highlightedIcon {
+                    autoSaveMenuIconVariants[ObjectIdentifier(item)] = (
+                        normal: normalIcon,
+                        highlighted: highlightedIcon
+                    )
+                }
 
                 // Hover flyout showing the visual preview and its title-row restore action.
                 let previewMenu = NSMenu()
@@ -888,6 +1033,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
                 let previewView = AutoSavePreviewCardView(
                     snapshot: snap,
+                    indicator: indicator,
+                    activityApps: capture.activityApps,
+                    triggeringRecordIDs: capture.triggeringRecordIDs,
                     tint: tint,
                     language: appLanguage,
                     onRestore: {
@@ -914,22 +1062,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem.separator())
         let quitItem = menu.addItem(withTitle: lz("Quit"), action: #selector(quitApp), keyEquivalent: "q")
         quitItem.image = menuSymbolImage("power")
-    }
-
-    private func formatAutoSaveAge(of date: Date) -> String {
-        let seconds = Date().timeIntervalSince(date)
-        if seconds < 60 {
-            return lz("just now")
-        }
-        let f = DateComponentsFormatter()
-        f.unitsStyle = .full
-        f.maximumUnitCount = 1
-        f.allowedUnits = seconds < 3600
-            ? [.minute]
-            : (seconds <= AutoLayoutHeroCard.dayDisplayThreshold ? [.hour] : [.day])
-        let spelled = f.string(from: seconds) ?? ""
-        guard !spelled.isEmpty else { return lz("just now") }
-        return String(format: lz("%@ ago"), spelled)
     }
 
     @objc private func restoreAutoSaveEntry(_ sender: NSMenuItem) {

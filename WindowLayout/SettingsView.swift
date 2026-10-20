@@ -66,8 +66,8 @@ enum NotificationChannel: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .notch: return "Slide-down alerts from the MacBook notch"
-        case .system: return "Standard macOS Notification Center banners"
+        case .notch: return "Show layout restore alerts sliding smoothly down from the MacBook notch"
+        case .system: return "Deliver standard Notification Center banners for layout and display events"
         }
     }
 }
@@ -196,7 +196,7 @@ struct SettingsView: View {
         .environment(\.minimalVisualAnimationsEnabled, minimalVisualAnimations)
         .appThemeColorScheme(themeColor)
         .sheet(isPresented: $showingOnboarding) {
-            OnboardingView(showsV15ReleaseNotes: false) {
+            OnboardingView {
                 showingOnboarding = false
                 hasCompletedOnboarding = true
             }
@@ -2916,7 +2916,8 @@ struct NotificationChannelNavRow: View {
                     Text(channel.subtitle.localized(appLanguage))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
@@ -3096,7 +3097,9 @@ struct NotificationChannelDetailView: View {
                                         soundName: Binding(
                                             get: { channel == .notch ? manager.store.notchSoundNameDisplayChange : manager.store.systemSoundNameDisplayChange },
                                             set: { v in channel == .notch ? (manager.store.notchSoundNameDisplayChange = v) : (manager.store.systemSoundNameDisplayChange = v); manager.persist() }
-                                        )
+                                        ),
+                                        isDisabled: manager.store.welcomeNotchPillEnabled,
+                                        disabledReason: "Disabled when Welcome Pill is enabled"
                                     )
 
                                     eventCard(
@@ -3199,7 +3202,9 @@ struct NotificationChannelDetailView: View {
                                         soundName: Binding(
                                             get: { channel == .notch ? manager.store.notchSoundNameDisplayChange : manager.store.systemSoundNameDisplayChange },
                                             set: { v in channel == .notch ? (manager.store.notchSoundNameDisplayChange = v) : (manager.store.systemSoundNameDisplayChange = v); manager.persist() }
-                                        )
+                                        ),
+                                        isDisabled: manager.store.welcomeNotchPillEnabled,
+                                        disabledReason: "Disabled when Welcome Pill is enabled"
                                     )
 
                                     eventCard(
@@ -3452,10 +3457,7 @@ struct NotificationChannelDetailView: View {
                     }
                 ),
                 previewAction: {
-                    manager.showWelcomeNotchPillDirect(
-                        subtitle: "",
-                        playSound: true
-                    )
+                    manager.previewWelcomeNotchPill()
                 }
             )
         }

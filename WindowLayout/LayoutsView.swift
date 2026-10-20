@@ -247,14 +247,12 @@ struct SnapshotListView: View {
             tint: themeColor.color(seed: 0),
             language: appLanguage,
             onRestore: { manager.restoreAutoLayout() },
-            earlier: entries.dropFirst().map {
-                AutoLayoutHeroCard.EarlierCapture(
-                    id: $0.id,
-                    capturedAt: $0.capturedAt,
-                    windowCount: $0.windowCount,
-                    matchesCurrentScreens: $0.screenKey == currentKey)
-            },
-            onRestoreEarlier: { manager.restoreAutoLayout(entryID: $0) },
+            captures: AutoLayoutCapturePresentation.make(
+                from: entries,
+                displayScreenKey: currentKey,
+                currentScreenKey: currentKey
+            ),
+            onRestoreCapture: { manager.restoreAutoLayout(entryID: $0) },
             now: context.date
         )
         }
@@ -431,7 +429,7 @@ struct SnapshotDetailView: View {
 
     func windowRow(_ record: WindowRecord, isForeground: Bool, isCurrentApp: Bool) -> some View {
         let isFull = isEntireScreen(record)
-        let rowTint = isFull ? Color.indigo : themeColor.color(seed: 6)
+        let rowTint = isFull ? Color.green : themeColor.color(seed: 6)
         
         return WindowRowContainer(
             record: record,
@@ -448,7 +446,7 @@ struct SnapshotDetailView: View {
 
     func windowGrid(_ record: WindowRecord, isForeground: Bool, isCurrentApp: Bool) -> some View {
         let isFull = isEntireScreen(record)
-        let rowTint = isFull ? Color.indigo : themeColor.color(seed: 6)
+        let rowTint = isFull ? Color.green : themeColor.color(seed: 6)
 
         return WindowGridCard(
             record: record,
@@ -625,7 +623,7 @@ struct WindowRowContainer: View {
                         }
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.indigo.opacity(0.15))
+                        .background(Color.green.opacity(0.15))
                         .foregroundStyle(.primary)
                         .clipShape(Capsule())
                     }
@@ -745,10 +743,10 @@ struct WindowGridCard: View {
             ZStack {
                 if isFull {
                     FullScreenPreviewIcon(tint: rowTint)
-                        .frame(width: 82, height: 52)
+                        .frame(width: 52, height: 34)
                 } else {
                     WindowPreviewIcon(record: record, tint: rowTint)
-                        .frame(width: 82, height: 52)
+                        .frame(width: 52, height: 34)
                 }
             }
             .frame(width: 82, height: 52)
@@ -831,7 +829,7 @@ struct WindowGridCard: View {
                             .font(.system(size: 8, weight: .bold))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
-                            .background(Color.indigo.opacity(0.18))
+                            .background(Color.green.opacity(0.18))
                             .foregroundStyle(.primary)
                             .clipShape(Capsule())
                     } else if isCurrentApp {
@@ -1088,7 +1086,37 @@ struct AutoLayoutCenterView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
+    @AppStorage("minimalVisualAnimations") private var minimalVisualAnimations: Bool = true
     @State private var isEarlierExpanded: Bool = true
+    @State private var timelineSelectionTask: Task<Void, Never>? = nil
+    @State private var pendingTimelineCaptureID: UUID? = nil
+    @State private var timelineCaptureID: UUID? = nil
+    @State private var hasInitializedTimelineCaptureID = false
+
+    private let timelineUpdateDelayNanoseconds: UInt64 = 150_000_000
+
+    private func selectCapture(_ selectionID: UUID?, timelineID: UUID?) {
+        scheduleTimelineSelection(timelineID)
+        if manager.selectedAutoSaveEntryID != selectionID {
+            manager.selectedAutoSaveEntryID = selectionID
+        }
+    }
+
+    private func scheduleTimelineSelection(_ timelineID: UUID?) {
+        guard timelineSelectionTask == nil || pendingTimelineCaptureID != timelineID else { return }
+
+        pendingTimelineCaptureID = timelineID
+        timelineSelectionTask?.cancel()
+        timelineSelectionTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: timelineUpdateDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+
+            timelineCaptureID = timelineID
+            hasInitializedTimelineCaptureID = true
+            pendingTimelineCaptureID = nil
+            timelineSelectionTask = nil
+        }
+    }
 
     private var activeEntry: AutoSaveEntry? {
         if let id = manager.selectedAutoSaveEntryID,
@@ -1121,6 +1149,31 @@ struct AutoLayoutCenterView: View {
             ?? entries.first
     }
 
+    private var activeCaptures: [AutoLayoutCapturePresentation] {
+        AutoLayoutCapturePresentation.make(
+            from: displayEntries,
+            displayScreenKey: activeScreenKey,
+            currentScreenKey: manager.currentFingerprint.key
+        )
+    }
+
+    private var activeCapturePresentation: AutoLayoutCapturePresentation? {
+        guard let id = activeEntry?.id else { return nil }
+        return activeCaptures.first(where: { $0.id == id })
+    }
+
+    /// The date in the timeline heading trails row selection slightly; the
+    /// selected layout, preview, and row feedback all update immediately.
+    private var timelineEntry: AutoSaveEntry? {
+        guard hasInitializedTimelineCaptureID else { return activeEntry }
+        guard manager.selectedAutoSaveEntryID != nil || timelineSelectionTask != nil else { return activeEntry }
+        guard let timelineCaptureID else { return nil }
+
+        return manager.autoSaveStore?.visibleEntries.first(where: { $0.id == timelineCaptureID })
+            ?? (rememberedEntries + entries).first(where: { $0.id == timelineCaptureID })
+            ?? activeEntry
+    }
+
     private var activeSnapshot: LayoutSnapshot? {
         if let entry = activeEntry {
             return LayoutSnapshot(
@@ -1142,12 +1195,16 @@ struct AutoLayoutCenterView: View {
 
     var body: some View {
         GeometryReader { outerGeo in
+            let isViewingEarlier = (manager.selectedAutoSaveEntryID != nil) &&
+                                   (manager.selectedAutoSaveEntryID != manager.autoSaveStore?.entry(forScreenKey: activeScreenKey)?.id)
+
             VStack(alignment: .leading, spacing: 16) {
                 // Return to latest banner if an earlier capture is selected
-                let isViewingEarlier = (manager.selectedAutoSaveEntryID != nil) &&
-                                       (manager.selectedAutoSaveEntryID != manager.autoSaveStore?.entry(forScreenKey: activeScreenKey)?.id)
                 if isViewingEarlier, let entry = activeEntry {
                     earlierCaptureBanner(entry: entry, activeScreenKey: activeScreenKey)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .clipped()
+                        .fullVisualAnimations()
                 }
 
                 // 1. Auto Layout Card on top (takes natural height)
@@ -1156,6 +1213,7 @@ struct AutoLayoutCenterView: View {
                     let entry = activeEntry
                     AutoLayoutHeroCard(
                         capturedAt: entry?.capturedAt,
+                        timelineCapturedAt: timelineEntry?.capturedAt,
                         windowCount: entry?.windowCount ?? 0,
                         screenName: entry.map { $0.readableScreenKey ?? $0.screenKey },
                         matchesCurrentScreens: entry?.screenKey == currentKey,
@@ -1168,24 +1226,11 @@ struct AutoLayoutCenterView: View {
                                 manager.restoreAutoLayout()
                             }
                         },
-                        earlier: displayEntries.dropFirst().map {
-                            AutoLayoutHeroCard.EarlierCapture(
-                                id: $0.id,
-                                capturedAt: $0.capturedAt,
-                                windowCount: $0.windowCount,
-                                matchesCurrentScreens: $0.screenKey == currentKey
-                            )
-                        },
-                        onRestoreEarlier: { manager.restoreAutoLayout(entryID: $0) },
+                        captures: activeCaptures,
+                        onRestoreCapture: { manager.restoreAutoLayout(entryID: $0) },
                         selectedCaptureID: manager.selectedAutoSaveEntryID,
-                        onSelectEarlier: { tappedID in
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                if manager.selectedAutoSaveEntryID == tappedID {
-                                    manager.selectedAutoSaveEntryID = nil
-                                } else {
-                                    manager.selectedAutoSaveEntryID = tappedID
-                                }
-                            }
+                        onSelectCapture: { tappedID in
+                            selectCapture(tappedID, timelineID: tappedID)
                         },
                         isExpanded: $isEarlierExpanded,
                         now: context.date
@@ -1197,8 +1242,6 @@ struct AutoLayoutCenterView: View {
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
-
-                Divider()
 
                 // 2. Visual Preview at the bottom (strictly fills remaining viewport height)
                 VStack(alignment: .leading, spacing: 10) {
@@ -1223,13 +1266,20 @@ struct AutoLayoutCenterView: View {
                     }
 
                     if let snap = activeSnapshot {
+                        let activePres = activeCapturePresentation
                         LayoutPreviewView(
                             snapshot: snap,
                             selectedRecordID: manager.selectedRecordID,
                             tint: themeColor.color(seed: 0),
                             enable3DHover: true,
                             animateWindowReveal: true,
-                            isMainWindow: true
+                            isMainWindow: true,
+                            isWindowArrangementPreview: true,
+                            isMinimalVisualAnimations: minimalVisualAnimations,
+                            triggeringRecordIDs: activePres?.triggeringRecordIDs ?? [],
+                            triggeringBundleIDs: Set(activePres?.activityApps.map(\.bundleID).filter { !$0.isEmpty } ?? []),
+                            triggeringAppNames: Set(activePres?.activityApps.compactMap(\.appName).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []),
+                            captureIndicator: activePres?.changeIndicator
                         )
                         .frame(maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
                         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snap.previewRecords.count)
@@ -1246,12 +1296,34 @@ struct AutoLayoutCenterView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .animation(.spring(response: 0.5, dampingFraction: 0.85), value: isViewingEarlier)
+            .fullVisualAnimations()
             .frame(width: outerGeo.size.width, height: outerGeo.size.height, alignment: .topLeading)
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             isEarlierExpanded = true
+            timelineCaptureID = activeEntry?.id
+            hasInitializedTimelineCaptureID = true
+        }
+        .onChange(of: manager.selectedAutoSaveEntryID) { _, selectionID in
+            let timelineID = selectionID ?? activeEntry?.id
+            guard timelineSelectionTask != nil,
+                  pendingTimelineCaptureID == timelineID else {
+                timelineSelectionTask?.cancel()
+                timelineSelectionTask = nil
+                pendingTimelineCaptureID = nil
+                timelineCaptureID = timelineID
+                hasInitializedTimelineCaptureID = true
+                return
+            }
+        }
+        .onDisappear {
+            timelineSelectionTask?.cancel()
+            timelineSelectionTask = nil
+            pendingTimelineCaptureID = nil
+            hasInitializedTimelineCaptureID = false
         }
     }
 
@@ -1278,11 +1350,14 @@ struct AutoLayoutCenterView: View {
             Spacer(minLength: 10)
 
             Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
+                var t = Transaction(animation: .spring(response: 0.5, dampingFraction: 0.85))
+                t.disablesAnimations = false
+                withTransaction(t) {
+                    let latestID = displayEntries.first?.id
                     if activeScreenKey == manager.currentFingerprint.key {
-                        manager.selectedAutoSaveEntryID = nil
+                        selectCapture(nil, timelineID: latestID)
                     } else {
-                        manager.selectedAutoSaveEntryID = manager.autoSaveStore?.entry(forScreenKey: activeScreenKey)?.id
+                        selectCapture(latestID, timelineID: latestID)
                     }
                     isEarlierExpanded = false
                 }
@@ -1319,6 +1394,19 @@ struct AutoLayoutSidebarWindowListView: View {
     @AppStorage("themeColor") private var themeColor: ThemeColor = .default
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
     @State private var isOtherDisplaysExpanded: Bool = true
+    @State private var symphonyHighlightRecordID: UUID? = nil
+    @State private var isListHovered: Bool = false
+
+    private var activeScreenKey: String {
+        activeEntry?.screenKey ?? manager.currentFingerprint.key
+    }
+
+    private var isAnyTopmostSelected: Bool {
+        if let foreground = manager.autoSaveStore?.foregroundApp(forScreenKey: activeScreenKey), !foreground.isEmpty {
+            return true
+        }
+        return false
+    }
 
     private var entries: [AutoSaveEntry] {
         // Restorable here, not merely recorded somewhere. See
@@ -1378,7 +1466,9 @@ struct AutoLayoutSidebarWindowListView: View {
                     HStack {
                         Button {
                             if !otherDisplays.isEmpty {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                var t = Transaction(animation: .spring(response: 0.5, dampingFraction: 0.85))
+                                t.disablesAnimations = false
+                                withTransaction(t) {
                                     isOtherDisplaysExpanded.toggle()
                                 }
                             }
@@ -1425,7 +1515,9 @@ struct AutoLayoutSidebarWindowListView: View {
                             appLanguage: appLanguage
                         )
                         .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.15)) {
+                            var t = Transaction(animation: .spring(response: 0.5, dampingFraction: 0.85))
+                            t.disablesAnimations = false
+                            withTransaction(t) {
                                 manager.selectedAutoSaveEntryID = currentDisplay.id
                                 manager.selectedRecordID = nil
                             }
@@ -1450,7 +1542,9 @@ struct AutoLayoutSidebarWindowListView: View {
                                     appLanguage: appLanguage
                                 )
                                 .onTapGesture {
-                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                    var t = Transaction(animation: .spring(response: 0.5, dampingFraction: 0.85))
+                                    t.disablesAnimations = false
+                                    withTransaction(t) {
                                         manager.selectedAutoSaveEntryID = displayEntry.id
                                         manager.selectedRecordID = nil
                                     }
@@ -1466,9 +1560,6 @@ struct AutoLayoutSidebarWindowListView: View {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .stroke(Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.10), lineWidth: 1)
                 }
-
-                Divider()
-                    .padding(.horizontal, 6)
 
                 // 2. LATEST CAPTURED WINDOWS Section (Below Displays List)
                 VStack(alignment: .leading, spacing: 6) {
@@ -1529,6 +1620,7 @@ struct AutoLayoutSidebarWindowListView: View {
                                 AutoLayoutSidebarWindowRow(
                                     record: record,
                                     isSelected: manager.selectedRecordID == record.id,
+                                    isSymphonyActive: symphonyHighlightRecordID == record.id,
                                     themeColor: themeColor,
                                     appLanguage: appLanguage
                                 )
@@ -1546,6 +1638,9 @@ struct AutoLayoutSidebarWindowListView: View {
                                 }
                             }
                         }
+                        .onHover { hovering in
+                            isListHovered = hovering
+                        }
                     }
                 }
             }
@@ -1555,6 +1650,88 @@ struct AutoLayoutSidebarWindowListView: View {
         }
         .scrollContentBackground(.hidden)
         .navigationTitle("Remember")
+        .fullVisualAnimations()
+        .task(id: "\(activeScreenKey)|\(manager.autoSaveStore?.foregroundApp(forScreenKey: activeScreenKey) ?? "")|\(records.count)") {
+            withAnimation(.easeOut(duration: 0.08)) {
+                symphonyHighlightRecordID = nil
+            }
+
+            guard !isAnyTopmostSelected, !records.isEmpty else {
+                withAnimation(.easeOut(duration: 0.08)) {
+                    symphonyHighlightRecordID = nil
+                }
+                return
+            }
+
+            // Initial brief pause before the first cycle begins
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if Task.isCancelled { return }
+
+            while !Task.isCancelled {
+                if isAnyTopmostSelected {
+                    withAnimation(.easeOut(duration: 0.08)) {
+                        symphonyHighlightRecordID = nil
+                    }
+                    break
+                }
+
+                if isListHovered {
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    continue
+                }
+
+                let currentRecords = records
+                guard !currentRecords.isEmpty else { break }
+
+                for record in currentRecords {
+                    if Task.isCancelled || isAnyTopmostSelected { break }
+
+                    // If user is hovering over the list, pause until mouse leaves
+                    while isListHovered && !Task.isCancelled && !isAnyTopmostSelected {
+                        if symphonyHighlightRecordID != nil {
+                            withAnimation(.easeInOut(duration: 0.12)) {
+                                symphonyHighlightRecordID = nil
+                            }
+                        }
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                    }
+                    if Task.isCancelled || isAnyTopmostSelected { break }
+
+                    // Note on: balanced smooth fade-in (120ms)
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        symphonyHighlightRecordID = record.id
+                    }
+
+                    // Dwell visible (60ms)
+                    try? await Task.sleep(nanoseconds: 60_000_000)
+                    if Task.isCancelled || isAnyTopmostSelected { break }
+
+                    // Note off: balanced smooth fade-out (120ms)
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        if symphonyHighlightRecordID == record.id {
+                            symphonyHighlightRecordID = nil
+                        }
+                    }
+
+                    // Breathing gap before next row (25ms)
+                    try? await Task.sleep(nanoseconds: 25_000_000)
+                }
+
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    symphonyHighlightRecordID = nil
+                }
+
+                if Task.isCancelled || isAnyTopmostSelected {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        symphonyHighlightRecordID = nil
+                    }
+                    break
+                }
+
+                // Calm rest between cycles (2.5 seconds)
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+            }
+        }
     }
 }
 
@@ -1689,6 +1866,7 @@ struct AutoLayoutSidebarWindowRow: View {
     @EnvironmentObject var manager: WindowManager
     let record: WindowRecord
     let isSelected: Bool
+    var isSymphonyActive: Bool = false
     let themeColor: ThemeColor
     let appLanguage: AppLanguage
 
@@ -1696,7 +1874,7 @@ struct AutoLayoutSidebarWindowRow: View {
 
     var body: some View {
         let isFull = record.isFullScreenMode
-        let baseTint = isFull ? Color.indigo : themeColor.color(seed: 0)
+        let baseTint = isFull ? Color.green : themeColor.color(seed: 0)
         let thumbTint = isSelected ? baseTint : (isHovered ? baseTint : baseTint.opacity(0.85))
         let appID = record.windowID.appBundleID
         let screenKey = record.screenKey
@@ -1719,7 +1897,7 @@ struct AutoLayoutSidebarWindowRow: View {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .mainWindowSymbolAnimation(.wiggle, capturesClicks: false)
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.indigo)
+                            .foregroundStyle(.green)
                     }
 
                     if isForeground {
@@ -1767,14 +1945,14 @@ struct AutoLayoutSidebarWindowRow: View {
                 }
                 .frame(width: 52, height: 34)
 
-                if isHovered || isForeground {
+                if isHovered || isForeground || isSymphonyActive {
                     ThumbnailBringToFrontButton(
                         appLanguage: appLanguage,
                         isActive: isForeground
                     ) {
                         manager.setAutoLayoutForegroundApp(screenKey: screenKey, bundleID: appID)
                     }
-                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                    .transition(.opacity)
                 }
             }
             .frame(width: 52, height: 34)

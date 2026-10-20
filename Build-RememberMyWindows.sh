@@ -12,6 +12,7 @@ pkill -x "RememberMyWindows" || true
 echo "Resetting onboarding state for dev build"
 defaults delete com.netanel.remembermywindows hasCompletedOnboarding 2>/dev/null || true
 defaults delete com.netanel.remembermywindows hasCompletedV15Tour 2>/dev/null || true
+defaults delete com.netanel.remembermywindows hasSeenV15_5Notes 2>/dev/null || true
 
 # Reset Device Control and Data Access TCC permission for the old build
 # (disables the toggle shown in System Settings → Privacy → Device Control and Data Access)
@@ -61,6 +62,7 @@ swiftc -parse-as-library \
     WindowLayout/ShortcutMigrationView.swift \
     WindowLayout/Localization.swift \
     WindowLayout/OnboardingView.swift \
+    WindowLayout/WhatsNewView.swift \
     WindowLayout/CommandOverlayManager.swift \
     WindowLayout/WebAppDetector.swift \
     WindowLayout/MenuBarIconManager.swift \

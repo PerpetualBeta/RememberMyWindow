@@ -5,7 +5,6 @@ import Carbon
 // MARK: - Root
 
 struct OnboardingView: View {
-    var showsV15ReleaseNotes: Bool = false
     var onComplete: () -> Void
 
     @AppStorage("appLanguage") private var appLanguage: AppLanguage = .auto
@@ -21,22 +20,11 @@ struct OnboardingView: View {
             case .setup:
                 OnboardingSetupView(selectedLanguage: $appLanguage) {
                     withAnimation(.spring(response: 0.52, dampingFraction: 0.82)) {
-                        phase = showsV15ReleaseNotes ? .releaseNotes : .guide
-                    }
-                }
-                .transition(.asymmetric(
-                    insertion: .opacity,
-                    removal: .move(edge: .leading).combined(with: .opacity)
-                ))
-
-            case .releaseNotes:
-                V15ReleaseNotesView(language: appLanguage) {
-                    withAnimation(.spring(response: 0.52, dampingFraction: 0.82)) {
                         phase = .guide
                     }
                 }
                 .transition(.asymmetric(
-                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    insertion: .opacity,
                     removal: .move(edge: .leading).combined(with: .opacity)
                 ))
 
@@ -54,155 +42,7 @@ struct OnboardingView: View {
     }
 }
 
-private enum OnboardingPhase { case setup, releaseNotes, guide }
-
-// LIFECYCLE / CLEANUP NOTE:
-// This view is specific to the v15.0 major update introduction.
-// In future versions (v15.1+ / v16.0), either:
-// 1. Remove this view and retire the `.releaseNotes` phase in OnboardingPhase, or
-// 2. Refactor into a version-agnostic ReleaseNotesView keyed dynamically by the current app version.
-private struct V15ReleaseNotesView: View {
-    let language: AppLanguage
-    var onContinue: () -> Void
-
-    @AppStorage("themeColor") private var themeColor: ThemeColor = .default
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var accent: Color { themeColor.color(seed: 0) }
-    private var accentText: Color {
-        themeColor.isGalaxy ? .black : themeColor.onAccentColor(for: colorScheme)
-    }
-    private var alignment: HorizontalAlignment { language.usesHebrew ? .trailing : .leading }
-    private var sections: [V15ReleaseNoteSection] { V15ReleaseNoteContent.sections(for: language) }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            header
-
-            ScrollView {
-                VStack(alignment: alignment, spacing: 15) {
-                    ForEach(sections) { section in
-                        VStack(alignment: alignment, spacing: 6) {
-                            Text(section.title)
-                                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
-
-                            ForEach(section.bullets.indices, id: \.self) { index in
-                                HStack(alignment: .top, spacing: 8) {
-                                    Circle()
-                                        .fill(accent)
-                                        .frame(width: 4, height: 4)
-                                        .padding(.top, 6)
-
-                                    Text(section.bullets[index])
-                                        .font(.system(size: 12.5))
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
-                                }
-                                .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
-                .padding(.horizontal, 30)
-                .padding(.vertical, 8)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            Button(action: onContinue) {
-                HStack(spacing: 8) {
-                    Text("Continue".localized(language))
-                    Image(systemName: language.usesHebrew ? "arrow.left" : "arrow.right")
-                }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(accentText)
-                .padding(.horizontal, 24)
-                .frame(minWidth: 188, minHeight: 42)
-                .background(accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: accent.opacity(0.35), radius: 10, x: 0, y: 4)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Continue".localized(language)))
-            .padding(.top, 10)
-            .padding(.bottom, 18)
-        }
-        .padding(.top, 18)
-        .environment(\.layoutDirection, language.usesHebrew ? .rightToLeft : .leftToRight)
-    }
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 21, weight: .medium))
-                .foregroundStyle(accent)
-
-            VStack(alignment: alignment, spacing: 3) {
-                Text("What's New in v15.0".localized(language))
-                    .font(.system(size: 23, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
-
-                Text("Make Yourself at Home — Your Windows Already Did".localized(language))
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: language.usesHebrew ? .trailing : .leading)
-        .padding(.horizontal, 30)
-        .padding(.bottom, 10)
-    }
-}
-
-private struct V15ReleaseNoteSection: Identifiable {
-    let title: String
-    let bullets: [String]
-
-    var id: String { title }
-}
-
-private enum V15ReleaseNoteContent {
-    static func sections(for language: AppLanguage) -> [V15ReleaseNoteSection] {
-        let localized: (String) -> String = { $0.localized(language) }
-        return [
-            V15ReleaseNoteSection(
-                title: localized("Restoration & Spaces"),
-                bullets: [
-                    localized("Minimized windows wait their turn — Minimized and hidden windows keep their own saved match until they are shown again, with retries when they are unminimized. - By Jonathan M. Hollin"),
-                    localized("More reliable window matching — Captured window IDs are matched first, preventing similar or untitled windows from being swapped. Thanks @PerpetualBeta"),
-                    localized("Spaces stay in sync — Restores no longer activate apps parked on another Space, and live layouts capture active-Space changes.")
-                ]
-            ),
-            V15ReleaseNoteSection(
-                title: localized("Auto Layout & App Controls"),
-                bullets: [
-                    localized("Choose the app that comes forward — Pin a preferred foreground app for saved layouts and individual Auto Layout display setups."),
-                    localized("Fixed Command+Shift+R controls — Configure the trigger per app; Auto Layout restores window geometry without sending a shortcut to whichever app happens to be active.")
-                ]
-            ),
-            V15ReleaseNoteSection(
-                title: localized("A Warmer Welcome in the Notch"),
-                bullets: [
-                    localized("Welcome Notch Pill — An optional animated greeting appears on eligible full restores: the first eligible restore after launch, for a layout outside the two most recent restores, or after eight hours. Its sound is controlled independently."),
-                    localized("Sound conflicts are actionable — “Go to…” jumps to the conflicting notification setting, scrolls it into view, and briefly highlights and flips the card")
-                ]
-            ),
-            V15ReleaseNoteSection(
-                title: localized("Main Window, Settings & Tour"),
-                bullets: [
-                    localized("List or grid — Switch the app cards between list and grid views, with quick per-window actions and clearer foreground-app controls."),
-                    localized("Personalized controls — Choose menu bar icon styles, tune notification sounds, and refine restore behavior."),
-                    localized("Settings window follows the app — Closing the main window also closes the separate Settings window."),
-                    localized("A more useful tour — The guide adds back/forward arrows, an editable desktop shortcut, and refreshed Quick Key and Settings previews.")
-                ]
-            )
-        ]
-    }
-}
+private enum OnboardingPhase { case setup, guide }
 
 // MARK: - Phase 1: Permissions & Mode
 

@@ -1,4 +1,337 @@
 import SwiftUI
+import AppKit
+
+enum AutoLayoutCaptureIndicator: Equatable {
+    case sameWindowCount
+    case addedWindows(Int)
+    case history
+
+    var color: Color {
+        Color(nsColor: nsColor)
+    }
+
+    var nsColor: NSColor {
+        switch self {
+        case .sameWindowCount:
+            return .systemBlue
+        case .addedWindows:
+            return .systemGreen
+        case .history:
+            return .systemOrange
+        }
+    }
+
+    static func classify(
+        current: [WindowRecord],
+        comparedTo older: [WindowRecord]?
+    ) -> (indicator: AutoLayoutCaptureIndicator, activityApps: [AutoLayoutCaptureAppIcon]) {
+        guard let older else {
+            // Strictly reserved for the baseline/oldest item at the last place of the list for aesthetic looks
+            return (.history, [])
+        }
+        if current.count > older.count {
+            let added = AutoLayoutCaptureAppIcon.addedApps(older: older, current: current)
+            return (.addedWindows(current.count - older.count), added)
+        }
+        // Check if any window actually moved or resized
+        let moved = AutoLayoutCaptureAppIcon.movedApps(older: older, current: current)
+        if !moved.isEmpty {
+            return (.sameWindowCount, moved)
+        }
+        // Check for app swap (same count or fewer windows, but a new app was launched)
+        let swapped = AutoLayoutCaptureAppIcon.addedApps(older: older, current: current)
+        if !swapped.isEmpty {
+            return (.sameWindowCount, swapped)
+        }
+        // No windows moved or swapped: windows were closed without movement or baseline capture.
+        // Never classify as .sameWindowCount when no windows moved or swapped.
+        return (.history, [])
+    }
+
+    static func classify(windowCount: Int, comparedTo nextOlderWindowCount: Int?) -> Self {
+        guard let nextOlderWindowCount else {
+            return .history
+        }
+        if windowCount > nextOlderWindowCount {
+            return .addedWindows(windowCount - nextOlderWindowCount)
+        }
+        return .sameWindowCount
+    }
+
+    /// Returns the exact UUIDs of the windows that were newly added or whose frames moved.
+    static func changedRecordIDs(
+        current: [WindowRecord],
+        comparedTo older: [WindowRecord]?
+    ) -> Set<UUID> {
+        guard let older else { return [] }
+
+        var changedIDs = Set<UUID>()
+
+        if current.count > older.count {
+            let olderCGIDs = Set(older.compactMap(\.cgWindowID))
+            let olderCounts = Dictionary(grouping: older, by: { $0.windowID.appBundleID }).mapValues(\.count)
+            let currentCounts = Dictionary(grouping: current, by: { $0.windowID.appBundleID }).mapValues(\.count)
+
+            for record in current {
+                let bundleID = record.windowID.appBundleID
+                let isCountIncreased = (currentCounts[bundleID] ?? 0) > (olderCounts[bundleID] ?? 0)
+                guard isCountIncreased else { continue }
+
+                if let cgid = record.cgWindowID {
+                    if !olderCGIDs.contains(cgid) {
+                        changedIDs.insert(record.id)
+                    }
+                } else {
+                    changedIDs.insert(record.id)
+                }
+            }
+            return changedIDs
+        }
+
+        // Match by CGWindowID first, then by a stable app/title or app/index key.
+        var olderByCGID: [CGWindowID: WindowRecord] = [:]
+        var olderByKey: [String: WindowRecord] = [:]
+        for record in older {
+            if let cgid = record.cgWindowID {
+                olderByCGID[cgid] = record
+            }
+            let key = "\(record.windowID.appBundleID)_\(record.windowID.appWindowIndex)"
+            olderByKey[key] = record
+            if !record.windowID.windowTitle.isEmpty {
+                olderByKey["\(record.windowID.appBundleID)_\(record.windowID.windowTitle)"] = record
+            }
+        }
+
+        let tolerance: CGFloat = 2
+        for record in current {
+            let olderRecord: WindowRecord? = {
+                if let cgid = record.cgWindowID, let match = olderByCGID[cgid] {
+                    return match
+                }
+                if !record.windowID.windowTitle.isEmpty,
+                   let match = olderByKey["\(record.windowID.appBundleID)_\(record.windowID.windowTitle)"] {
+                    return match
+                }
+                if let match = olderByKey["\(record.windowID.appBundleID)_\(record.windowID.appWindowIndex)"] {
+                    return match
+                }
+                return older.first(where: { $0.windowID.appBundleID == record.windowID.appBundleID })
+            }()
+
+            guard let olderRecord else { continue }
+            let moved = abs(record.globalFrame.origin.x - olderRecord.globalFrame.origin.x) > tolerance
+                || abs(record.globalFrame.origin.y - olderRecord.globalFrame.origin.y) > tolerance
+                || abs(record.globalFrame.width - olderRecord.globalFrame.width) > tolerance
+                || abs(record.globalFrame.height - olderRecord.globalFrame.height) > tolerance
+            if moved {
+                changedIDs.insert(record.id)
+            }
+        }
+
+        return changedIDs
+    }
+}
+
+/// The app icon and accessible app name associated with a capture change.
+struct AutoLayoutCaptureAppIcon: Identifiable {
+    let bundleID: String
+    let appName: String?
+    let image: NSImage
+
+    var id: String { bundleID }
+
+    var accessibilityName: String {
+        guard let appName = appName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !appName.isEmpty else {
+            return bundleID
+        }
+        return appName
+    }
+
+    /// Apps whose window count increased between two same-display captures.
+    static func addedApps(older: [WindowRecord]?, current: [WindowRecord]) -> [AutoLayoutCaptureAppIcon] {
+        guard let older else { return [] }
+
+        let olderCounts = Dictionary(grouping: older, by: { $0.windowID.appBundleID }).mapValues(\.count)
+        let currentCounts = Dictionary(grouping: current, by: { $0.windowID.appBundleID }).mapValues(\.count)
+        var changedApps: [(bundleID: String, appName: String?)] = []
+
+        for record in current {
+            let bundleID = record.windowID.appBundleID
+            guard (currentCounts[bundleID] ?? 0) > (olderCounts[bundleID] ?? 0),
+                  !changedApps.contains(where: { $0.bundleID == bundleID }) else {
+                continue
+            }
+            changedApps.append((bundleID, record.windowID.appName))
+        }
+
+        return resolve(changedApps)
+    }
+
+    /// Apps with windows whose geometry changed between two captures.
+    static func movedApps(
+        older: [WindowRecord]?,
+        current: [WindowRecord],
+        tolerance: CGFloat = 2
+    ) -> [AutoLayoutCaptureAppIcon] {
+        guard let older else { return [] }
+
+        // Match by CGWindowID first, then by a stable app/title or app/index key.
+        var olderByCGID: [CGWindowID: WindowRecord] = [:]
+        var olderByKey: [String: WindowRecord] = [:]
+        for record in older {
+            if let cgid = record.cgWindowID {
+                olderByCGID[cgid] = record
+            }
+            let key = "\(record.windowID.appBundleID)_\(record.windowID.appWindowIndex)"
+            olderByKey[key] = record
+            if !record.windowID.windowTitle.isEmpty {
+                olderByKey["\(record.windowID.appBundleID)_\(record.windowID.windowTitle)"] = record
+            }
+        }
+
+        var changedApps: [(bundleID: String, appName: String?)] = []
+        for record in current {
+            let olderRecord: WindowRecord? = {
+                if let cgid = record.cgWindowID, let match = olderByCGID[cgid] {
+                    return match
+                }
+                if !record.windowID.windowTitle.isEmpty,
+                   let match = olderByKey["\(record.windowID.appBundleID)_\(record.windowID.windowTitle)"] {
+                    return match
+                }
+                if let match = olderByKey["\(record.windowID.appBundleID)_\(record.windowID.appWindowIndex)"] {
+                    return match
+                }
+                return older.first(where: { $0.windowID.appBundleID == record.windowID.appBundleID })
+            }()
+
+            guard let olderRecord else { continue }
+            let moved = abs(record.globalFrame.origin.x - olderRecord.globalFrame.origin.x) > tolerance
+                || abs(record.globalFrame.origin.y - olderRecord.globalFrame.origin.y) > tolerance
+                || abs(record.globalFrame.width - olderRecord.globalFrame.width) > tolerance
+                || abs(record.globalFrame.height - olderRecord.globalFrame.height) > tolerance
+            let bundleID = record.windowID.appBundleID
+            if moved && !changedApps.contains(where: { $0.bundleID == bundleID }) {
+                changedApps.append((bundleID, record.windowID.appName))
+            }
+        }
+
+        return resolve(changedApps)
+    }
+
+    private static func resolve(_ apps: [(bundleID: String, appName: String?)]) -> [AutoLayoutCaptureAppIcon] {
+        apps.map { app in
+            AutoLayoutCaptureAppIcon(
+                bundleID: app.bundleID,
+                appName: app.appName,
+                image: AppIconColorCache.appIcon(for: app.bundleID, appName: app.appName)
+                    ?? NSWorkspace.shared.icon(for: .application)
+            )
+        }
+    }
+}
+
+/// Shared data and formatting for one capture row in the menu bar and main window.
+struct AutoLayoutCapturePresentation: Identifiable {
+    let entry: AutoSaveEntry
+    let isLatest: Bool
+    let matchesCurrentScreens: Bool
+    let changeIndicator: AutoLayoutCaptureIndicator
+    let activityApps: [AutoLayoutCaptureAppIcon]
+    let triggeringRecordIDs: Set<UUID>
+
+    var id: UUID { entry.id }
+
+    /// Projects one display's newest-first entries into the rows both capture lists render.
+    static func make(
+        from entries: [AutoSaveEntry],
+        displayScreenKey: String,
+        currentScreenKey: String
+    ) -> [AutoLayoutCapturePresentation] {
+        let displayEntries = entries.filter { $0.screenKey == displayScreenKey }
+
+        return displayEntries.enumerated().map { index, entry in
+            let nextOlder = displayEntries.dropFirst(index + 1).first
+            let (indicator, activityApps) = AutoLayoutCaptureIndicator.classify(
+                current: entry.records,
+                comparedTo: nextOlder?.records
+            )
+            let triggeringRecordIDs = AutoLayoutCaptureIndicator.changedRecordIDs(
+                current: entry.records,
+                comparedTo: nextOlder?.records
+            )
+
+            return AutoLayoutCapturePresentation(
+                entry: entry,
+                isLatest: index == 0,
+                matchesCurrentScreens: entry.screenKey == currentScreenKey,
+                changeIndicator: indicator,
+                activityApps: activityApps,
+                triggeringRecordIDs: triggeringRecordIDs
+            )
+        }
+    }
+
+    /// The shared, localized row label used by both interfaces.
+    func title(at now: Date, language: AppLanguage) -> String {
+        let age = ageLabel(at: now, language: language)
+        let count = entry.windowCount
+
+        if isLatest {
+            let format = count == 1 ? "Latest (%@) · 1 window" : "Latest (%@) · %d windows"
+            return count == 1
+                ? String(format: format.localized(language), age)
+                : String(format: format.localized(language), age, count)
+        }
+
+        let format = count == 1 ? "%@ · 1 window" : "%@ · %d windows"
+        return count == 1
+            ? String(format: format.localized(language), age)
+            : String(format: format.localized(language), age, count)
+    }
+
+    /// The first text segment in the main-window timeline row.
+    func ageTitle(at now: Date, language: AppLanguage) -> String {
+        let age = ageLabel(at: now, language: language)
+        guard isLatest else { return age }
+        return String(format: "Latest (%@)".localized(language), age)
+    }
+
+    /// The trailing count label in the main-window timeline row.
+    func windowCountTitle(language: AppLanguage) -> String {
+        entry.windowCount == 1
+            ? "1 window".localized(language)
+            : "\(entry.windowCount) \("windows".localized(language))"
+    }
+
+    private func ageLabel(at now: Date, language: AppLanguage) -> String {
+        let seconds = now.timeIntervalSince(entry.capturedAt)
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        formatter.maximumUnitCount = 1
+        formatter.allowedUnits = seconds < 3600
+            ? [.minute]
+            : (seconds <= AutoLayoutHeroCard.dayDisplayThreshold ? [.hour] : [.day])
+
+        if seconds < 60 {
+            if isLatest {
+                return "just now".localized(language)
+            }
+            let oneMinute = formatter.string(from: 60) ?? "1 minute"
+            return String(format: "%@ ago".localized(language), oneMinute)
+        }
+
+        let spelled = formatter.string(from: seconds) ?? ""
+        guard !spelled.isEmpty else {
+            let fallbackMinute = formatter.string(from: 60) ?? "1 minute"
+            return isLatest
+                ? "just now".localized(language)
+                : String(format: "%@ ago".localized(language), fallbackMinute)
+        }
+        return String(format: "%@ ago".localized(language), spelled)
+    }
+}
 
 /// The Auto layout's place in the sidebar.
 ///
@@ -11,26 +344,22 @@ import SwiftUI
 /// rendered on its own and looked at.
 struct AutoLayoutHeroCard: View {
 
-    /// One of the captures behind the newest one.
-    struct EarlierCapture: Identifiable {
-        let id: UUID
-        let capturedAt: Date
-        let windowCount: Int
-        let matchesCurrentScreens: Bool
-    }
-
     let capturedAt: Date?
+    /// The main-window timeline age can trail the selected capture without
+    /// delaying selection feedback or the preview. Other presentations use
+    /// `capturedAt` directly.
+    var timelineCapturedAt: Date? = nil
     let windowCount: Int
     let screenName: String?
     let matchesCurrentScreens: Bool
     let tint: Color
     let language: AppLanguage
     let onRestore: () -> Void
-    /// The rest of the ring, newest first. Empty hides the control entirely.
-    var earlier: [EarlierCapture] = []
-    var onRestoreEarlier: (UUID) -> Void = { _ in }
+    /// The full display-scoped ring, newest first. The newest entry is also shown above.
+    var captures: [AutoLayoutCapturePresentation] = []
+    var onRestoreCapture: (UUID) -> Void = { _ in }
     var selectedCaptureID: UUID? = nil
-    var onSelectEarlier: ((UUID) -> Void)? = nil
+    var onSelectCapture: ((UUID) -> Void)? = nil
     var isExpanded: Binding<Bool>? = nil
     @State private var internalExpanded: Bool = true
     @State private var isHeaderHovered: Bool = false
@@ -70,7 +399,7 @@ struct AutoLayoutHeroCard: View {
                     .font(.system(size: 24, weight: .bold, design: .rounded))
                     .foregroundStyle(isStale ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     .accessibilityLabel(Text(String(format: "Captured %@".localized(language),
-                                                    age(of: capturedAt))))
+                                                    relativeAge)))
                     .padding(.bottom, 10)
 
                 HStack(spacing: 6) {
@@ -104,8 +433,8 @@ struct AutoLayoutHeroCard: View {
                         .padding(.top, 8)
                 }
 
-                if !earlier.isEmpty {
-                    earlierCaptures
+                if !captures.isEmpty {
+                    recentCaptures
                         .padding(.top, 10)
                 }
             } else {
@@ -134,8 +463,11 @@ struct AutoLayoutHeroCard: View {
         }
     }
 
-    /// Whether the user has focused on an earlier capture (not the latest).
-    private var isViewingEarlierCapture: Bool { selectedCaptureID != nil }
+    /// Whether the selected row is older than the newest capture for this display.
+    private var isViewingEarlierCapture: Bool {
+        guard let selectedCaptureID else { return false }
+        return selectedCaptureID != captures.first(where: \.isLatest)?.id
+    }
 
     @ViewBuilder
     private var restoreButton: some View {
@@ -261,13 +593,8 @@ struct AutoLayoutHeroCard: View {
         .accessibilityRemoveTraits(.isSelected)
     }
 
-    /// The rest of the ring.
-    ///
-    /// Five captures are kept precisely so a bad one can be stepped back past,
-    /// and by the time the user notices a bad arrangement the auto-save has
-    /// usually recorded it into the newest slot already. Keeping four more on
-    /// disk with no way to reach them is not a safeguard.
-    private var earlierCaptures: some View {
+    /// The same newest-first capture ring shown in the menu-bar list.
+    private var recentCaptures: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
@@ -275,10 +602,10 @@ struct AutoLayoutHeroCard: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Text(earlier.count == 1 ? "1 earlier capture".localized(language) : "\(earlier.count) \("earlier captures".localized(language))")
+                    Text("Recent Auto Captures".localized(language))
                         .font(.system(size: 12, weight: .semibold))
 
-                    Text("\(earlier.count)")
+                    Text("\(captures.count)")
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
@@ -308,24 +635,20 @@ struct AutoLayoutHeroCard: View {
             )
 
             if expandedBinding.wrappedValue {
-                Divider()
-                    .opacity(colorScheme == .dark ? 0.35 : 0.20)
-                    .padding(.horizontal, 4)
-
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(earlier) { capture in
-                        EarlierRow(
+                    ForEach(captures) { capture in
+                        CaptureRow(
+                            capture: capture,
                             isSelected: selectedCaptureID == capture.id,
-                            age: age(of: capture.capturedAt),
-                            windowCount: capture.windowCount,
-                            isApplicable: capture.matchesCurrentScreens,
+                            title: capture.title(at: now, language: language),
+                            now: now,
                             tint: tint,
                             language: language,
                             action: {
-                                if let onSelect = onSelectEarlier {
+                                if let onSelect = onSelectCapture {
                                     onSelect(capture.id)
                                 } else {
-                                    onRestoreEarlier(capture.id)
+                                    onRestoreCapture(capture.id)
                                 }
                             }
                         )
@@ -354,51 +677,65 @@ struct AutoLayoutHeroCard: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: expandedBinding.wrappedValue)
     }
 
-    /// A row that displays or restores one earlier capture.
-    private struct EarlierRow: View {
+    /// A row that displays or restores one auto capture.
+    private struct CaptureRow: View {
+        let capture: AutoLayoutCapturePresentation
         var isSelected: Bool = false
-        let age: String
-        let windowCount: Int
-        let isApplicable: Bool
+        let title: String
+        let now: Date
         let tint: Color
         let language: AppLanguage
         let action: () -> Void
 
         @State private var isHovering = false
 
+        private var isApplicable: Bool { capture.matchesCurrentScreens }
+
+        private var rowAccessibilityLabel: String {
+            guard !capture.activityApps.isEmpty else { return title }
+            let appNames = capture.activityApps.map(\.accessibilityName).joined(separator: ", ")
+            let changedApps = String(format: "Apps changed: %@".localized(language), appNames)
+            return "\(title). \(changedApps)"
+        }
+
         var body: some View {
             Button(action: action) {
                 HStack(spacing: 7) {
-                        Image(systemName: isApplicable
-                          ? (isSelected ? "checkmark.circle.fill" : "arrow.uturn.backward")
-                          : "display.trianglebadge.exclamationmark")
-                        .mainWindowSymbolAnimation(.wiggleByLayer, capturesClicks: false)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(isApplicable ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary))
-                        .frame(width: 16)
+                    captureIndicator
 
-                    Text(age)
-                        .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                    Text(capture.ageTitle(at: now, language: language))
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(isApplicable ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .layoutPriority(0)
+
                     Spacer(minLength: 8)
 
-                    Text(windowCount == 1 ? "1 window".localized(language) : "\(windowCount) \("windows".localized(language))")
+                    if !capture.activityApps.isEmpty {
+                        appIcons
+                    }
+
+                    Text(capture.windowCountTitle(language: language))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                        .fixedSize()
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isSelected ? tint.opacity(0.16) : (tint.opacity(isHovering && isApplicable ? 0.08 : 0)))
+                        .fill(isSelected ? tint.opacity(0.16) : (tint.opacity(isHovering && isApplicable ? 0.12 : 0)))
                 )
                 .overlay {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(tint.opacity(0.30), lineWidth: 1)
-                    }
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(
+                            isSelected ? tint.opacity(0.30) : tint.opacity(isHovering && isApplicable ? 0.20 : 0),
+                            lineWidth: isSelected ? 1 : 0.75
+                        )
+                        .allowsHitTesting(false)
                 }
                 .contentShape(Rectangle())
             }
@@ -406,12 +743,69 @@ struct AutoLayoutHeroCard: View {
             .disabled(!isApplicable)
             .mainWindowSymbolHoverRegion()
             .onHover { isHovering = $0 }
+            .accessibilityElement(children: .ignore)
             .help(isApplicable
                   ? Text("Select and view this capture".localized(language))
                   : Text("Captured on a different display setup.".localized(language)))
-            .accessibilityLabel(Text(String(format: "Capture from %@, %d windows".localized(language),
-                                            age, windowCount)))
+            .accessibilityLabel(Text(rowAccessibilityLabel))
             .accessibilityValue(Text(isSelected ? "Selected".localized(language) : ""))
+        }
+
+        private var appIcons: some View {
+            HStack(spacing: 4) {
+                ForEach(Array(capture.activityApps.prefix(4))) { appIcon in
+                    Image(nsImage: appIcon.image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 16, height: 16)
+                        .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
+                }
+
+                if capture.activityApps.count > 4 {
+                    Text("+\(capture.activityApps.count - 4)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize()
+            .opacity(isApplicable ? 1 : 0.45)
+            .accessibilityHidden(true)
+        }
+
+        @ViewBuilder
+        private var captureIndicator: some View {
+            if !isApplicable {
+                Image(systemName: "display.trianglebadge.exclamationmark")
+                    .mainWindowSymbolAnimation(.wiggleByLayer, capturesClicks: false)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 20)
+            } else {
+                switch capture.changeIndicator {
+                case .sameWindowCount:
+                    Image(systemName: "rectangle.and.arrow.up.right.and.arrow.down.left")
+                        .mainWindowSymbolAnimation(.wiggleByLayer, capturesClicks: false)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(capture.changeIndicator.color)
+                        .frame(width: 20)
+                case .addedWindows(let count):
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        Text("\(count)")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                        Text("+")
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .baselineOffset(2)
+                    }
+                    .foregroundStyle(capture.changeIndicator.color)
+                    .frame(minWidth: 20)
+                case .history:
+                    Image(systemName: "clock.arrow.circlepath")
+                        .mainWindowSymbolAnimation(.wiggleByLayer, capturesClicks: false)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(capture.changeIndicator.color)
+                        .frame(width: 20)
+                }
+            }
         }
     }
 
@@ -457,8 +851,8 @@ struct AutoLayoutHeroCard: View {
     /// Spelled out rather than using `Text(_:style:.relative)`, which cannot be
     /// given a reference date and so cannot be rendered for a chosen age.
     private var relativeAge: String {
-        guard let capturedAt else { return "" }
-        return age(of: capturedAt)
+        guard let date = timelineCapturedAt ?? capturedAt else { return "" }
+        return age(of: date)
     }
 
     private func age(of date: Date) -> String {
