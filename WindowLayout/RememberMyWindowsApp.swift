@@ -694,7 +694,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return nil
         }
 
-        let targetSize = NSSize(width: 16, height: 16)
+        let targetSize = NSSize(width: 20, height: 20)
         let image = NSImage(size: targetSize, flipped: false) { rect in
             let iconSize = appIcon.size
             guard iconSize.width > 0, iconSize.height > 0 else { return false }

@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import AppKit
 
 /// Which Space does a window belong to?
 ///
@@ -112,4 +113,60 @@ enum WindowSpaces {
         return out
     }
 
+    /// Returns true if the active space is a standard desktop space (type == 0),
+    /// and false if it is a full-screen app space (type 4/2) or another non-desktop space.
+    static func isCurrentSpaceDesktop() -> Bool {
+        // Fast-path 1: Check if the frontmost app is in AX full-screen mode
+        if let frontApp = NSWorkspace.shared.frontmostApplication {
+            let appElement = AXUIElementCreateApplication(frontApp.processIdentifier)
+            AXUIElementSetMessagingTimeout(appElement, 0.10)
+            var value: AnyObject?
+            if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &value) == .success,
+               let windows = value as? [AXUIElement] {
+                for window in windows {
+                    var isFullScreen: AnyObject?
+                    if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &isFullScreen) == .success,
+                       let fsNumber = isFullScreen as? NSNumber, fsNumber.boolValue {
+                        return false
+                    }
+                }
+            }
+        }
+
+        // Fast-path 2: Query WindowServer via CGSGetActiveSpace & CGSSpaceGetType
+        guard let r = resolved,
+              let handle = dlopen(nil, RTLD_NOW) else { return true }
+        
+        typealias GetActiveSpaceFn = @convention(c) (Int32) -> UInt64
+        typealias GetSpaceTypeFn = @convention(c) (Int32, UInt64) -> Int32
+        if let activePtr = dlsym(handle, "CGSGetActiveSpace"),
+           let typePtr = dlsym(handle, "CGSSpaceGetType") {
+            let getActive = unsafeBitCast(activePtr, to: GetActiveSpaceFn.self)
+            let getType = unsafeBitCast(typePtr, to: GetSpaceTypeFn.self)
+            let activeSpace = getActive(r.connection)
+            let spaceType = getType(r.connection, activeSpace)
+            // Type 0 is standard user desktop. Type 2 and 4 are full-screen app spaces.
+            if spaceType != 0 {
+                return false
+            }
+        }
+
+        // Fast-path 3: Check Current Space type across displays via CGSCopyManagedDisplaySpaces
+        if let ptr = dlsym(handle, "CGSCopyManagedDisplaySpaces") {
+            typealias ManagedSpacesFn = @convention(c) (Int32) -> Unmanaged<CFArray>?
+            let fn = unsafeBitCast(ptr, to: ManagedSpacesFn.self)
+            if let displays = fn(r.connection)?.takeRetainedValue() as? [[String: Any]] {
+                for display in displays {
+                    if let current = display["Current Space"] as? [String: Any],
+                       let type = current["type"] as? Int, type != 0 {
+                        return false
+                    }
+                }
+            }
+        }
+
+        return true
+    }
+
 }
+

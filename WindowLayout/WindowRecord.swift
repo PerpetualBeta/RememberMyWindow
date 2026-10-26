@@ -654,7 +654,7 @@ extension Array where Element == WindowRecord {
         }
     }
 
-    private func isAuxiliaryFullScreenStrip(_ record: WindowRecord) -> Bool {
+    func isAuxiliaryFullScreenStrip(_ record: WindowRecord) -> Bool {
         let title = record.windowID.windowTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard title.isEmpty else { return false }
 

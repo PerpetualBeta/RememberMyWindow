@@ -333,44 +333,55 @@ struct SnapshotDetailView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(snapshot.displayName)
-                                .font(.system(.title2, design: .rounded).weight(.semibold))
-                            Text(ScreenFingerprint.from(key: snapshot.screenKey).readableName)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.tertiary)
+        GeometryReader { outerGeo in
+            let isCompactLocation = outerGeo.size.width < 520
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .top, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(snapshot.displayName)
+                                    .font(.system(.title2, design: .rounded).weight(.semibold))
+                                    .lineLimit(1)
+                                Text(ScreenFingerprint.from(key: snapshot.screenKey).readableName)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                            
+                            HStack(spacing: isCompactLocation ? 16 : 24) {
+                                statPill(label: "Windows".localized(appLanguage), value: "\(snapshot.previewRecords.count)")
+                                statPill(label: "Created".localized(appLanguage), value: snapshot.createdAt.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: currentLocale)))
+                                statPill(label: "Updated".localized(appLanguage), value: snapshot.updatedAt.formatted(.relative(presentation: .named).locale(currentLocale)))
+                            }
                         }
                         
-                        HStack(spacing: 24) {
-                            statPill(label: "Windows".localized(appLanguage), value: "\(snapshot.previewRecords.count)")
-                            statPill(label: "Created".localized(appLanguage), value: snapshot.createdAt.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: currentLocale)))
-                            statPill(label: "Updated".localized(appLanguage), value: snapshot.updatedAt.formatted(.relative(presentation: .named).locale(currentLocale)))
+                        Spacer(minLength: 8)
+
+                        if let location = snapshot.location, !snapshot.isAutoSave && manager.store.saveLocationEnabled {
+                            LocationBlock(
+                                snapshotID: key,
+                                location: location,
+                                isUpdated: snapshot.updatedAt.timeIntervalSince(snapshot.createdAt) > 1,
+                                isCompact: isCompactLocation
+                            )
                         }
                     }
                     
-                    if let location = snapshot.location, !snapshot.isAutoSave && manager.store.saveLocationEnabled {
-                        LocationBlock(snapshotID: key, location: location, isUpdated: snapshot.updatedAt.timeIntervalSince(snapshot.createdAt) > 1)
+
+                    let hasMissingScreens = !manager.canRestore(snapshot: snapshot)
+                    if isPhysicalMismatch || hasMissingScreens {
+                        SavedSessionDisplayWarnings(
+                            hasPhysicalMismatch: isPhysicalMismatch,
+                            hasMissingScreens: hasMissingScreens,
+                            appLanguage: appLanguage
+                        )
                     }
                 }
-                
+                .padding(24)
+                .background(Color.clear)
 
-                let hasMissingScreens = !manager.canRestore(snapshot: snapshot)
-                if isPhysicalMismatch || hasMissingScreens {
-                    SavedSessionDisplayWarnings(
-                        hasPhysicalMismatch: isPhysicalMismatch,
-                        hasMissingScreens: hasMissingScreens,
-                        appLanguage: appLanguage
-                    )
-                }
-            }
-            .padding(24)
-            .background(Color.clear)
-
-            Divider()
+                Divider()
 
             // Window list / grid
             ScrollViewReader { proxy in
@@ -416,6 +427,8 @@ struct SnapshotDetailView: View {
                 }
             }
             .scrollContentBackground(.hidden)
+            }
+            .frame(width: outerGeo.size.width, height: outerGeo.size.height, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -476,9 +489,12 @@ struct SnapshotDetailView: View {
             Text(label.uppercased())
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+                .lineLimit(1)
             Text(value)
                 .font(.caption.weight(.medium))
+                .lineLimit(1)
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -736,6 +752,7 @@ struct WindowGridCard: View {
     @State private var isCardHovered = false
     private var appID: String { record.windowID.appBundleID }
     private var isCommandTriggerActive: Bool { snapshot.commandExcludedBundleIDs.contains(appID) }
+    private var showsHoverActions: Bool { !snapshot.isAutoSave && isCardHovered }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -752,7 +769,7 @@ struct WindowGridCard: View {
             .frame(width: 82, height: 52)
             .overlay(alignment: .topLeading) {
                 // Command Trigger badge pinned to top-left corner
-                if isCommandTriggerActive {
+                if isCommandTriggerActive && !showsHoverActions {
                     ZStack(alignment: .topTrailing) {
                         Image(systemName: "command")
                             .font(.system(size: 8.5, weight: .bold))
@@ -767,11 +784,12 @@ struct WindowGridCard: View {
                     }
                     .offset(x: 2, y: 2)
                     .help("Command Trigger active for this app".localized(appLanguage))
+                    .transition(.opacity)
                 }
             }
             .overlay(alignment: .topTrailing) {
                 // Foreground badge pinned to thumbnail corner
-                if isForeground {
+                if isForeground && !showsHoverActions {
                     Image(systemName: "square.3.layers.3d.top.filled")
                         .mainWindowSymbolAnimation(.breathePlain)
                         .font(.system(size: 9))
@@ -780,10 +798,11 @@ struct WindowGridCard: View {
                         .background(Circle().fill(.ultraThinMaterial))
                         .offset(x: -2, y: 2)
                         .help("This app will be brought to the front upon restore".localized(appLanguage))
+                        .transition(.opacity)
                 }
             }
             .overlay(alignment: .bottom) {
-                if !snapshot.isAutoSave && isCardHovered {
+                if showsHoverActions {
                     HStack(spacing: 2) {
                         ExcludeCommandButton(appLanguage: appLanguage, isIncluded: isCommandTriggerActive) {
                             manager.toggleCommandExclusion(key: key, bundleID: appID)
@@ -868,6 +887,7 @@ struct LocationBlock: View {
     let snapshotID: String
     let location: LocationInfo
     let isUpdated: Bool
+    var isCompact: Bool = false
     
     @State private var isEditing = false
     @State private var editedAddress: String = ""
@@ -876,9 +896,13 @@ struct LocationBlock: View {
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
     }
+
+    private var displayAddress: String {
+        location.address ?? "\(location.latitude), \(location.longitude)"
+    }
     
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: isCompact ? 0 : 14) {
             // Map Preview
             ZStack {
                 Map(position: .constant(.region(MKCoordinateRegion(
@@ -904,50 +928,54 @@ struct LocationBlock: View {
                     .stroke(Color.white.opacity(0.15), lineWidth: 1)
             }
             .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+            .help(displayAddress)
             .fixedSize()
             
-            VStack(alignment: .leading, spacing: 3) {
-                Label {
-                    Text((isUpdated ? "Saved&Updated At" : "Saved At").localized(appLanguage))
-                } icon: {
-                    Image(systemName: "location.fill")
-                        .mainWindowSymbolAnimation(.breathe, capturesClicks: false)
-                }
-                    .font(.system(size: 9, weight: .black))
-                    .foregroundStyle(.secondary)
-                    .opacity(0.8)
-                    .mainWindowSymbolHoverRegion()
-                
-                if isEditing {
-                    TextField("Location Name", text: $editedAddress, onCommit: {
-                        manager.updateLocationAddress(key: snapshotID, newAddress: editedAddress)
-                        isEditing = false
-                    })
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .focused($isFocused)
-                    .onAppear {
-                        editedAddress = location.address ?? "\(location.latitude), \(location.longitude)"
-                        isFocused = true
+            if !isCompact {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label {
+                        Text((isUpdated ? "Saved&Updated At" : "Saved At").localized(appLanguage))
+                    } icon: {
+                        Image(systemName: "location.fill")
+                            .mainWindowSymbolAnimation(.breathe, capturesClicks: false)
                     }
-                } else {
-                    Text(location.address ?? "\(location.latitude), \(location.longitude)")
+                        .font(.system(size: 9, weight: .black))
+                        .foregroundStyle(.secondary)
+                        .opacity(0.8)
+                        .mainWindowSymbolHoverRegion()
+                    
+                    if isEditing {
+                        TextField("Location Name", text: $editedAddress, onCommit: {
+                            manager.updateLocationAddress(key: snapshotID, newAddress: editedAddress)
+                            isEditing = false
+                        })
+                        .textFieldStyle(.plain)
                         .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .frame(maxWidth: 170, alignment: .leading)
-                        .onTapGesture {
-                            isEditing = true
+                        .focused($isFocused)
+                        .onAppear {
+                            editedAddress = displayAddress
+                            isFocused = true
                         }
+                    } else {
+                        Text(displayAddress)
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .frame(maxWidth: 170, alignment: .leading)
+                            .onTapGesture {
+                                isEditing = true
+                            }
+                    }
+                    
+                    if !isEditing {
+                        Text("Click to rename".localized(appLanguage))
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
-                
-                if !isEditing {
-                    Text("Click to rename".localized(appLanguage))
-                        .font(.system(size: 8))
-                        .foregroundStyle(.tertiary)
-                }
+                .frame(width: 170, alignment: .leading)
+                .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
-            .frame(width: 170, alignment: .leading)
         }
         .padding(10)
         .fixedSize(horizontal: true, vertical: true)
@@ -960,6 +988,7 @@ struct LocationBlock: View {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
         }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isCompact)
     }
 }
 
@@ -1092,6 +1121,8 @@ struct AutoLayoutCenterView: View {
     @State private var pendingTimelineCaptureID: UUID? = nil
     @State private var timelineCaptureID: UUID? = nil
     @State private var hasInitializedTimelineCaptureID = false
+    @State private var forceFullWindowsAnimated: Bool = false
+    @State private var returnToLatestTrigger: UUID? = nil
 
     private let timelineUpdateDelayNanoseconds: UInt64 = 150_000_000
 
@@ -1230,6 +1261,7 @@ struct AutoLayoutCenterView: View {
                         onRestoreCapture: { manager.restoreAutoLayout(entryID: $0) },
                         selectedCaptureID: manager.selectedAutoSaveEntryID,
                         onSelectCapture: { tappedID in
+                            forceFullWindowsAnimated = false
                             selectCapture(tappedID, timelineID: tappedID)
                         },
                         isExpanded: $isEarlierExpanded,
@@ -1276,10 +1308,11 @@ struct AutoLayoutCenterView: View {
                             isMainWindow: true,
                             isWindowArrangementPreview: true,
                             isMinimalVisualAnimations: minimalVisualAnimations,
-                            triggeringRecordIDs: activePres?.triggeringRecordIDs ?? [],
-                            triggeringBundleIDs: Set(activePres?.activityApps.map(\.bundleID).filter { !$0.isEmpty } ?? []),
-                            triggeringAppNames: Set(activePres?.activityApps.compactMap(\.appName).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []),
-                            captureIndicator: activePres?.changeIndicator
+                            triggeringRecordIDs: forceFullWindowsAnimated ? [] : (activePres?.triggeringRecordIDs ?? []),
+                            triggeringBundleIDs: forceFullWindowsAnimated ? [] : Set(activePres?.activityApps.map(\.bundleID).filter { !$0.isEmpty } ?? []),
+                            triggeringAppNames: forceFullWindowsAnimated ? [] : Set(activePres?.activityApps.compactMap(\.appName).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []),
+                            captureIndicator: forceFullWindowsAnimated ? .history : activePres?.changeIndicator,
+                            revealTrigger: returnToLatestTrigger
                         )
                         .frame(maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
                         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: snap.previewRecords.count)
@@ -1353,6 +1386,8 @@ struct AutoLayoutCenterView: View {
                 var t = Transaction(animation: .spring(response: 0.5, dampingFraction: 0.85))
                 t.disablesAnimations = false
                 withTransaction(t) {
+                    forceFullWindowsAnimated = true
+                    returnToLatestTrigger = UUID()
                     let latestID = displayEntries.first?.id
                     if activeScreenKey == manager.currentFingerprint.key {
                         selectCapture(nil, timelineID: latestID)

@@ -53,7 +53,7 @@ jobs:
           body_path: release_notes.md
           name: ${{ env.RELEASE_TITLE }}
           tag_name: ${{ env.TAG_NAME }}
-          draft: true
+          draft: false
 
       - name: Ensure release title is set (handles pre-existing releases)
         run: |

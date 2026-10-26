@@ -197,15 +197,28 @@ public struct NotchWelcomePillView: View {
     }
 
     private var helloSize: CGSize {
-        let availableHeight = max(
-            0,
-            pillHeight
-                - currentHelloTopBoundary
-                - NotchWelcomePillLayout.subtitleSpacing
-                - NotchWelcomePillLayout.subtitleLineHeight
-                - NotchWelcomePillLayout.contentBottomInset
-        )
-        let height = min(NotchWelcomePillLayout.preferredHelloHeight, availableHeight)
+        let availableHeight: CGFloat
+        let height: CGFloat
+        if showSubtitle {
+            let subtitleSpace = NotchWelcomePillLayout.subtitleSpacing
+                + NotchWelcomePillLayout.subtitleLineHeight
+            availableHeight = max(
+                0,
+                pillHeight
+                    - currentHelloTopBoundary
+                    - subtitleSpace
+                    - NotchWelcomePillLayout.contentBottomInset
+            )
+            height = min(NotchWelcomePillLayout.preferredHelloHeight, availableHeight)
+        } else {
+            availableHeight = max(
+                0,
+                pillHeight
+                    - currentHelloTopBoundary
+                    - NotchWelcomePillLayout.contentBottomInset
+            )
+            height = availableHeight
+        }
         let scale = height / NotchWelcomePillLayout.referenceHelloHeight
         let width = min(
             NotchWelcomePillLayout.referenceHelloWidth * scale,

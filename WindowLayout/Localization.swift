@@ -697,7 +697,7 @@ private let translationDict: [String: String] = [
 ]
 
 private let reverseDict: [String: String] = [
-    "מכין את מעקב החלונות…": "Preparing window tracking…",
+    "מכין את מעקב החלונות… ": "Preparing window tracking…  ",
     "מראה והתראות": "Appearance & Notifications",
     "%@ אינו בסידור הנוכחי": "%@ is not in this layout",
     "צג Retina מובנה": "Built-in Retina Display",

@@ -468,6 +468,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     func startTracking() {
         guard !isTracking else { return }
         isTracking = true
+        isFocusedOnNonDesktopSpace = !WindowSpaces.isCurrentSpaceDesktop()
 
         // Observe screen changes (display connect/disconnect)
         NotificationCenter.default.addObserver(
@@ -1448,7 +1449,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                 self.attachAXObserver(to: app)
                 // Only trigger an immediate layout capture if we're not about to auto-restore this app
                 if !canAutoRestore {
-                    self.scheduleAXEventFlush()
+                    if self.isFocusedOnNonDesktopSpace || !WindowSpaces.isCurrentSpaceDesktop() {
+                        self.isFocusedOnNonDesktopSpace = true
+                        if let bid = app.bundleIdentifier ?? targetID {
+                            self.pendingAppLaunchesOnOtherSpaces.insert(bid)
+                        }
+                        self.log("App launched while on non-desktop space (\(targetID ?? "app")) — queued for capture upon returning to desktop", level: .moderate, type: .autoSave)
+                    } else {
+                        self.scheduleAXEventFlush()
+                    }
                 }
             }
 
@@ -1484,6 +1493,11 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// animation and every hold on recording still applies.
     @objc private func activeSpaceChanged() {
         retryDeferredRestore(reason: "the Space changed")
+        
+        let initialIsDesktop = WindowSpaces.isCurrentSpaceDesktop()
+        let wasNonDesktop = isFocusedOnNonDesktopSpace
+        isFocusedOnNonDesktopSpace = !initialIsDesktop
+
         // Manual space changes (swiping between spaces, full-screen transitions, or Mission Control)
         // navigate between views rather than modifying the user's window layout.
         // Captures are only triggered by actual window movement, resizing, launch, or termination.
@@ -1492,9 +1506,32 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         spaceChangeCooldownTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard !Task.isCancelled else { return }
-            self?.isHandlingSpaceChange = false
+            guard let self = self else { return }
+            self.isHandlingSpaceChange = false
+            
+            // Re-verify space type once the animation finishes settling
+            let currentIsDesktop = WindowSpaces.isCurrentSpaceDesktop()
+            self.isFocusedOnNonDesktopSpace = !currentIsDesktop
+
+            // If returning from a non-desktop/full-screen space to the main desktop space,
+            // trigger a clean capture of the desktop arrangement including any queued app launches.
+            if (wasNonDesktop || !initialIsDesktop) && currentIsDesktop {
+                let queuedLaunches = self.pendingAppLaunchesOnOtherSpaces
+                self.pendingAppLaunchesOnOtherSpaces.removeAll()
+                if !queuedLaunches.isEmpty {
+                    self.log("Returned to desktop space — flushing \(queuedLaunches.count) queued app launch(es)", level: .moderate, type: .autoSave)
+                } else {
+                    self.log("Returned to desktop space — capturing clean desktop layout", level: .moderate, type: .autoSave)
+                }
+                self.flushPendingSaves()
+            }
         }
-        log("Space changed — skipping capture (deferred restores processed)", level: .verbose, type: .autoSave)
+
+        if !initialIsDesktop {
+            log("Space changed to full-screen / non-desktop space — pausing auto-save captures", level: .verbose, type: .autoSave)
+        } else {
+            log("Space changed to desktop space (deferred restores processed)", level: .verbose, type: .autoSave)
+        }
     }
 
     /// Puts back whatever the last restore had to leave behind.
@@ -1878,6 +1915,15 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // keep drawing its loading state instead of turning into a beach ball.
         guard isLiveLayoutServerReady || !initialWindowServerCaptureInFlight else { return }
 
+        // If the user is currently focused on a full-screen app space or non-desktop space,
+        // do not capture. Accessibility queries on other spaces fail to inspect desktop windows,
+        // resulting in distorted or empty window layouts and broken preview cards.
+        if isFocusedOnNonDesktopSpace || !WindowSpaces.isCurrentSpaceDesktop() {
+            isFocusedOnNonDesktopSpace = true
+            log("Skipping auto-save — user is focused on a full-screen / non-desktop space", level: .verbose, type: .autoSave)
+            return
+        }
+
         // Do not record a desk that is still moving. Jonathan's call, and a
         // better one than pairing the leftover CG entry with the leftover
         // accessibility frame afterwards: that only ever worked when exactly
@@ -1942,7 +1988,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // If a restore is in flight, the windows are still moving: updating the
         // baseline here makes the post-restore flush see no change and silently
         // skip the capture that should record where the windows actually landed.
-        if !isRestoreInFlight {
+        if !isRestoreInFlight && !isFocusedOnNonDesktopSpace {
             liveRecords = currentWindows
         }
         log("Live layout updated (\(newCount) windows)", level: .verbose, type: .autoSave)
@@ -1956,7 +2002,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
         // windows are still settling, and for the length of any restore, so the
         // arrangement a restore is about to replace does not become the
         // arrangement it restores to.
-        if store.autoSaveEnabled && !isHandlingDisplayChange && !isHandlingSpaceChange && !isSettlingContestedWindows
+        if store.autoSaveEnabled && !isHandlingDisplayChange && !isHandlingSpaceChange && !isFocusedOnNonDesktopSpace && !isSettlingContestedWindows
             && !isSettlingRestoredLayout
             && !isRestoreInFlight {
             if isOverviewActive {
@@ -2328,6 +2374,8 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
     /// to release.
     private var isHandlingDisplayChange = false
     private var isHandlingSpaceChange = false
+    private var isFocusedOnNonDesktopSpace = false
+    private var pendingAppLaunchesOnOtherSpaces: Set<String> = []
     private var spaceChangeCooldownTask: Task<Void, Never>?
     private var isSettlingRestoredLayout = false
     private var restoreSettlingTask: Task<Void, Never>?
@@ -3843,6 +3891,10 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
             records.append(record)
             currentZIndex += 1
         }
+
+        // Filter out auxiliary full-screen strips (such as Safari's sliding top toolbar)
+        // so hovering the top bar in full-screen does not trigger false layout changes or blank thumbnails.
+        records = records.filter { !records.isAuxiliaryFullScreenStrip($0) }
 
         if !silent {
             logger?("Scanned \(records.count) active windows via CGWindowList", .verbose, .system)
@@ -6185,7 +6237,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     self.updateCoordinatedShrinkDetector(with: geometry)
                     self.commitCoordinatedShrinkBaseline(using: geometry, for: result.records)
                     let layoutChanged = self.liveLayoutChanged(from: self.liveRecords, to: result.records)
-                    if layoutChanged {
+                    if layoutChanged && !self.isFocusedOnNonDesktopSpace {
                         self.liveRecords = result.records
                     }
                     for record in result.records {
@@ -6201,6 +6253,7 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
                     if layoutChanged && self.store.autoSaveEnabled
                         && !self.isHandlingDisplayChange
                         && !self.isHandlingSpaceChange
+                        && !self.isFocusedOnNonDesktopSpace
                         && !self.isSettlingContestedWindows
                         && !self.isSettlingRestoredLayout
                         && !self.isRestoreInFlight

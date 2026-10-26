@@ -660,6 +660,7 @@ struct LayoutPreviewView: View {
     /// `.history` = run full animation for all windows even under minimal animations.
     /// `.addedWindows` / `.sameWindowCount` = show only triggering windows under minimal animations.
     var captureIndicator: AutoLayoutCaptureIndicator? = nil
+    var revealTrigger: UUID? = nil
     
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.minimalVisualAnimationsEnabled) private var minimalVisualAnimationsEnabled
@@ -706,33 +707,25 @@ struct LayoutPreviewView: View {
     }
 
     private func isTriggeringRecord(_ record: WindowRecord) -> Bool {
-        // Prefer exact record-ID match when all such windows are on-canvas.
-        // If the exact-ID match exists but its globalFrame is entirely outside
-        // the bounding box (e.g. an off-screen space parked on the external
-        // display), fall back to matching any visible window of the same app.
+        // 1. Exact record-ID match
+        if triggeringRecordIDs.contains(record.id) {
+            return true
+        }
+
+        // 2. Fallback: if exact-ID-matched records are off-canvas or were filtered from previewRecords,
+        // match any on-canvas window of the same triggering app.
         if !triggeringRecordIDs.isEmpty {
-            if triggeringRecordIDs.contains(record.id) {
+            let triggeringBundleIDsFromRecords = Set(
+                snapshot.records
+                    .filter { triggeringRecordIDs.contains($0.id) }
+                    .map { $0.windowID.appBundleID }
+            )
+            if triggeringBundleIDsFromRecords.contains(record.windowID.appBundleID) {
                 return true
             }
-            // Check if every exact-ID-matched record is off-canvas. If so, any
-            // on-canvas window of the triggering app should be highlighted instead.
-            let boundingBox = calculateBoundingBox()
-            let allExactMatchesOffCanvas = snapshot.previewRecords
-                .filter { triggeringRecordIDs.contains($0.id) }
-                .allSatisfy { !boundingBox.intersects($0.globalFrame) }
-            if allExactMatchesOffCanvas {
-                // Gather triggering bundle IDs from the matched-but-off-canvas records
-                let fallbackBundleIDs = Set(
-                    snapshot.previewRecords
-                        .filter { triggeringRecordIDs.contains($0.id) }
-                        .map { $0.windowID.appBundleID }
-                )
-                if fallbackBundleIDs.contains(record.windowID.appBundleID) {
-                    return true
-                }
-            }
-            return false
         }
+
+        // 3. Match by activity app bundle ID or app name
         if !triggeringBundleIDs.isEmpty, triggeringBundleIDs.contains(record.windowID.appBundleID) {
             return true
         }
@@ -775,6 +768,11 @@ struct LayoutPreviewView: View {
             }
         }
         .onChange(of: usesFlatPreview) { _, _ in
+            if animateWindowReveal {
+                startWindowReveal()
+            }
+        }
+        .onChange(of: revealTrigger) { _, _ in
             if animateWindowReveal {
                 startWindowReveal()
             }

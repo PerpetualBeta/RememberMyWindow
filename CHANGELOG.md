@@ -2,6 +2,26 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v15.6] — 2026-10-26
+
+### 🛡️ "Space-Aware Captures & Polished Details — The Stability Edition"
+
+#### 🖥️ Fullscreen Spaces & Multi-Space Intelligence
+- **Space-Aware Auto Layout** — Auto Layout now detects when you are focused on dedicated full-screen Spaces (such as Safari in macOS Full Screen mode) or non-desktop spaces, and gracefully pauses capturing to prevent broken, empty, or distorted window arrangements from entering your timeline.
+- **Clean Desktop Return** — As soon as you swipe back to your main desktop space, RememberMyWindows automatically captures a clean, accurate snapshot of your restored desktop layout.
+- **Queued Background Launches** — Applications launched while you are immersed in a full-screen app on another space are queued and captured with the green `+` indicator immediately upon returning to the desktop.
+- **Auxiliary Strip Filtering** — Safari's auto-hiding top navigation/tab bar window is filtered out at capture time, ensuring hovering the top edge in full-screen never triggers spurious captures or blank thumbnail cards.
+- **Reliable Full-Screen Thumbnails** — Full-screen app windows are guaranteed to render clearly with their authentic green accents in arrangement previews and hero cards.
+
+#### ✨ Dynamic Notch Welcome Pill
+- **Expansive Welcome Script** — The cursive "hello" drawing now fills the available height up to the top notch boundary during the initial stroke animation.
+- **Fluid Subtitle Reveal** — When the subtitle reveals, the signature greeting smoothly transitions down to compact size with spring physics.
+
+#### 🎨 Window Arrangement & UI Polish
+- **Full Animated Return** — Tapping "Return to Latest" in the history view re-animates all layout windows rather than just the triggering ones.
+- **Auto-Compacting Location Badge** — The location card gracefully hides its text label and keeps only the compact map pin when horizontal space is constrained.
+- **Visual & Alignment Polish** — Refined spacing after the loading tracking indicator in the toolbar and enhanced status icon visibility.
+
 ## [v15.5] — 2026-10-18
 
 ### 🚀 "Smooth Springs & Polished Views — The Visual Edition"

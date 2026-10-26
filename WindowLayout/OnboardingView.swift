@@ -440,7 +440,7 @@ struct WindowServerLoadingStatus: View {
                 .controlSize(.small)
                 .tint(.accentColor)
 
-            Text("Preparing window tracking…".localized(language))
+            Text("Preparing window tracking… ".localized(language))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
