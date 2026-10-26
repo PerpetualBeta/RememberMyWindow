@@ -29,22 +29,18 @@ enum AutoLayoutCaptureIndicator: Equatable {
             // Strictly reserved for the baseline/oldest item at the last place of the list for aesthetic looks
             return (.history, [])
         }
-        if current.count > older.count {
-            let added = AutoLayoutCaptureAppIcon.addedApps(older: older, current: current)
-            return (.addedWindows(current.count - older.count), added)
+        let added = AutoLayoutCaptureAppIcon.addedApps(older: older, current: current)
+        if !added.isEmpty {
+            let count = max(1, current.count > older.count ? (current.count - older.count) : added.count)
+            return (.addedWindows(count), added)
         }
         // Check if any window actually moved or resized
         let moved = AutoLayoutCaptureAppIcon.movedApps(older: older, current: current)
         if !moved.isEmpty {
             return (.sameWindowCount, moved)
         }
-        // Check for app swap (same count or fewer windows, but a new app was launched)
-        let swapped = AutoLayoutCaptureAppIcon.addedApps(older: older, current: current)
-        if !swapped.isEmpty {
-            return (.sameWindowCount, swapped)
-        }
-        // No windows moved or swapped: windows were closed without movement or baseline capture.
-        // Never classify as .sameWindowCount when no windows moved or swapped.
+        // No windows moved or added: windows were closed without movement or baseline capture.
+        // Never classify as .sameWindowCount when no windows moved or were added.
         return (.history, [])
     }
 
@@ -67,24 +63,26 @@ enum AutoLayoutCaptureIndicator: Equatable {
 
         var changedIDs = Set<UUID>()
 
-        if current.count > older.count {
-            let olderCGIDs = Set(older.compactMap(\.cgWindowID))
-            let olderCounts = Dictionary(grouping: older, by: { $0.windowID.appBundleID }).mapValues(\.count)
-            let currentCounts = Dictionary(grouping: current, by: { $0.windowID.appBundleID }).mapValues(\.count)
+        let olderCGIDs = Set(older.compactMap(\.cgWindowID))
+        let olderCounts = Dictionary(grouping: older, by: { $0.windowID.appBundleID }).mapValues(\.count)
+        let currentCounts = Dictionary(grouping: current, by: { $0.windowID.appBundleID }).mapValues(\.count)
 
-            for record in current {
-                let bundleID = record.windowID.appBundleID
-                let isCountIncreased = (currentCounts[bundleID] ?? 0) > (olderCounts[bundleID] ?? 0)
-                guard isCountIncreased else { continue }
+        for record in current {
+            let bundleID = record.windowID.appBundleID
+            let isCountIncreased = (currentCounts[bundleID] ?? 0) > (olderCounts[bundleID] ?? 0)
+            let isNewCGID = record.cgWindowID.map { !olderCGIDs.contains($0) } ?? false
+            guard isCountIncreased || isNewCGID else { continue }
 
-                if let cgid = record.cgWindowID {
-                    if !olderCGIDs.contains(cgid) {
-                        changedIDs.insert(record.id)
-                    }
-                } else {
+            if let cgid = record.cgWindowID {
+                if !olderCGIDs.contains(cgid) {
                     changedIDs.insert(record.id)
                 }
+            } else {
+                changedIDs.insert(record.id)
             }
+        }
+
+        if !changedIDs.isEmpty {
             return changedIDs
         }
 
@@ -148,17 +146,20 @@ struct AutoLayoutCaptureAppIcon: Identifiable {
         return appName
     }
 
-    /// Apps whose window count increased between two same-display captures.
+    /// Apps whose window count increased between two same-display captures or which are newly present.
     static func addedApps(older: [WindowRecord]?, current: [WindowRecord]) -> [AutoLayoutCaptureAppIcon] {
         guard let older else { return [] }
 
         let olderCounts = Dictionary(grouping: older, by: { $0.windowID.appBundleID }).mapValues(\.count)
         let currentCounts = Dictionary(grouping: current, by: { $0.windowID.appBundleID }).mapValues(\.count)
+        let olderCGIDs = Set(older.compactMap(\.cgWindowID))
         var changedApps: [(bundleID: String, appName: String?)] = []
 
         for record in current {
             let bundleID = record.windowID.appBundleID
-            guard (currentCounts[bundleID] ?? 0) > (olderCounts[bundleID] ?? 0),
+            let isCountIncreased = (currentCounts[bundleID] ?? 0) > (olderCounts[bundleID] ?? 0)
+            let isNewCGID = record.cgWindowID.map { !olderCGIDs.contains($0) } ?? false
+            guard (isCountIncreased || isNewCGID),
                   !changedApps.contains(where: { $0.bundleID == bundleID }) else {
                 continue
             }

@@ -2,6 +2,13 @@
 
 All notable changes to RememberMyWindows will be documented here.
 
+## [v15.6.1] — 2026-10-26
+
+### 🎯 "More Accurate Auto Layout Change Indicators"
+
+#### 🪟 Newly Added Windows
+- **Reliable addition detection** — Auto Layout now recognizes a newly opened window even when another window closes during the same capture, so the green addition indicator identifies the affected app correctly.
+
 ## [v15.6] — 2026-10-26
 
 ### 🛡️ "Space-Aware Captures & Polished Details — The Stability Edition"
