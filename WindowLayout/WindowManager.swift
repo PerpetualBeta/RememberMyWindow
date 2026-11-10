@@ -2126,21 +2126,27 @@ final class WindowManager: NSObject, ObservableObject, CLLocationManagerDelegate
 
     /// One ring entry as a snapshot, when it was taken on the display setup in
     /// front of the user now.
+    ///
+    /// The entry's records are used as captured, one per window. The per-app
+    /// default is not substituted here. A default is the frame of the last
+    /// window that closed, and it answers one question only: where a window
+    /// that is opening now should go. `lastKnownSnapshot(forAppLaunch:)` asks
+    /// it. A ring entry answers a different question: where every window on
+    /// the desk was. Swapping an app's records for its default collapsed N
+    /// windows into one template, and the broadcast in `restore` then wrote
+    /// that one frame to every open window of the app. Measured on Safari,
+    /// four windows captured at their real sizes: a small 574x258 window
+    /// closed, became the default, and each unlock or Space change after that
+    /// resized two visible Safari windows to 574x258 and logged
+    /// `Restored 2 window(s)` from a one-record restore.
     func snapshot(from entry: AutoSaveEntry) -> LayoutSnapshot? {
         guard entry.screenKey == currentFingerprint.key else { return nil }
-        var seenBundleIDs = Set<String>()
-        let appRecords = entry.records.compactMap { record -> WindowRecord? in
-            let bundleID = record.windowID.appBundleID
-            guard seenBundleIDs.insert(bundleID).inserted else { return nil }
-            return autoSaveStore?.appWindowDefault(forBundleID: bundleID,
-                                                   screenKey: entry.screenKey) ?? record
-        }
         return LayoutSnapshot(
             id: entry.id,
             name: entry.readableScreenKey ?? currentFingerprint.readableName,
             screenKey: entry.screenKey,
             readableScreenKey: entry.readableScreenKey,
-            records: appRecords,
+            records: entry.records,
             createdAt: entry.capturedAt,
             updatedAt: entry.capturedAt,
             location: nil,
